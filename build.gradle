@@ -1,0 +1,53 @@
+plugins {
+    id 'java'
+    id 'io.quarkus'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Quarkus platform BOM — aligns all Quarkus artifact versions.
+    implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
+
+    // Core + REST (JAX-RS, reactive) with Jackson JSON.
+    implementation 'io.quarkus:quarkus-arc'
+    implementation 'io.quarkus:quarkus-rest'
+    implementation 'io.quarkus:quarkus-rest-jackson'
+
+    // MongoDB (source of truth).
+    implementation 'io.quarkus:quarkus-mongodb-client'
+
+    // Health / readiness probes (used by k8s later).
+    implementation 'io.quarkus:quarkus-smallrye-health'
+
+    // OpenSearch Java client (query engine). No official Quarkus extension; plain client.
+    implementation 'org.opensearch.client:opensearch-java:2.13.0'
+
+    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.rest-assured:rest-assured'
+}
+
+group = 'io.personalassistant'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+compileJava {
+    options.encoding = 'UTF-8'
+    // -parameters keeps JAX-RS @PathParam/@QueryParam names at runtime.
+    options.compilerArgs << '-parameters'
+}
+
+compileTestJava {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
+}

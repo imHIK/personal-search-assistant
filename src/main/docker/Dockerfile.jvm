@@ -1,0 +1,13 @@
+# JVM-mode container. Build the app first:  ./gradlew build
+# Then:  docker build -f src/main/docker/Dockerfile.jvm -t psa .
+FROM eclipse-temurin:21-jre
+
+WORKDIR /app
+# Quarkus fast-jar layout produced under build/quarkus-app
+COPY build/quarkus-app/lib/ /app/lib/
+COPY build/quarkus-app/*.jar /app/
+COPY build/quarkus-app/app/ /app/app/
+COPY build/quarkus-app/quarkus/ /app/quarkus/
+
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/quarkus-run.jar"]
