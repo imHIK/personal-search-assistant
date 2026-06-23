@@ -8,7 +8,7 @@ import java.util.Map;
 public record SearchResponseDto(List<Hit> hits, String answer, long tookMs) {
 
     public record Hit(
-            String documentId,
+            String entityId,
             String title,
             String snippet,
             String uri,
@@ -17,7 +17,7 @@ public record SearchResponseDto(List<Hit> hits, String answer, long tookMs) {
 
     public static SearchResponseDto from(SearchResponse r) {
         var hits = r.hits().stream()
-                .map(h -> new Hit(h.documentId(), h.title(), h.snippet(),
+                .map(h -> new Hit(h.entityId(), h.title(), h.snippet(),
                         h.uri(), h.score(), h.metadata()))
                 .toList();
         return new SearchResponseDto(hits, r.answer(), r.tookMs());

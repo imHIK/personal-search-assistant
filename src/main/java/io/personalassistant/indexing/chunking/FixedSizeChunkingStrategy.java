@@ -1,7 +1,9 @@
 package io.personalassistant.indexing.chunking;
 
+import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Chunk;
-import io.personalassistant.domain.model.Document;
+import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.enums.SourceType;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,8 +11,9 @@ import java.util.Map;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Default chunker: fixed-size character windows with overlap. Simple and dependency-free;
- * a sentence/heading-aware strategy can replace it by implementing the same port.
+ * Default chunker: fixed-size character windows with overlap. Simple and dependency-free; a
+ * sentence/heading-aware strategy can replace it by implementing the same port. Chunk size and
+ * overlap are global config so a change is a re-index (flag {@code needsReindex}), not a re-fetch.
  */
 @ApplicationScoped
 public class FixedSizeChunkingStrategy implements ChunkingStrategy {
@@ -27,10 +30,9 @@ public class FixedSizeChunkingStrategy implements ChunkingStrategy {
     }
 
     @Override
-    public List<Chunk> chunk(Document document) {
-        String text = document.text() == null ? "" : document.text();
+    public List<Chunk> chunk(Entity entity, SourceType sourceType, String text) {
         List<Chunk> out = new ArrayList<>();
-        if (text.isBlank()) {
+        if (text == null || text.isBlank()) {
             return out;
         }
         int step = Math.max(1, size - overlap);
@@ -38,9 +40,18 @@ public class FixedSizeChunkingStrategy implements ChunkingStrategy {
         for (int start = 0; start < text.length(); start += step) {
             int end = Math.min(text.length(), start + size);
             String piece = text.substring(start, end);
-            String id = document.id() + "_" + ordinal;
-            out.add(new Chunk(id, document.id(), document.sourceId(), ordinal,
-                    piece, estimateTokens(piece), null, Map.of()));
+            out.add(new Chunk(
+                    Ids.chunk(entity.id(), ordinal),
+                    entity.id(),
+                    entity.knowledgeId(),
+                    sourceType,
+                    ordinal,
+                    piece,
+                    estimateTokens(piece),
+                    null,
+                    entity.title(),
+                    entity.uri(),
+                    Map.of()));
             ordinal++;
             if (end == text.length()) {
                 break;

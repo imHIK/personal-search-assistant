@@ -22,8 +22,17 @@ dependencies {
     // Health / readiness probes (used by k8s later).
     implementation 'io.quarkus:quarkus-smallrye-health'
 
-    // OpenSearch Java client (query engine). No official Quarkus extension; plain client.
+    // Scheduler — drives the ingestion/indexing poll loops and forward re-arming.
+    implementation 'io.quarkus:quarkus-scheduler'
+
+    // OpenSearch clients (query engine). The typed client plus the stable low-level REST client
+    // the SearchIndex adapter speaks the query DSL through.
     implementation 'org.opensearch.client:opensearch-java:2.13.0'
+    implementation 'org.opensearch.client:opensearch-rest-client:2.13.0'
+
+    // Apache Tika — file text extraction (PDF/DOCX/HTML/…) at indexing time.
+    implementation 'org.apache.tika:tika-core:2.9.2'
+    implementation 'org.apache.tika:tika-parsers-standard-package:2.9.2'
 
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.rest-assured:rest-assured'

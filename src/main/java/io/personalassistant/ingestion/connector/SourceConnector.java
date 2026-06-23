@@ -1,39 +1,42 @@
 package io.personalassistant.ingestion.connector;
 
-import io.personalassistant.domain.model.RawItem;
-import io.personalassistant.domain.model.Source;
+import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
-import java.util.stream.Stream;
 
 /**
- * THE primary extension point for new integrations. One implementation per data source
- * (local FS, Gmail, Slack…). Implementations live in adapter packages and register
- * themselves with the {@link ConnectorRegistry}.
+ * THE primary extension point for new integrations: one implementation per data source (local
+ * FS, Gmail, Slack…). Implementations live in adapter sub-packages and register themselves with
+ * the {@link ConnectorRegistry} via CDI.
  *
- * <p>Contract: given a source and its last cursor, stream the items that are new or
- * changed, and report the new cursor so the next run is incremental.
+ * <p>A connector is also the <em>grabber</em>: it pulls data in a {@link CursorDirection} a page
+ * at a time. The ingestion job drives it uniformly — it never branches on direction; the only
+ * difference is what re-arms a cursor afterwards (see the indexing design).
  */
 public interface SourceConnector {
 
     /** Which source type this connector handles; used by the registry to select it. */
     SourceType type();
 
-    /** Validate connectivity/credentials for a configured source. */
-    void verify(Source source);
+    /** Validate connectivity/credentials/inputs for a configured knowledge. */
+    void verify(Knowledge knowledge);
 
     /**
-     * Stream new/changed items since {@code cursor}. The stream is lazy so large sources
-     * can be processed incrementally; callers must close it.
+     * Enumerate the {@link SourceIterable}s for a knowledge (its independently-paged sub-streams).
+     * Called once during knowledge activation; one set of cursors is created per iterable.
+     */
+    java.util.List<SourceIterable> discover(Knowledge knowledge);
+
+    /**
+     * Grab one page from an iterable in the given direction, starting at {@code position}.
      *
-     * @param source the configured source (provides {@code config})
-     * @param cursor opaque watermark from the previous run, or null for a full sync
+     * @param knowledge the configured knowledge (provides inputs/auth)
+     * @param iterable  the sub-stream to page
+     * @param direction backward (history) or forward (incremental); boundary is the anchor
+     * @param position  opaque position from the previous page, or null to start
+     * @param maxItems  soft cap on items to return in this page
+     * @return the page: items + next position + whether more remain
      */
-    Stream<RawItem> fetch(Source source, String cursor);
-
-    /**
-     * The cursor to persist after a successful run over the items just fetched.
-     * Kept separate from {@link #fetch} so connectors can compute it from a final state
-     * (e.g. server-side delta token) rather than per-item.
-     */
-    String nextCursor(Source source, String previousCursor);
+    GrabPage grab(Knowledge knowledge, SourceIterable iterable, CursorDirection direction,
+                  String position, int maxItems);
 }

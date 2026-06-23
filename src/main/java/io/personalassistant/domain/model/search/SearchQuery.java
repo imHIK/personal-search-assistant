@@ -6,16 +6,16 @@ import java.util.Map;
 /**
  * A parsed search request flowing through the read path.
  *
- * @param text       the natural-language query
- * @param sourceIds  restrict to these sources (empty = all permitted)
- * @param filters    exact-match facet filters (author, labels…)
- * @param topK       number of final results to return
- * @param mode       retrieval strategy
- * @param answer     whether to run the agent and synthesize a grounded answer
+ * @param text         the natural-language query
+ * @param knowledgeIds restrict to these knowledge sources (empty = all)
+ * @param filters      exact-match facet filters (author, labels…)
+ * @param topK         number of final results to return
+ * @param mode         retrieval strategy
+ * @param answer       whether to run the agent and synthesize a grounded answer
  */
 public record SearchQuery(
         String text,
-        List<String> sourceIds,
+        List<String> knowledgeIds,
         Map<String, Object> filters,
         int topK,
         Mode mode,
