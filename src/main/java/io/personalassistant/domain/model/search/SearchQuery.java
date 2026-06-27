@@ -8,7 +8,9 @@ import java.util.Map;
  *
  * @param text         the natural-language query
  * @param knowledgeIds restrict to these knowledge sources (empty = all)
- * @param filters      exact-match facet filters (author, labels…)
+ * @param filters      exact-match term filters keyed by the full index field path; this may be a
+ *                     top-level keyword field ("sourceType", "uri") or a nested metadata field
+ *                     ("metadata.author")
  * @param topK         number of final results to return
  * @param mode         retrieval strategy
  * @param answer       whether to run the agent and synthesize a grounded answer

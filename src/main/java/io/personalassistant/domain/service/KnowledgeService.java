@@ -31,6 +31,15 @@ public interface KnowledgeService {
     int triggerSync(String id);
 
     /**
+     * Re-discover the knowledge's iterables and create cursors for any new ones (idempotent).
+     * Used by the discovery scheduler for sources whose iterables grow over time, and callable
+     * on demand. Existing cursors are left untouched.
+     *
+     * @return the number of new cursors created
+     */
+    int reconcileCursors(String id);
+
+    /**
      * The inputs needed to register a knowledge.
      *
      * @param name   human-friendly label

@@ -9,7 +9,7 @@ import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.indexing.chunking.ChunkingStrategy;
 import io.personalassistant.indexing.embedding.EmbeddingProvider;
-import io.personalassistant.ingestion.parser.ParserRegistry;
+import io.personalassistant.indexing.parser.ParserRegistry;
 import io.personalassistant.storage.repository.EntityRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.personalassistant.storage.search.SearchIndex;

@@ -107,6 +107,18 @@ public class OpenSearchSearchIndex implements SearchIndex {
         deleteByTerm("knowledgeId", knowledgeId);
     }
 
+    @Override
+    public void deleteByIterable(String knowledgeId, String iterableId) {
+        ObjectNode body = mapper.createObjectNode();
+        ArrayNode must = body.putObject("query").putObject("bool").putArray("must");
+        must.addObject().putObject("term").put("knowledgeId", knowledgeId);
+        must.addObject().putObject("term").put("iterableId", iterableId);
+        Request request = new Request("POST", "/" + alias + "/_delete_by_query");
+        request.addParameter("conflicts", "proceed");
+        request.setJsonEntity(write(body));
+        execute(request);
+    }
+
     // ---- internals ---------------------------------------------------------------------------
 
     private List<SearchHit> search(SearchQuery query, int limit, ObjectNode mustClause) {
@@ -122,7 +134,8 @@ public class OpenSearchSearchIndex implements SearchIndex {
         return response == null ? List.of() : parseHits(response);
     }
 
-    private ArrayNode filters(SearchQuery query) {
+    // Package-private for unit testing of field resolution.
+    ArrayNode filters(SearchQuery query) {
         ArrayNode filters = mapper.createArrayNode();
         if (query.knowledgeIds() != null && !query.knowledgeIds().isEmpty()) {
             ObjectNode terms = mapper.createObjectNode();
@@ -131,9 +144,12 @@ public class OpenSearchSearchIndex implements SearchIndex {
             filters.add(terms);
         }
         if (query.filters() != null) {
-            query.filters().forEach((key, value) -> {
+            // The filter key is used verbatim as the target field, so callers may filter on any
+            // indexed field (top-level keyword fields like "sourceType"/"uri" or nested
+            // "metadata.<key>"), rather than being locked to the metadata subtree.
+            query.filters().forEach((field, value) -> {
                 ObjectNode term = mapper.createObjectNode();
-                term.putObject("term").put("metadata." + key, String.valueOf(value));
+                term.putObject("term").put(field, String.valueOf(value));
                 filters.add(term);
             });
         }
@@ -172,6 +188,7 @@ public class OpenSearchSearchIndex implements SearchIndex {
         doc.put("chunkId", chunk.id());
         doc.put("entityId", chunk.entityId());
         doc.put("knowledgeId", chunk.knowledgeId());
+        doc.put("iterableId", chunk.iterableId());
         doc.put("sourceType", chunk.sourceType() == null ? null : chunk.sourceType().name());
         doc.put("text", chunk.text());
         doc.put("title", chunk.title());

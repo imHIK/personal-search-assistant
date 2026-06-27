@@ -1,6 +1,7 @@
 package io.personalassistant.storage.repository;
 
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import java.time.Duration;
 import java.time.Instant;
@@ -14,8 +15,12 @@ import java.util.Optional;
  */
 public interface CursorRepository {
 
-    /** Insert if absent (idempotent on the deterministic cursor id); no-op if it already exists. */
-    void insertIfAbsent(Cursor cursor);
+    /**
+     * Insert if absent (idempotent on the deterministic cursor id); no-op if it already exists.
+     *
+     * @return {@code true} if a new cursor was inserted, {@code false} if it already existed
+     */
+    boolean insertIfAbsent(Cursor cursor);
 
     Optional<Cursor> findById(String id);
 
@@ -38,17 +43,35 @@ public interface CursorRepository {
     /** Heartbeat: extend the lease of a cursor this worker still holds. */
     void renewLease(String cursorId, String owner, Instant newExpiry);
 
-    /** Persist progress mid-lease: advance {@code position} and bump fetched stats. */
-    void advancePosition(String cursorId, String position, long fetchedDelta, Instant lastRunAt);
-
-    /** Release the lease and set a resting status ({@code AVAILABLE}/{@code IDLE}/{@code EXHAUSTED}). */
-    void release(String cursorId, CursorStatus restingStatus);
+    /**
+     * Persist progress mid-lease and renew the lease in one atomic, <em>lease-fenced</em> write:
+     * advance {@code position}, bump fetched stats, and push the lease expiry to {@code newExpiry}.
+     * The update only applies if {@code owner} still holds a live lease, so a worker whose lease
+     * lapsed (e.g. a single page outran the TTL and another worker re-claimed the cursor) cannot
+     * clobber the new owner's state.
+     *
+     * @return {@code true} if the caller still owned the lease and the write applied; {@code false}
+     *         if the lease was lost (the caller should stop touching this cursor)
+     */
+    boolean advancePosition(String cursorId, String owner, CursorPosition position,
+                            long fetchedDelta, Instant lastRunAt, Instant newExpiry);
 
     /**
-     * Record a failed run: increment retry, clear the lease, and rest at {@code restingStatus}
-     * ({@code AVAILABLE} to retry, or {@code FAILED} once the retry budget is spent).
+     * Lease-fenced release: set a resting status ({@code AVAILABLE}/{@code IDLE}/{@code EXHAUSTED})
+     * and clear the lease, only if {@code owner} still holds a live lease.
+     *
+     * @return {@code true} if the caller still owned the lease and the write applied
      */
-    void recordFailure(String cursorId, CursorStatus restingStatus, int retryCount);
+    boolean release(String cursorId, String owner, CursorStatus restingStatus);
+
+    /**
+     * Lease-fenced failure record: increment retry, clear the lease, and rest at
+     * {@code restingStatus} ({@code AVAILABLE} to retry, or {@code FAILED} once the budget is
+     * spent) — only if {@code owner} still holds a live lease.
+     *
+     * @return {@code true} if the caller still owned the lease and the write applied
+     */
+    boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount);
 
     /**
      * Re-arm a knowledge's forward cursors: flip {@code IDLE → AVAILABLE}. This is the only
@@ -57,6 +80,42 @@ public interface CursorRepository {
      * @return the number of cursors re-armed
      */
     int armForwardCursors(String knowledgeId);
+
+    /**
+     * Park a paused knowledge's claimable cursors: flip {@code AVAILABLE}/{@code IDLE → SUSPENDED}
+     * so they drop out of {@link #findClaimable} and cannot starve active knowledge. Leased
+     * ({@code IN_PROGRESS}) cursors are left alone — they rest at a normal status when their lease
+     * ends and are caught by the ingestion loop's backstop.
+     *
+     * @return the number of cursors parked
+     */
+    int suspendByKnowledge(String knowledgeId);
+
+    /**
+     * Re-arm a resumed knowledge's parked cursors: flip {@code SUSPENDED → AVAILABLE}. Inverse of
+     * {@link #suspendByKnowledge}.
+     *
+     * @return the number of cursors re-armed
+     */
+    int resumeByKnowledge(String knowledgeId);
+
+    /**
+     * Retire a cursor whose iterable was deleted at the source: flip it to {@code RETIRED} and clear
+     * any lease. A no-op if the cursor is currently {@code IN_PROGRESS} (a worker is mid-run; the
+     * next reconcile pass catches it), which also avoids a running lease resurrecting it.
+     *
+     * @return {@code true} if the cursor was retired
+     */
+    boolean retire(String cursorId);
+
+    /**
+     * Revive a {@code RETIRED} cursor because its iterable reappeared: reset it to a fresh
+     * {@code AVAILABLE} state (position back to start, retry cleared, lease cleared) and refresh the
+     * snapshotted {@code attributes}. A no-op unless the cursor is currently {@code RETIRED}.
+     *
+     * @return {@code true} if the cursor was revived
+     */
+    boolean revive(String cursorId, java.util.Map<String, Object> attributes);
 
     void deleteByKnowledge(String knowledgeId);
 }

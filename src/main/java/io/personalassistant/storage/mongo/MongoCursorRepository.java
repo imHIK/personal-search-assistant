@@ -2,8 +2,12 @@ package io.personalassistant.storage.mongo;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.gt;
+import static com.mongodb.client.model.Filters.in;
 import static com.mongodb.client.model.Filters.lt;
+import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.or;
+import static com.mongodb.client.model.Sorts.ascending;
 
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
@@ -12,6 +16,7 @@ import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.SourceType;
@@ -22,6 +27,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.bson.Document;
 import org.bson.conversions.Bson;
@@ -53,13 +59,14 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
-    public void insertIfAbsent(Cursor cursor) {
+    public boolean insertIfAbsent(Cursor cursor) {
         // _id comes from the filter on insert; including it in $setOnInsert would conflict.
         Document onInsert = toDoc(cursor);
         onInsert.remove("_id");
-        collection().updateOne(eq("_id", cursor.id()),
+        var result = collection().updateOne(eq("_id", cursor.id()),
                 new Document("$setOnInsert", onInsert),
                 new UpdateOptions().upsert(true));
+        return result.getUpsertedId() != null;
     }
 
     @Override
@@ -77,7 +84,13 @@ public class MongoCursorRepository implements CursorRepository {
     @Override
     public List<Cursor> findClaimable(int limit) {
         List<Cursor> out = new ArrayList<>();
-        collection().find(claimableFilter(Instant.now())).limit(limit).forEach(d -> out.add(fromDoc(d)));
+        // Fairness: least-recently-run first. Never-run cursors (null lastRunAt) sort first in
+        // Mongo ascending order, so fresh work is picked up promptly and no active knowledge can
+        // monopolise the bounded batch.
+        collection().find(claimableFilter(Instant.now()))
+                .sort(ascending("stats.lastRunAt"))
+                .limit(limit)
+                .forEach(d -> out.add(fromDoc(d)));
         return out;
     }
 
@@ -101,26 +114,41 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
-    public void advancePosition(String cursorId, String position, long fetchedDelta, Instant lastRunAt) {
-        collection().updateOne(eq("_id", cursorId), Updates.combine(
-                Updates.set("position", position),
+    public boolean advancePosition(String cursorId, String owner, CursorPosition position,
+                                   long fetchedDelta, Instant lastRunAt, Instant newExpiry) {
+        var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
+                Updates.set("position", BsonSupport.toBsonMap(position.values())),
                 Updates.inc("stats.fetched", fetchedDelta),
-                Updates.set("stats.lastRunAt", BsonSupport.date(lastRunAt))));
+                Updates.set("stats.lastRunAt", BsonSupport.date(lastRunAt)),
+                Updates.set("lease.expiresAt", BsonSupport.date(newExpiry))));
+        return result.getMatchedCount() > 0;
     }
 
     @Override
-    public void release(String cursorId, CursorStatus restingStatus) {
-        collection().updateOne(eq("_id", cursorId), Updates.combine(
+    public boolean release(String cursorId, String owner, CursorStatus restingStatus) {
+        var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
                 Updates.unset("lease")));
+        return result.getMatchedCount() > 0;
     }
 
     @Override
-    public void recordFailure(String cursorId, CursorStatus restingStatus, int retryCount) {
-        collection().updateOne(eq("_id", cursorId), Updates.combine(
+    public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount) {
+        var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
                 Updates.set("retry.count", retryCount),
                 Updates.unset("lease")));
+        return result.getMatchedCount() > 0;
+    }
+
+    /**
+     * Lease fence: matches the cursor only if {@code owner} still holds a live (non-expired) lease.
+     * A worker whose lease lapsed (and was re-claimed by another worker) matches nothing, so its
+     * late writes are no-ops instead of clobbering the new owner.
+     */
+    private static Bson ownedBy(String cursorId, String owner) {
+        return and(eq("_id", cursorId), eq("lease.owner", owner),
+                gt("lease.expiresAt", BsonSupport.date(Instant.now())));
     }
 
     @Override
@@ -131,6 +159,48 @@ public class MongoCursorRepository implements CursorRepository {
                         eq("status", CursorStatus.IDLE.name())),
                 Updates.set("status", CursorStatus.AVAILABLE.name()));
         return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public int suspendByKnowledge(String knowledgeId) {
+        var result = collection().updateMany(
+                and(eq("knowledgeId", knowledgeId),
+                        in("status", CursorStatus.AVAILABLE.name(), CursorStatus.IDLE.name())),
+                Updates.set("status", CursorStatus.SUSPENDED.name()));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public int resumeByKnowledge(String knowledgeId) {
+        var result = collection().updateMany(
+                and(eq("knowledgeId", knowledgeId),
+                        eq("status", CursorStatus.SUSPENDED.name())),
+                Updates.set("status", CursorStatus.AVAILABLE.name()));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public boolean retire(String cursorId) {
+        // Skip a cursor a worker is mid-run on; the next reconcile pass retires it once it rests.
+        var result = collection().updateOne(
+                and(eq("_id", cursorId), ne("status", CursorStatus.IN_PROGRESS.name())),
+                Updates.combine(
+                        Updates.set("status", CursorStatus.RETIRED.name()),
+                        Updates.unset("lease")));
+        return result.getModifiedCount() > 0;
+    }
+
+    @Override
+    public boolean revive(String cursorId, Map<String, Object> attributes) {
+        var result = collection().updateOne(
+                and(eq("_id", cursorId), eq("status", CursorStatus.RETIRED.name())),
+                Updates.combine(
+                        Updates.set("status", CursorStatus.AVAILABLE.name()),
+                        Updates.set("attributes", BsonSupport.toBsonMap(attributes)),
+                        Updates.set("position", new Document()),
+                        Updates.set("retry", new Document("count", 0)),
+                        Updates.unset("lease")));
+        return result.getModifiedCount() > 0;
     }
 
     @Override
@@ -154,8 +224,9 @@ public class MongoCursorRepository implements CursorRepository {
         return new Document("_id", c.id())
                 .append("knowledgeId", c.knowledgeId())
                 .append("iterableId", c.iterableId())
+                .append("attributes", BsonSupport.toBsonMap(c.attributes()))
                 .append("direction", BsonSupport.enumName(c.direction()))
-                .append("position", c.position())
+                .append("position", c.position() == null ? null : BsonSupport.toBsonMap(c.position().values()))
                 .append("status", BsonSupport.enumName(c.status()))
                 .append("lease", lease)
                 .append("retry", new Document("count", c.retry().count()))
@@ -173,8 +244,9 @@ public class MongoCursorRepository implements CursorRepository {
                 d.getString("_id"),
                 d.getString("knowledgeId"),
                 d.getString("iterableId"),
+                BsonSupport.toPlainMap(d.get("attributes")),
                 BsonSupport.enumOf(CursorDirection.class, d.get("direction")),
-                d.getString("position"),
+                CursorPosition.of(BsonSupport.toPlainMap(d.get("position"))),
                 BsonSupport.enumOf(CursorStatus.class, d.get("status")),
                 lease == null ? null : new Cursor.Lease(lease.getString("owner"),
                         BsonSupport.instant(lease.get("expiresAt"))),

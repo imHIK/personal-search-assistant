@@ -29,4 +29,11 @@ public interface SearchIndex {
 
     /** Remove all chunks belonging to one knowledge (cascade on knowledge delete). */
     void deleteByKnowledge(String knowledgeId);
+
+    /**
+     * Remove all chunks belonging to one iterable within a knowledge (cascade when an iterable is
+     * deleted at the source). A single bulk delete-by-query; matches on both ids so iterable ids
+     * are only ever scoped to their knowledge.
+     */
+    void deleteByIterable(String knowledgeId, String iterableId);
 }

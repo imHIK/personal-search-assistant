@@ -78,6 +78,7 @@ public class OpenSearchIndexInitializer {
                   "chunkId":    { "type": "keyword" },
                   "entityId":   { "type": "keyword" },
                   "knowledgeId":{ "type": "keyword" },
+                  "iterableId": { "type": "keyword" },
                   "sourceType": { "type": "keyword" },
                   "text":       { "type": "text", "analyzer": "standard" },
                   "title":      { "type": "text", "analyzer": "standard" },

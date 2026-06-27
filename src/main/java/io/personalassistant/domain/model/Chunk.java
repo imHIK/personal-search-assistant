@@ -13,6 +13,8 @@ import java.util.Map;
  * @param id         derived id {@code "{entityId}_{ordinal}"} for idempotent re-indexing
  * @param entityId   owning entity
  * @param knowledgeId owning knowledge (for filtering / cascade deletes / scope)
+ * @param iterableId owning sub-stream, denormalized so chunks can be bulk-deleted by iterable
+ *                   when it is removed at the source (mirrors {@code Entity.iterableId})
  * @param sourceType connector type, denormalized for filtering
  * @param ordinal    position within the entity
  * @param text       the chunk text (BM25 field)
@@ -26,6 +28,7 @@ public record Chunk(
         String id,
         String entityId,
         String knowledgeId,
+        String iterableId,
         SourceType sourceType,
         int ordinal,
         String text,
@@ -37,7 +40,7 @@ public record Chunk(
 
     /** Returns a copy of this chunk with the given embedding attached. */
     public Chunk withEmbedding(Embedding embedding) {
-        return new Chunk(id, entityId, knowledgeId, sourceType, ordinal, text,
+        return new Chunk(id, entityId, knowledgeId, iterableId, sourceType, ordinal, text,
                 tokenCount, embedding, title, uri, metadata);
     }
 }

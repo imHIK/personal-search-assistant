@@ -4,6 +4,7 @@ import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * A first-class ingestion position: <em>position + lease + status</em>, not just a position.
@@ -14,11 +15,19 @@ import java.time.Instant;
  * pages from {@link #position}, advances it after each page, and finally sets a resting status
  * ({@code AVAILABLE} / {@code IDLE} / {@code EXHAUSTED} / {@code FAILED}).
  *
+ * <p>A cursor is <strong>self-contained</strong>: it snapshots the {@code attributes} of its
+ * {@code SourceIterable} at creation time (when {@code discover} runs) so the ingestion runner can
+ * rebuild the iterable and call {@code grab} without re-discovering. This matters for API-backed
+ * sources (e.g. Slack) where {@code discover} enumerates every channel — paying that on every lease
+ * would be quadratic. New iterables are still picked up by the periodic discovery/reconcile pass.
+ *
  * @param id          stable id, e.g. {@code "cur_..."}
  * @param knowledgeId owning knowledge
  * @param iterableId  identifies the sub-stream (a channel, folder, label…)
+ * @param attributes  connector-specific iterable attributes snapshotted from {@code discover} (the
+ *                    {@code grab} inputs, e.g. a folder path); empty for legacy cursors
  * @param direction   backward (backfill) or forward (incremental)
- * @param position    opaque source token (page token / timestamp / change id); null at start
+ * @param position    source-defined pagination state (page token, offset, timestamp+id, ...)
  * @param status      operational state
  * @param lease       current holder + expiry, or null when free
  * @param retry       retry bookkeeping
@@ -29,13 +38,18 @@ public record Cursor(
         String id,
         String knowledgeId,
         String iterableId,
+        Map<String, Object> attributes,
         CursorDirection direction,
-        String position,
+        CursorPosition position,
         CursorStatus status,
         Lease lease,
         Retry retry,
         Stats stats,
         Scope scope) {
+
+    public Cursor {
+        attributes = attributes == null ? Map.of() : attributes;
+    }
 
     /** Lease held by a worker while the cursor is {@code IN_PROGRESS}. */
     public record Lease(String owner, Instant expiresAt) {

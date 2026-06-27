@@ -22,7 +22,7 @@ public class WholeTextChunkingStrategy implements ChunkingStrategy {
             return List.of();
         }
         return List.of(new Chunk(Ids.chunk(entity.id(), 0), entity.id(), entity.knowledgeId(),
-                sourceType, 0, text, Math.max(1, text.length() / 4), null,
+                entity.iterableId(), sourceType, 0, text, Math.max(1, text.length() / 4), null,
                 entity.title(), entity.uri(), Map.of()));
     }
 }

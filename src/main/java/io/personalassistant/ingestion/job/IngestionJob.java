@@ -11,6 +11,7 @@ import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -50,6 +51,11 @@ public class IngestionJob {
     @ConfigProperty(name = "app.ingestion.permits.knowledge", defaultValue = "2")
     int knowledgeMax;
 
+    // Sized to the cursor lease: the permit is renewed per page alongside the lease, so it must
+    // outlive a single page just as the lease does (keep >= app.ingestion.lease-seconds).
+    @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "900")
+    long permitTtlSeconds;
+
     @Inject
     public IngestionJob(CursorRepository cursors, KnowledgeRepository knowledge,
                         PermitService permits, IngestionRunner runner) {
@@ -69,8 +75,17 @@ public class IngestionJob {
 
     private void tryRun(Cursor candidate) {
         Optional<Knowledge> kn = knowledge.findById(candidate.knowledgeId());
-        if (kn.isEmpty() || kn.get().status() != KnowledgeStatus.ACTIVE) {
-            return; // paused/deleted/unknown knowledge — leave the cursor be
+        if (kn.isEmpty()) {
+            return; // orphan cursor — the delete path owns its removal
+        }
+        if (kn.get().status() != KnowledgeStatus.ACTIVE) {
+            // Backstop: pause() parks a knowledge's cursors, but one that was IN_PROGRESS at pause
+            // time rests AVAILABLE when its lease ends and would otherwise re-pollute the batch.
+            // Park the whole knowledge's claimable cursors here too; resume() re-arms them.
+            if (kn.get().status() == KnowledgeStatus.PAUSED) {
+                cursors.suspendByKnowledge(candidate.knowledgeId());
+            }
+            return; // not active — don't run
         }
 
         List<ScopeLimit> limits = List.of(
@@ -78,7 +93,7 @@ public class IngestionJob {
                 ScopeLimit.connector(kn.get().connectorDetails().type().name(), connectorMax),
                 ScopeLimit.knowledge(kn.get().id(), knowledgeMax));
 
-        Optional<Permit> permit = permits.tryAcquire(limits, worker);
+        Optional<Permit> permit = permits.tryAcquire(limits, worker, Duration.ofSeconds(permitTtlSeconds));
         if (permit.isEmpty()) {
             return; // at capacity for one of the scopes — try again next tick
         }

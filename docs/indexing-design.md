@@ -77,7 +77,7 @@ A cursor is **position + lease + status**, not just a position. One cursor per
   "iterableId": "channel_C123",        // identifies the sub-stream
   "direction": "BACKWARD | FORWARD",
   "position": "<opaque source token>", // page token / timestamp / change id
-  "status": "AVAILABLE | IN_PROGRESS | IDLE | EXHAUSTED | FAILED",
+  "status": "AVAILABLE | IN_PROGRESS | IDLE | SUSPENDED | EXHAUSTED | FAILED",
   "lease":  { "owner": "worker-7", "expiresAt": "..." },  // null when free
   "retry":  { "count": 0 },
   "stats":  { "lastRunAt": "...", "fetched": 0 },

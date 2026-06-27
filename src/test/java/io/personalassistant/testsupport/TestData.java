@@ -1,6 +1,7 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -27,9 +28,23 @@ public final class TestData {
     }
 
     public static Cursor cursor(String knowledgeId, String iterableId, CursorDirection direction, SourceType type) {
+        return cursor(knowledgeId, iterableId, Map.of(), direction, type);
+    }
+
+    public static Cursor cursor(String knowledgeId, String iterableId, Map<String, Object> attributes,
+                                CursorDirection direction, SourceType type) {
         return new Cursor("cur_" + knowledgeId + iterableId + direction, knowledgeId, iterableId,
-                direction, null, CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
+                attributes, direction, CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
                 Cursor.Stats.zero(), new Cursor.Scope(type));
+    }
+
+    /** An ingested entity in a specific iterable (for cascade-delete / reconcile tests). */
+    public static Entity entityInIterable(String id, String knowledgeId, String iterableId, String externalId) {
+        Instant now = Instant.now();
+        return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,
+                Map.of(), Entity.Content.ofText("body"), Map.of("title", externalId, "uri", "test://" + externalId),
+                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), now, now);
     }
 
     public static Entity ingestedText(String id, String knowledgeId, String externalId, String text) {

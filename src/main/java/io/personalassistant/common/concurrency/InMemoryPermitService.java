@@ -10,13 +10,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * In-memory {@link PermitService}: each scope keeps a map of live permit-id → expiry. Acquisition
  * purges expired permits first, then checks every requested scope is below its ceiling, and
  * commits to all scopes atomically under a single lock. Expiry provides the same auto-reclaim
  * semantics a Redis TTL would, so a crashed worker's permit frees up without manual cleanup.
+ *
+ * <p>The TTL is supplied per acquisition by the caller and carried on the {@link Permit}, so this
+ * shared limiter holds no TTL of its own — each stage sizes its own.
  *
  * <p>Single-node only. Swap in a Redis-backed implementation for multi-node deployments — the
  * {@link PermitService} contract is unchanged.
@@ -28,21 +30,21 @@ public class InMemoryPermitService implements PermitService {
     private final Map<String, Map<String, Instant>> scopes = new ConcurrentHashMap<>();
     private final Object lock = new Object();
 
-    @ConfigProperty(name = "app.permits.ttl-seconds", defaultValue = "120")
-    long ttlSeconds;
-
     @Override
-    public Optional<Permit> tryAcquire(String scopeKey, int max, String owner) {
-        return tryAcquire(List.of(new ScopeLimit(scopeKey, max)), owner);
+    public Optional<Permit> tryAcquire(String scopeKey, int max, String owner, Duration ttl) {
+        return tryAcquire(List.of(new ScopeLimit(scopeKey, max)), owner, ttl);
     }
 
     @Override
-    public Optional<Permit> tryAcquire(List<ScopeLimit> limits, String owner) {
+    public Optional<Permit> tryAcquire(List<ScopeLimit> limits, String owner, Duration ttl) {
         if (limits == null || limits.isEmpty()) {
             throw new IllegalArgumentException("at least one scope limit is required");
         }
+        if (ttl == null || ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("ttl must be positive");
+        }
         Instant now = Instant.now();
-        Instant expiry = now.plus(Duration.ofSeconds(ttlSeconds));
+        Instant expiry = now.plus(ttl);
         String permitId = UUID.randomUUID().toString();
 
         synchronized (lock) {
@@ -60,7 +62,7 @@ public class InMemoryPermitService implements PermitService {
                 scopes.get(limit.key()).put(permitId, expiry);
                 keys.add(limit.key());
             }
-            return Optional.of(new Permit(permitId, owner, List.copyOf(keys), expiry));
+            return Optional.of(new Permit(permitId, owner, List.copyOf(keys), ttl, expiry));
         }
     }
 
@@ -69,7 +71,7 @@ public class InMemoryPermitService implements PermitService {
         if (permit == null) {
             return;
         }
-        Instant expiry = Instant.now().plus(Duration.ofSeconds(ttlSeconds));
+        Instant expiry = Instant.now().plus(permit.ttl());
         synchronized (lock) {
             for (String key : permit.scopeKeys()) {
                 Map<String, Instant> live = scopes.get(key);

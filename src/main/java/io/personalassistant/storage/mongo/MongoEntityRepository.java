@@ -83,18 +83,44 @@ public class MongoEntityRepository implements EntityRepository {
     @Override
     public List<Entity> claimForIndexing(int limit, String owner, Duration lease) {
         Instant now = Instant.now();
+        return claimLoop(indexingFilter(now), indexingUpdate(now, lease, owner), limit);
+    }
+
+    @Override
+    public List<Entity> claimForIndexing(String knowledgeId, int limit, String owner, Duration lease) {
+        Instant now = Instant.now();
+        Bson filter = and(eq("knowledgeId", knowledgeId), indexingFilter(now));
+        return claimLoop(filter, indexingUpdate(now, lease, owner), limit);
+    }
+
+    @Override
+    public List<String> distinctPendingKnowledgeIds(int limit) {
+        List<String> ids = new ArrayList<>();
+        collection().distinct("knowledgeId", indexingFilter(Instant.now()), String.class)
+                .forEach(id -> {
+                    if (id != null && ids.size() < limit) {
+                        ids.add(id);
+                    }
+                });
+        return ids;
+    }
+
+    /** Entities awaiting (re)indexing: INGESTED, needsReindex, or stale INDEXING — backoff-aware. */
+    private Bson indexingFilter(Instant now) {
         // Honour retry backoff: an entity awaiting retry is only claimable once its nextAttemptAt passes.
         Bson backoffReady = or(eq("retry.nextAttemptAt", null), lte("retry.nextAttemptAt", BsonSupport.date(now)));
-        Bson filter = and(backoffReady, or(
+        return and(backoffReady, or(
                 eq("status", EntityStatus.INGESTED.name()),
                 and(eq("needsReindex", true),
                         nin("status", EntityStatus.DELETED.name(), EntityStatus.INDEXING.name())),
                 and(eq("status", EntityStatus.INDEXING.name()), lt("lease.expiresAt", BsonSupport.date(now)))));
-        Bson update = Updates.combine(
+    }
+
+    private Bson indexingUpdate(Instant now, Duration lease, String owner) {
+        return Updates.combine(
                 Updates.set("status", EntityStatus.INDEXING.name()),
                 Updates.set("lease", leaseDoc(owner, now.plus(lease))),
                 Updates.set("updatedAt", BsonSupport.date(now)));
-        return claimLoop(filter, update, limit);
     }
 
     @Override
@@ -195,6 +221,11 @@ public class MongoEntityRepository implements EntityRepository {
     @Override
     public void deleteByKnowledge(String knowledgeId) {
         collection().deleteMany(eq("knowledgeId", knowledgeId));
+    }
+
+    @Override
+    public void deleteByKnowledgeAndIterable(String knowledgeId, String iterableId) {
+        collection().deleteMany(and(eq("knowledgeId", knowledgeId), eq("iterableId", iterableId)));
     }
 
     private static Document leaseDoc(String owner, Instant expiresAt) {

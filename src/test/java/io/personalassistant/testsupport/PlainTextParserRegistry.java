@@ -1,8 +1,8 @@
 package io.personalassistant.testsupport;
 
-import io.personalassistant.ingestion.parser.ContentParser;
-import io.personalassistant.ingestion.parser.ParserRegistry;
-import io.personalassistant.ingestion.parser.PlainTextParser;
+import io.personalassistant.indexing.parser.ContentParser;
+import io.personalassistant.indexing.parser.ParserRegistry;
+import io.personalassistant.indexing.parser.PlainTextParser;
 
 /** Parser registry that always returns a {@link PlainTextParser} (tests use text files). */
 public class PlainTextParserRegistry implements ParserRegistry {

@@ -28,6 +28,19 @@ public interface EntityRepository {
      */
     List<Entity> claimForIndexing(int limit, String owner, Duration lease);
 
+    /**
+     * Same as {@link #claimForIndexing(int, String, Duration)} but restricted to a single
+     * knowledge. Used by the indexing job to claim a fair per-knowledge quota so one knowledge's
+     * backlog can't starve the others.
+     */
+    List<Entity> claimForIndexing(String knowledgeId, int limit, String owner, Duration lease);
+
+    /**
+     * The distinct knowledge ids that currently have entities awaiting (re)indexing. Drives
+     * round-robin fairness in the indexing job. Capped at {@code limit} ids.
+     */
+    List<String> distinctPendingKnowledgeIds(int limit);
+
     /** Atomically claim up to {@code limit} tombstoned entities whose chunks still need removal. */
     List<Entity> claimForDeletion(int limit, String owner, Duration lease);
 
@@ -55,4 +68,7 @@ public interface EntityRepository {
     void delete(String id);
 
     void deleteByKnowledge(String knowledgeId);
+
+    /** Remove all entities of one iterable within a knowledge (cascade when the iterable is deleted at source). */
+    void deleteByKnowledgeAndIterable(String knowledgeId, String iterableId);
 }

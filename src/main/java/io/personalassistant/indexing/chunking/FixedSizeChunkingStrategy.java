@@ -44,6 +44,7 @@ public class FixedSizeChunkingStrategy implements ChunkingStrategy {
                     Ids.chunk(entity.id(), ordinal),
                     entity.id(),
                     entity.knowledgeId(),
+                    entity.iterableId(),
                     sourceType,
                     ordinal,
                     piece,

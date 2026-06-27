@@ -13,6 +13,8 @@ public class RecordingSearchIndex implements SearchIndex {
     public final List<Chunk> indexed = new ArrayList<>();
     public final List<String> deletedEntities = new ArrayList<>();
     public final List<String> deletedKnowledge = new ArrayList<>();
+    /** Recorded as {@code "knowledgeId/iterableId"} for assertion convenience. */
+    public final List<String> deletedIterables = new ArrayList<>();
     public List<SearchHit> lexicalResult = List.of();
     public List<SearchHit> vectorResult = List.of();
 
@@ -39,5 +41,10 @@ public class RecordingSearchIndex implements SearchIndex {
     @Override
     public void deleteByKnowledge(String knowledgeId) {
         deletedKnowledge.add(knowledgeId);
+    }
+
+    @Override
+    public void deleteByIterable(String knowledgeId, String iterableId) {
+        deletedIterables.add(knowledgeId + "/" + iterableId);
     }
 }

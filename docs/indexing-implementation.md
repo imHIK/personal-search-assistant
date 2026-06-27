@@ -53,21 +53,24 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §2 Vocabulary: **Knowledge** (supersedes `Source`) | `domain.model.Knowledge` + `enums.KnowledgeStatus` |
 | §2 Vocabulary: **Entity** (supersedes `Document`) | `domain.model.Entity` + `enums.EntityStatus`, `enums.EntityType` |
 | §2/§4 **Cursor** (first-class) | `domain.model.Cursor` + `enums.CursorStatus`, `enums.CursorDirection` |
+| §4 **Cursor position** (source-defined) | `domain.model.CursorPosition` — free-form, multi-field pagination state the connector owns |
 | §2 **Iterable** | `ingestion.connector.SourceIterable` |
-| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`discover` + `grab`), `GrabPage` |
+| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabRequest`, `GrabPage` |
 | §2/§7 **PermitService** | `common.concurrency.PermitService` + `InMemoryPermitService`, `Permit`, `ScopeLimit` |
 | §3 Knowledge object + lifecycle | `app.DefaultKnowledgeService` (`add`: verify → anchor=now → discover → cursors → ACTIVE) |
-| §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
+| §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / SUSPENDED / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
 | §4 Atomic lease + crash recovery (expired lease reclaimable) | `storage.mongo.MongoCursorRepository.claim` / `claimableFilter` (`findOneAndUpdate`) |
-| §5 Backward/forward grabbers, anchor boundary | `ingestion.connector.localfs.LocalFsConnector` (`withinDirection`, ascending/descending paging) |
+| §5 Backward/forward grabbers, anchor boundary | `ingestion.connector.localfs.LocalFsConnector` (`grabForward` = mtime-ordered bounded pass; `grabBackward` = path-ordered cursor-skipping DFS) |
 | §5 Ingestion loop (batch=page, lease=N batches, persist→advance) | `ingestion.job.IngestionRunner.runLease` + `IngestionJob.tick` |
 | §5 Forward scheduling (IDLE → AVAILABLE) | `ingestion.job.ForwardCursorScheduler` + `CursorRepository.armForwardCursors` |
+| Dynamic iterables (new sub-streams over time) | `SourceConnector.hasDynamicIterables` + `ingestion.job.IterableDiscoveryScheduler` + `KnowledgeService.reconcileCursors` |
+| Indexing fairness (round-robin across knowledges) | `IndexingJob.processIndexingFairly` + `EntityRepository.distinctPendingKnowledgeIds` / knowledge-scoped `claimForIndexing` |
 | §5 Updates & deletes (tombstones) | `IngestionRunner.persistItem` (`markDeleted`); cleanup in `IndexingRunner.deleteEntityChunks` |
 | §6 Entity document (raw + content + fileRef + index + retry) | `domain.model.Entity` (+ `Content`, `IndexInfo`, `Lease`, `Retry`); BSON in `MongoEntityRepository` |
 | §6 Mongo indexes (unique `knowledgeId+externalId`, …) | `storage.mongo.MongoIndexInitializer` |
 | §7 Scopes (global / connector / knowledge), TTL leases | `common.concurrency.ScopeLimit`, `InMemoryPermitService` |
 | §8 Indexing loop (claim → transform → chunk → embed → index → mark) | `indexing.job.IndexingRunner.indexEntity` + `IndexingJob.tick` |
-| §8 File path: `fileRef` → Tika extract | `IndexingRunner.extractText` + `ingestion.parser.TikaContentParser` / `PlainTextParser` |
+| §8 File path: `fileRef` → Tika extract | `IndexingRunner.extractText` + `indexing.parser.TikaContentParser` / `PlainTextParser` |
 | §8 Text path | `IndexingRunner.extractText` (inline) |
 | §8 Chunks live only in OpenSearch | `storage.search.opensearch.OpenSearchSearchIndex`; no chunk Mongo repository exists |
 | §8 Re-index without re-fetch | `EntityRepository.flagNeedsReindex` → claim re-runs `IndexingRunner` |
@@ -75,7 +78,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §9 Status & observability | `Knowledge.Stats` (`IngestionRunner.refreshStats`), `Entity.IndexInfo`, retry counters, logging |
 | §10 Phase 1 (model + storage + PermitService) | `domain.model.*`, `storage.repository.*`, `storage.mongo.*`, `common.*` |
 | §10 Phase 2 (LOCAL_FS + ingestion job) | `ingestion.connector.localfs.*`, `ingestion.job.*` |
-| §10 Phase 3 (Tika + chunking + embeddings + OpenSearch) | `ingestion.parser.*`, `indexing.*`, `storage.search.opensearch.*` |
+| §10 Phase 3 (Tika + chunking + embeddings + OpenSearch) | `indexing.parser.*`, `indexing.*`, `storage.search.opensearch.*` |
 | §11 Single-user (no ACL filter) | search filters on `knowledgeId` only (`OpenSearchSearchIndex.filters`) |
 | §11 Local filesystem storage | `Entity.Content.fileRef`; `IndexingRunner.resolve` reads from disk |
 | §11 PermitService backing = Redis (eventually) | `InMemoryPermitService` today; `PermitService` interface is storage-agnostic |
@@ -178,18 +181,22 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 
 | Key | Default | Meaning |
 |---|---|---|
-| `app.permits.ttl-seconds` | `120` | Permit lease TTL (auto-reclaim on worker death) |
-| `app.ingestion.poll-interval` | `5s` | Ingestion loop tick |
+| `app.ingestion.poll-interval` | `30s` | Ingestion loop tick |
 | `app.ingestion.poll-batch` | `20` | Claimable cursors examined per tick |
 | `app.ingestion.batches-per-lease` | `50` | Pages fetched per cursor lease before releasing |
 | `app.ingestion.max-items-per-batch` | `100` | Soft cap on items per grabber page |
-| `app.ingestion.lease-seconds` | `60` | Cursor lease duration |
+| `app.ingestion.lease-seconds` | `900` | Cursor lease duration; must exceed the worst-case single-page fetch time (the per-page renew covers multi-page leases; writes are lease-fenced) |
 | `app.ingestion.retry-limit` | `5` | Cursor failures before `FAILED` |
 | `app.ingestion.permits.global` / `.connector` / `.knowledge` | `8` / `4` / `2` | Scoped ingestion concurrency ceilings |
-| `app.scheduler.forward-interval` | `30s` | How often forward cursors are re-armed |
+| `app.ingestion.permits.ttl-seconds` | `900` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
+| `app.scheduler.forward-interval` | `60m` | How often forward cursors are re-armed |
+| `app.scheduler.discovery-interval` | `60m` | How often dynamic-iterable sources are re-discovered (new folders/channels) |
 | `app.indexing.poll-interval` | `5s` | Indexing loop tick |
-| `app.indexing.batch` | `20` | Entities claimed per tick |
+| `app.indexing.batch` | `20` | Global budget of entities indexed per tick |
+| `app.indexing.per-knowledge` | `5` | Per-knowledge claim quota per tick (round-robin fairness) |
+| `app.indexing.max-knowledges` | `200` | Cap on distinct knowledges scanned per indexing tick |
 | `app.indexing.concurrency` | `4` | Global indexing concurrency ceiling |
+| `app.indexing.permits.ttl-seconds` | `300` | Indexing permit TTL; held for a whole tick (not renewed mid-tick), so size above the worst-case tick time |
 | `app.indexing.embed-batch` | `64` | Chunks per embedding call |
 | `app.indexing.lease-seconds` | `120` | Entity indexing lease duration |
 | `app.indexing.retry-limit` | `5` | Indexing failures before `FAILED` |
@@ -204,15 +211,32 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | To add… | Implement… | Register via |
 |---|---|---|
 | A new data source (Slack, Drive, Gmail) | `ingestion.connector.SourceConnector` | CDI bean; auto-discovered by `CdiConnectorRegistry` keyed on `SourceType` |
-| A new file type / extractor (OCR, etc.) | `ingestion.parser.ContentParser` (set `priority()`) | CDI bean; selected by `CdiParserRegistry` |
+| A new file type / extractor (OCR, etc.) | `indexing.parser.ContentParser` (set `priority()`) | CDI bean; selected by `CdiParserRegistry` |
 | A different chunking strategy | `indexing.chunking.ChunkingStrategy` | replace the `@ApplicationScoped` bean |
 | A real embedding model (ONNX / hosted) | `indexing.embedding.EmbeddingProvider` | replace the bean; update `app.embedding.*`, then re-index |
 | A different vector store / search engine | `storage.search.SearchIndex` | new adapter package |
 | A multi-node permit limiter | `common.concurrency.PermitService` (Redis) | replace `InMemoryPermitService` |
 
-Adding a connector is the common case: implement `type()`, `verify()`, `discover()` and `grab()`,
-annotate `@ApplicationScoped`, and add the enum constant to `SourceType`. Nothing else changes —
-the ingestion loop, cursors, permits, indexing and search are all source-agnostic.
+Adding a connector is the common case and the SPI is deliberately permissive so each integration
+can work the way its source does:
+
+- **`supportedDirections()`** — declare which of `BACKWARD`/`FORWARD` the source supports. A
+  forward-only or stream/webhook-only source returns just `FORWARD`, and the generic flow
+  (`DefaultKnowledgeService`) only creates the cursors it declares — no backfill cursor is made.
+- **`discover()`** — return whatever iterables make sense: many sub-streams (channels, folders,
+  labels) or a single one if the source has no natural partitioning.
+- **`grab(GrabRequest)`** — paginate however the source works. The connector **owns its pagination
+  state** via `CursorPosition`: a free-form, multi-field bag (`{"pageToken": …}`, `{"offset": …}`,
+  `{"sinceMillis": …, "lastId": …}`, a change-id, an mbox byte offset, …). The core never
+  interprets it — it just persists the `nextPosition` you return and hands it back on the next page.
+  Build positions with `CursorPosition.builder().put(…).build()` and read them with the typed
+  accessors (`getString`/`getLong`/`getInt`). `GrabRequest` is an object (not a parameter list) so
+  new optional inputs can be added later without breaking existing connectors.
+
+Implement those plus `type()` and `verify()`, annotate `@ApplicationScoped`, and add the enum
+constant to `SourceType`. Nothing else changes — the ingestion loop, cursors, permits, indexing and
+search are all source-agnostic. `LocalFsConnector` is a worked example: it defines its position as
+`{"lastModifiedMillis": <long>, "path": <string>}`.
 
 ---
 

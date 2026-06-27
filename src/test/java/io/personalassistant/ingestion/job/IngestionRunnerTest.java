@@ -3,6 +3,7 @@ package io.personalassistant.ingestion.job;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -57,15 +58,21 @@ class IngestionRunnerTest {
     }
 
     private Cursor seedCursor(CursorDirection direction) {
-        Cursor cursor = TestData.cursor("kn_1", "root", direction, SourceType.LOCAL_FS);
+        // Cursors created by reconcile carry the iterable's attributes, so the runner needn't discover.
+        return seedCursor(direction, Map.of("path", "/tmp", "recursive", false));
+    }
+
+    private Cursor seedCursor(CursorDirection direction, Map<String, Object> attributes) {
+        Cursor cursor = TestData.cursor("kn_1", "root", attributes, direction, SourceType.LOCAL_FS);
         cursors.insertIfAbsent(cursor);
-        return cursor;
+        // Lease it to the worker first, mirroring what IngestionJob does before runLease.
+        return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
     }
 
     @Test
     void backwardDrainPersistsEntitiesAndExhausts() {
         connector.enqueue(CursorDirection.BACKWARD,
-                new GrabPage(List.of(textItem("a"), textItem("b")), "pos-1", false));
+                new GrabPage(List.of(textItem("a"), textItem("b")), CursorPosition.of(Map.of("seq", 1L)), false));
         Cursor cursor = seedCursor(CursorDirection.BACKWARD);
 
         runner.runLease(kn, cursor, "w1", () -> {});
@@ -74,14 +81,14 @@ class IngestionRunnerTest {
         entities.store.values().forEach(e -> assertEquals(EntityStatus.INGESTED, e.status()));
         Cursor after = cursors.store.get(cursor.id());
         assertEquals(CursorStatus.EXHAUSTED, after.status(), "drained history is terminal");
-        assertEquals("pos-1", after.position());
+        assertEquals(1L, after.position().getLong("seq", 0L));
         assertEquals(2, knowledge.findById("kn_1").orElseThrow().stats().entities());
     }
 
     @Test
     void forwardCaughtUpRestsIdle() {
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), "pos-fwd", false));
+                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 2L)), false));
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
 
         runner.runLease(kn, cursor, "w1", () -> {});
@@ -93,7 +100,7 @@ class IngestionRunnerTest {
     @Test
     void continuesAvailableWhenMorePagesRemain() {
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), "pos-1", true)); // hasMore, but only one page queued
+                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 3L)), true)); // hasMore, but only one page queued
         runner.batchesPerLease = 1; // stop after one page
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
 
@@ -101,6 +108,33 @@ class IngestionRunnerTest {
 
         assertEquals(CursorStatus.AVAILABLE, cursors.store.get(cursor.id()).status(),
                 "more pages remain -> re-pick next tick");
+    }
+
+    @Test
+    void rebuildsIterableFromCursorAttributesWithoutDiscovering() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 9L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD, Map.of("path", "/data/inbox", "recursive", true));
+
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        assertEquals(0, connector.discoverCalls,
+                "self-contained cursor must not trigger discover() on the hot path");
+        assertEquals("root", connector.lastGrabIterable.iterableId());
+        assertEquals(Map.of("path", "/data/inbox", "recursive", true), connector.lastGrabIterable.attributes(),
+                "grab receives the attributes snapshotted on the cursor");
+    }
+
+    @Test
+    void legacyCursorWithoutAttributesFallsBackToDiscover() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD, Map.of()); // pre-migration cursor
+
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        assertEquals(1, connector.discoverCalls,
+                "a cursor with no stored attributes falls back to a one-off discover");
     }
 
     @Test

@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.job;
 
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
@@ -11,6 +12,7 @@ import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.GrabPage;
+import io.personalassistant.ingestion.connector.GrabRequest;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.storage.repository.CursorRepository;
@@ -21,6 +23,7 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -51,7 +54,7 @@ public class IngestionRunner {
     @ConfigProperty(name = "app.ingestion.max-items-per-batch", defaultValue = "100")
     int maxItemsPerBatch;
 
-    @ConfigProperty(name = "app.ingestion.lease-seconds", defaultValue = "60")
+    @ConfigProperty(name = "app.ingestion.lease-seconds", defaultValue = "900")
     long leaseSeconds;
 
     @ConfigProperty(name = "app.ingestion.retry-limit", defaultValue = "5")
@@ -72,44 +75,53 @@ public class IngestionRunner {
      */
     public void runLease(Knowledge kn, Cursor cursor, String worker, Runnable heartbeat) {
         SourceConnector connector = connectors.get(kn.connectorDetails().type());
-        Optional<SourceIterable> iterable = resolveIterable(connector, kn, cursor.iterableId());
+        Optional<SourceIterable> iterable = iterableFor(connector, kn, cursor);
         if (iterable.isEmpty()) {
             // The sub-stream no longer exists; nothing more to do on this cursor.
-            cursors.release(cursor.id(), CursorStatus.EXHAUSTED);
+            cursors.release(cursor.id(), worker, CursorStatus.EXHAUSTED);
             return;
         }
 
-        String position = cursor.position();
+        CursorPosition position = cursor.position() == null ? CursorPosition.start() : cursor.position();
         try {
             for (int batch = 0; batch < batchesPerLease; batch++) {
-                GrabPage page = connector.grab(kn, iterable.get(), cursor.direction(),
-                        position, maxItemsPerBatch);
+                GrabPage page = connector.grab(new GrabRequest(
+                        kn, iterable.get(), cursor.direction(), position, maxItemsPerBatch));
 
                 long persisted = persistPage(kn, cursor, page.items());
                 position = page.nextPosition();
                 Instant now = Instant.now();
-                cursors.advancePosition(cursor.id(), position, persisted, now);
-                cursors.renewLease(cursor.id(), worker, now.plusSeconds(leaseSeconds));
+
+                // Persist progress AND renew the lease in one fenced write. If we no longer own the
+                // lease (e.g. this page outran the TTL and another worker re-claimed the cursor),
+                // bail out without releasing — the new owner continues from the persisted position.
+                boolean stillOwned = cursors.advancePosition(
+                        cursor.id(), worker, position, persisted, now, now.plusSeconds(leaseSeconds));
+                if (!stillOwned) {
+                    LOG.warning("Lost lease for cursor " + cursor.id()
+                            + " mid-run; abandoning to the new owner");
+                    return;
+                }
                 heartbeat.run();
 
                 if (!page.hasMore()) {
                     CursorStatus resting = cursor.direction() == CursorDirection.BACKWARD
                             ? CursorStatus.EXHAUSTED   // history drained (terminal)
                             : CursorStatus.IDLE;        // caught up; scheduler re-arms it
-                    cursors.release(cursor.id(), resting);
+                    cursors.release(cursor.id(), worker, resting);
                     refreshStats(kn.id());
                     return;
                 }
             }
             // Hit the batch cap with more pages remaining → re-pick next tick.
-            cursors.release(cursor.id(), CursorStatus.AVAILABLE);
+            cursors.release(cursor.id(), worker, CursorStatus.AVAILABLE);
             refreshStats(kn.id());
         } catch (RuntimeException e) {
             int retryCount = cursor.retry().count() + 1;
             CursorStatus resting = retryCount > retryLimit ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
             LOG.log(Level.WARNING, "Ingestion failed for cursor " + cursor.id()
                     + " (attempt " + retryCount + ", resting " + resting + ")", e);
-            cursors.recordFailure(cursor.id(), resting, retryCount);
+            cursors.recordFailure(cursor.id(), worker, resting, retryCount);
         }
     }
 
@@ -150,9 +162,20 @@ public class IngestionRunner {
         entities.upsert(entity);
     }
 
-    private Optional<SourceIterable> resolveIterable(SourceConnector connector, Knowledge kn, String iterableId) {
+    /**
+     * Reconstruct the {@link SourceIterable} this cursor pages — without re-discovering. The cursor
+     * snapshots the iterable's {@code attributes} at creation time, so the common path rebuilds the
+     * iterable locally (no API/filesystem enumeration). Only legacy cursors written before
+     * attributes were persisted (empty {@code attributes}) fall back to a one-off {@code discover},
+     * which also still serves as the "iterable was deleted → retire the cursor" check for them.
+     */
+    private Optional<SourceIterable> iterableFor(SourceConnector connector, Knowledge kn, Cursor cursor) {
+        Map<String, Object> attributes = cursor.attributes();
+        if (attributes != null && !attributes.isEmpty()) {
+            return Optional.of(new SourceIterable(cursor.iterableId(), cursor.iterableId(), attributes));
+        }
         return connector.discover(kn).stream()
-                .filter(it -> it.iterableId().equals(iterableId))
+                .filter(it -> it.iterableId().equals(cursor.iterableId()))
                 .findFirst();
     }
 

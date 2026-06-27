@@ -1,4 +1,4 @@
-package io.personalassistant.ingestion.parser;
+package io.personalassistant.indexing.parser;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;

@@ -3,6 +3,9 @@ package io.personalassistant.ingestion.connector;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * THE primary extension point for new integrations: one implementation per data source (local
@@ -10,33 +13,53 @@ import io.personalassistant.domain.model.enums.SourceType;
  * the {@link ConnectorRegistry} via CDI.
  *
  * <p>A connector is also the <em>grabber</em>: it pulls data in a {@link CursorDirection} a page
- * at a time. The ingestion job drives it uniformly — it never branches on direction; the only
- * difference is what re-arms a cursor afterwards (see the indexing design).
+ * at a time and <strong>owns its own pagination state</strong> (see
+ * {@link io.personalassistant.domain.model.CursorPosition}). The ingestion job drives it
+ * uniformly — it never inspects the position or branches on direction; the only difference is
+ * what re-arms a cursor afterwards (see the indexing design).
+ *
+ * <p>Connectors get real freedom here: discover whatever iterables make sense (or a single one),
+ * paginate however the source works, declare which directions they support, and decide what
+ * counts as the boundary (using {@link Knowledge#anchor()}).
  */
 public interface SourceConnector {
 
     /** Which source type this connector handles; used by the registry to select it. */
     SourceType type();
 
+    /**
+     * Which ingestion directions this source supports. Defaults to both; a forward-only or
+     * backfill-incapable source (e.g. a webhook/stream-only API) can narrow this, and the
+     * generic flow will only create the cursors it declares.
+     */
+    default Set<CursorDirection> supportedDirections() {
+        return EnumSet.of(CursorDirection.BACKWARD, CursorDirection.FORWARD);
+    }
+
+    /**
+     * Whether this source's set of iterables can grow over time (new folders, channels, labels
+     * appearing after activation). When {@code true}, the framework periodically re-runs
+     * {@link #discover} and creates cursors for any newly-found iterables (existing ones are left
+     * untouched). When {@code false} (default), iterables are discovered once at activation.
+     */
+    default boolean hasDynamicIterables() {
+        return false;
+    }
+
     /** Validate connectivity/credentials/inputs for a configured knowledge. */
     void verify(Knowledge knowledge);
 
     /**
      * Enumerate the {@link SourceIterable}s for a knowledge (its independently-paged sub-streams).
-     * Called once during knowledge activation; one set of cursors is created per iterable.
+     * Called during activation (and re-checked per lease); one set of cursors is created per
+     * iterable. Return a single iterable if the source has no natural sub-streams.
      */
-    java.util.List<SourceIterable> discover(Knowledge knowledge);
+    List<SourceIterable> discover(Knowledge knowledge);
 
     /**
-     * Grab one page from an iterable in the given direction, starting at {@code position}.
-     *
-     * @param knowledge the configured knowledge (provides inputs/auth)
-     * @param iterable  the sub-stream to page
-     * @param direction backward (history) or forward (incremental); boundary is the anchor
-     * @param position  opaque position from the previous page, or null to start
-     * @param maxItems  soft cap on items to return in this page
-     * @return the page: items + next position + whether more remain
+     * Grab one page for the given {@link GrabRequest}. The connector resumes from
+     * {@code request.position()} and returns the items, the next position to persist, and whether
+     * more pages remain.
      */
-    GrabPage grab(Knowledge knowledge, SourceIterable iterable, CursorDirection direction,
-                  String position, int maxItems);
+    GrabPage grab(GrabRequest request);
 }

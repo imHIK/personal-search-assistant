@@ -51,7 +51,7 @@ the core.
 | `domain.model` | Core records: `Source`, `Document`, `Chunk`, search types | core |
 | `domain.service` | Use-case ports: `IndexingService`, `SearchService` | core |
 | `ingestion.connector` | `SourceConnector` port + registry (the source extension point) | core port |
-| `ingestion.parser` | `ContentParser` port (PDF/DOCX/HTML/… extraction) | core port |
+| `indexing.parser` | `ContentParser` port (PDF/DOCX/HTML/… extraction) | core port |
 | `indexing.chunking` | `ChunkingStrategy` port | core port |
 | `indexing.embedding` | `EmbeddingProvider` port (hosted or local model) | core port |
 | `retrieval` | `Retriever` + `Reranker` ports | core port |

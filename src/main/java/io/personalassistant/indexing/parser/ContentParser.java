@@ -1,4 +1,4 @@
-package io.personalassistant.ingestion.parser;
+package io.personalassistant.indexing.parser;
 
 import io.personalassistant.domain.model.ParsedContent;
 import java.io.InputStream;

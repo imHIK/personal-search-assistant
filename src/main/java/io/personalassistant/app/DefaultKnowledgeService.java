@@ -2,6 +2,7 @@ package io.personalassistant.app;
 
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
@@ -17,8 +18,13 @@ import io.personalassistant.storage.search.SearchIndex;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.logging.Logger;
 
 /**
@@ -88,11 +94,13 @@ public class DefaultKnowledgeService implements KnowledgeService {
     @Override
     public void pause(String id) {
         knowledge.updateStatus(id, KnowledgeStatus.PAUSED);
+        cursors.suspendByKnowledge(id); // park claimable cursors so they can't starve active knowledge
     }
 
     @Override
     public void resume(String id) {
         knowledge.updateStatus(id, KnowledgeStatus.ACTIVE);
+        cursors.resumeByKnowledge(id); // re-arm cursors parked while paused
     }
 
     @Override
@@ -109,24 +117,110 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return cursors.armForwardCursors(id);
     }
 
-    private void createCursors(SourceConnector connector, Knowledge kn) {
-        List<SourceIterable> iterables = connector.discover(kn);
-        boolean backfill = kn.config().backfill() != null && kn.config().backfill().enabled();
-        for (SourceIterable iterable : iterables) {
-            if (backfill) {
-                cursors.insertIfAbsent(newCursor(kn, iterable.iterableId(), CursorDirection.BACKWARD));
-            }
-            cursors.insertIfAbsent(newCursor(kn, iterable.iterableId(), CursorDirection.FORWARD));
+    @Override
+    public int reconcileCursors(String id) {
+        Optional<Knowledge> known = knowledge.findById(id);
+        if (known.isEmpty() || known.get().status() != KnowledgeStatus.ACTIVE) {
+            return 0;
         }
+        Knowledge kn = known.get();
+        SourceConnector connector = connectors.get(kn.connectorDetails().type());
+        // One discover serves all three reconciliation steps below.
+        List<SourceIterable> iterables = connector.discover(kn);
+
+        int created = createCursors(kn, iterables);
+        int revived = reviveReappearedIterables(kn, iterables);
+        int retired = retireDeletedIterables(kn, iterables);
+
+        if (created > 0 || revived > 0 || retired > 0) {
+            LOG.info("Reconcile for knowledge " + id + ": +" + created + " new, "
+                    + revived + " revived, " + retired + " retired cursor(s)");
+        }
+        return created;
     }
 
-    private Cursor newCursor(Knowledge kn, String iterableId, CursorDirection direction) {
+    /** Revive cursors retired for an iterable that has since reappeared, refreshing their attributes. */
+    private int reviveReappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
+        Map<String, Map<String, Object>> live = new HashMap<>();
+        iterables.forEach(it -> live.put(it.iterableId(), it.attributes()));
+        int revived = 0;
+        for (Cursor c : cursors.findByKnowledge(kn.id())) {
+            if (c.status() == CursorStatus.RETIRED && live.containsKey(c.iterableId())
+                    && cursors.revive(c.id(), live.get(c.iterableId()))) {
+                revived++;
+            }
+        }
+        return revived;
+    }
+
+    /**
+     * Retire cursors whose iterable no longer exists at the source, and purge that iterable's
+     * indexed data (chunks) and canonical entities first. Idempotent: already-retired or
+     * currently-running cursors are skipped and caught on a later pass.
+     */
+    private int retireDeletedIterables(Knowledge kn, List<SourceIterable> iterables) {
+        Set<String> liveIds = new HashSet<>();
+        iterables.forEach(it -> liveIds.add(it.iterableId()));
+        List<Cursor> all = cursors.findByKnowledge(kn.id());
+
+        // Distinct iterables that are gone but still have a retire-able (non-RETIRED, non-running) cursor.
+        Set<String> goneIterables = new LinkedHashSet<>();
+        for (Cursor c : all) {
+            if (!liveIds.contains(c.iterableId())
+                    && c.status() != CursorStatus.RETIRED && c.status() != CursorStatus.IN_PROGRESS) {
+                goneIterables.add(c.iterableId());
+            }
+        }
+        // Purge derived chunks then canonical entities (same order as the knowledge-delete cascade).
+        for (String iterableId : goneIterables) {
+            index.deleteByIterable(kn.id(), iterableId);
+            entities.deleteByKnowledgeAndIterable(kn.id(), iterableId);
+        }
+        int retired = 0;
+        for (Cursor c : all) {
+            if (goneIterables.contains(c.iterableId()) && cursors.retire(c.id())) {
+                retired++;
+            }
+        }
+        return retired;
+    }
+
+    /**
+     * Create cursors for every (iterable × supported direction) the source exposes. Idempotent:
+     * deterministic cursor ids + {@code insertIfAbsent} mean re-running only adds cursors for
+     * iterables that appeared since last time. Returns the number of newly-created cursors.
+     */
+    private int createCursors(SourceConnector connector, Knowledge kn) {
+        return createCursors(kn, connector.discover(kn));
+    }
+
+    private int createCursors(Knowledge kn, List<SourceIterable> iterables) {
+        var supported = connectors.get(kn.connectorDetails().type()).supportedDirections();
+        boolean backfill = kn.config().backfill() != null && kn.config().backfill().enabled();
+        int created = 0;
+        for (SourceIterable iterable : iterables) {
+            // Backward (history) only if the source supports it AND backfill is enabled.
+            if (backfill && supported.contains(CursorDirection.BACKWARD)
+                    && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.BACKWARD))) {
+                created++;
+            }
+            // Forward (incremental) whenever the source supports it.
+            if (supported.contains(CursorDirection.FORWARD)
+                    && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.FORWARD))) {
+                created++;
+            }
+        }
+        return created;
+    }
+
+    private Cursor newCursor(Knowledge kn, SourceIterable iterable, CursorDirection direction) {
         return new Cursor(
-                Ids.cursorFor(kn.id(), iterableId, direction.name()),
+                Ids.cursorFor(kn.id(), iterable.iterableId(), direction.name()),
                 kn.id(),
-                iterableId,
+                iterable.iterableId(),
+                iterable.attributes(), // snapshot the grab() inputs so the runner needn't re-discover
                 direction,
-                null,
+                CursorPosition.start(),
                 CursorStatus.AVAILABLE,
                 null,
                 Cursor.Retry.zero(),

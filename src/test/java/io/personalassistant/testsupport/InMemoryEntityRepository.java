@@ -43,13 +43,18 @@ public class InMemoryEntityRepository implements EntityRepository {
 
     @Override
     public List<Entity> claimForIndexing(int limit, String owner, Duration lease) {
+        return claimForIndexing(null, limit, owner, lease);
+    }
+
+    @Override
+    public List<Entity> claimForIndexing(String knowledgeId, int limit, String owner, Duration lease) {
         Instant now = Instant.now();
         List<Entity> claimed = new ArrayList<>();
         for (Entity e : new ArrayList<>(store.values())) {
             if (claimed.size() >= limit) {
                 break;
             }
-            if (indexable(e, now)) {
+            if ((knowledgeId == null || e.knowledgeId().equals(knowledgeId)) && indexable(e, now)) {
                 Entity leased = e.withStatus(EntityStatus.INDEXING, now)
                         .withLease(new Entity.Lease(owner, now.plus(lease)));
                 store.put(e.id(), leased);
@@ -57,6 +62,18 @@ public class InMemoryEntityRepository implements EntityRepository {
             }
         }
         return claimed;
+    }
+
+    @Override
+    public List<String> distinctPendingKnowledgeIds(int limit) {
+        Instant now = Instant.now();
+        List<String> ids = new ArrayList<>();
+        for (Entity e : store.values()) {
+            if (indexable(e, now) && !ids.contains(e.knowledgeId()) && ids.size() < limit) {
+                ids.add(e.knowledgeId());
+            }
+        }
+        return ids;
     }
 
     @Override
@@ -130,6 +147,12 @@ public class InMemoryEntityRepository implements EntityRepository {
     @Override
     public void deleteByKnowledge(String knowledgeId) {
         store.values().removeIf(e -> e.knowledgeId().equals(knowledgeId));
+    }
+
+    @Override
+    public void deleteByKnowledgeAndIterable(String knowledgeId, String iterableId) {
+        store.values().removeIf(e -> e.knowledgeId().equals(knowledgeId)
+                && e.iterableId().equals(iterableId));
     }
 
     private boolean indexable(Entity e, Instant now) {
