@@ -91,12 +91,14 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     @Override
-    public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount) {
+    public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount,
+                                 String lastError) {
         Cursor c = store.get(cursorId);
         if (!ownsLiveLease(c, owner)) {
             return false;
         }
-        store.put(cursorId, with(c, restingStatus, null, c.position(), new Cursor.Retry(retryCount), c.stats()));
+        store.put(cursorId, with(c, restingStatus, null, c.position(),
+                new Cursor.Retry(retryCount, lastError), c.stats()));
         return true;
     }
 

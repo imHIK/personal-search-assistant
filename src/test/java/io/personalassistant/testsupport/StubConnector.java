@@ -21,6 +21,7 @@ public class StubConnector implements SourceConnector {
     private final List<SourceIterable> iterables;
     private final Map<CursorDirection, Deque<GrabPage>> pages = new EnumMap<>(CursorDirection.class);
     private RuntimeException failure;
+    private RuntimeException discoverFailure;
     private boolean dynamicIterables;
 
     /** Test observability: how many times discover() was called, and the last iterable grabbed. */
@@ -40,6 +41,12 @@ public class StubConnector implements SourceConnector {
 
     public StubConnector failNext(RuntimeException failure) {
         this.failure = failure;
+        return this;
+    }
+
+    /** Make {@link #discover} throw, to exercise activation/reconcile failure handling. */
+    public StubConnector failDiscoveryWith(RuntimeException failure) {
+        this.discoverFailure = failure;
         return this;
     }
 
@@ -77,6 +84,9 @@ public class StubConnector implements SourceConnector {
     @Override
     public List<SourceIterable> discover(Knowledge knowledge) {
         discoverCalls++;
+        if (discoverFailure != null) {
+            throw discoverFailure;
+        }
         return new ArrayList<>(iterables);
     }
 

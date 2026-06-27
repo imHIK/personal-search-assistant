@@ -44,7 +44,7 @@ class CursorLeaseFencingTest {
         // Worker 2 (never leased it) tries to advance + release → fenced out (no-ops).
         assertFalse(cursors.advancePosition(cursorId, "w2", CursorPosition.of(Map.of("seq", 9L)), 5, Instant.now(), expiry));
         assertFalse(cursors.release(cursorId, "w2", CursorStatus.AVAILABLE));
-        assertFalse(cursors.recordFailure(cursorId, "w2", CursorStatus.FAILED, 3));
+        assertFalse(cursors.recordFailure(cursorId, "w2", CursorStatus.FAILED, 3, "boom"));
 
         Cursor after = cursors.findById(cursorId).orElseThrow();
         assertTrue(after.position().isStart(), "stale worker must not move the position");

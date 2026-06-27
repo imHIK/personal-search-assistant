@@ -65,13 +65,15 @@ public interface CursorRepository {
     boolean release(String cursorId, String owner, CursorStatus restingStatus);
 
     /**
-     * Lease-fenced failure record: increment retry, clear the lease, and rest at
-     * {@code restingStatus} ({@code AVAILABLE} to retry, or {@code FAILED} once the budget is
-     * spent) — only if {@code owner} still holds a live lease.
+     * Lease-fenced failure record: increment retry, store {@code lastError}, clear the lease, and
+     * rest at {@code restingStatus} ({@code AVAILABLE} to retry, or {@code FAILED} once the budget
+     * is spent) — only if {@code owner} still holds a live lease.
      *
+     * @param lastError a compact summary of the failure, persisted on the cursor for debugging
      * @return {@code true} if the caller still owned the lease and the write applied
      */
-    boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount);
+    boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount,
+                          String lastError);
 
     /**
      * Re-arm a knowledge's forward cursors: flip {@code IDLE → AVAILABLE}. This is the only

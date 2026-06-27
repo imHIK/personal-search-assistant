@@ -41,7 +41,16 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), status, k.stats(), k.createdAt(), Instant.now()));
+                    k.anchor(), status, k.lastError(), k.stats(), k.createdAt(), Instant.now()));
+        }
+    }
+
+    @Override
+    public void markError(String id, String lastError) {
+        Knowledge k = store.get(id);
+        if (k != null) {
+            store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
+                    k.anchor(), KnowledgeStatus.ERROR, lastError, k.stats(), k.createdAt(), Instant.now()));
         }
     }
 
@@ -50,7 +59,7 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), k.status(), stats, k.createdAt(), Instant.now()));
+                    k.anchor(), k.status(), k.lastError(), stats, k.createdAt(), Instant.now()));
         }
     }
 

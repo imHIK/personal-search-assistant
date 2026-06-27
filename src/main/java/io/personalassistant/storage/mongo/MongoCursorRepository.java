@@ -133,10 +133,12 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
-    public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount) {
+    public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount,
+                                 String lastError) {
         var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
                 Updates.set("retry.count", retryCount),
+                Updates.set("retry.lastError", lastError),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
     }
@@ -229,7 +231,8 @@ public class MongoCursorRepository implements CursorRepository {
                 .append("position", c.position() == null ? null : BsonSupport.toBsonMap(c.position().values()))
                 .append("status", BsonSupport.enumName(c.status()))
                 .append("lease", lease)
-                .append("retry", new Document("count", c.retry().count()))
+                .append("retry", new Document("count", c.retry().count())
+                        .append("lastError", c.retry().lastError()))
                 .append("stats", new Document("lastRunAt", BsonSupport.date(c.stats().lastRunAt()))
                         .append("fetched", c.stats().fetched()))
                 .append("scope", new Document("connectorType", BsonSupport.enumName(c.scope().connectorType())));
@@ -250,7 +253,8 @@ public class MongoCursorRepository implements CursorRepository {
                 BsonSupport.enumOf(CursorStatus.class, d.get("status")),
                 lease == null ? null : new Cursor.Lease(lease.getString("owner"),
                         BsonSupport.instant(lease.get("expiresAt"))),
-                new Cursor.Retry(retry == null ? 0 : intValue(retry.get("count"))),
+                new Cursor.Retry(retry == null ? 0 : intValue(retry.get("count")),
+                        retry == null ? null : retry.getString("lastError")),
                 new Cursor.Stats(stats == null ? null : BsonSupport.instant(stats.get("lastRunAt")),
                         stats == null ? 0 : longValue(stats.get("fetched"))),
                 new Cursor.Scope(scope == null ? null

@@ -1,5 +1,6 @@
 package io.personalassistant.ingestion.job;
 
+import io.personalassistant.common.Errors;
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
@@ -114,7 +115,7 @@ public class IngestionRunner {
             CursorStatus resting = retryCount > retryLimit ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
             LOG.log(Level.WARNING, "Ingestion failed for cursor " + cursor.id()
                     + " (attempt " + retryCount + ", resting " + resting + ")", e);
-            cursors.recordFailure(cursor.id(), worker, resting, retryCount);
+            cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e));
         }
     }
 
@@ -151,7 +152,7 @@ public class IngestionRunner {
 
         Entity entity = new Entity(id, kn.id(), cursor.iterableId(), item.entityType(),
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
-                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now);
+                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now); // TODO: check if only first time, ow retry will also be copied
         entities.upsert(entity);
     }
 

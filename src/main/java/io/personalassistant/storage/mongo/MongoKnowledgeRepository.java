@@ -74,6 +74,14 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public void markError(String id, String lastError) {
+        collection().updateOne(eq("_id", id), Updates.combine(
+                Updates.set("status", KnowledgeStatus.ERROR.name()),
+                Updates.set("lastError", lastError),
+                Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+    }
+
+    @Override
     public void updateStats(String id, Knowledge.Stats stats) {
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("stats.entities", stats.entities()),
@@ -105,6 +113,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                         .append("backfill", new Document("enabled", cfg.backfill().enabled())))
                 .append("anchor", BsonSupport.date(k.anchor()))
                 .append("status", BsonSupport.enumName(k.status()))
+                .append("lastError", k.lastError())
                 .append("stats", new Document("entities", k.stats().entities())
                         .append("indexed", k.stats().indexed())
                         .append("failed", k.stats().failed()))
@@ -136,6 +145,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                         new Knowledge.Backfill(back != null && Boolean.TRUE.equals(back.getBoolean("enabled")))),
                 BsonSupport.instant(d.get("anchor")),
                 BsonSupport.enumOf(KnowledgeStatus.class, d.get("status")),
+                d.getString("lastError"),
                 stats == null ? Knowledge.Stats.zero() : new Knowledge.Stats(
                         longValue(stats.get("entities")),
                         longValue(stats.get("indexed")),

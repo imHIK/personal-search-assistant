@@ -58,14 +58,18 @@ public record Cursor(
         }
     }
 
-    /** Retry bookkeeping for transient ingestion failures. */
-    public record Retry(int count) {
+    /**
+     * Retry bookkeeping for transient ingestion failures. {@code lastError} captures a compact
+     * summary of the most recent failure (the full stack trace goes to the log) so a stuck or
+     * {@code FAILED} cursor can be debugged straight from the stored record.
+     */
+    public record Retry(int count, String lastError) {
         public static Retry zero() {
-            return new Retry(0);
+            return new Retry(0, null);
         }
 
         public Retry increment() {
-            return new Retry(count + 1);
+            return new Retry(count + 1, lastError);
         }
     }
 

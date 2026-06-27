@@ -1,5 +1,6 @@
 package io.personalassistant.app;
 
+import io.personalassistant.common.Errors;
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -67,17 +69,26 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 config,
                 now,
                 KnowledgeStatus.DRAFT,
+                null,
                 Knowledge.Stats.zero(),
                 now,
                 now);
+        knowledge.save(draft); // persist as DRAFT first, so any activation failure is recorded against a real record
 
-        SourceConnector connector = connectors.get(request.type());
-        connector.verify(draft);              // throws on bad credentials/inputs
-        knowledge.save(draft);                // persist as DRAFT first
-
-        createCursors(connector, draft);
-        knowledge.updateStatus(draft.id(), KnowledgeStatus.ACTIVE);
-        LOG.info("Activated knowledge " + draft.id() + " (" + request.type() + ")");
+        // Verify + discover + create cursors can all fail (bad credentials, unreachable source,
+        // discovery error). Any failure parks the knowledge in ERROR with the reason captured, rather
+        // than throwing it away — the user can see why it failed and retry.
+        try {
+            SourceConnector connector = connectors.get(request.type());
+            connector.verify(draft);          // throws on bad credentials/inputs
+            createCursors(connector, draft);  // runs discover(); throws if the source can't be enumerated
+            knowledge.updateStatus(draft.id(), KnowledgeStatus.ACTIVE);
+            LOG.info("Activated knowledge " + draft.id() + " (" + request.type() + ")");
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Failed to activate knowledge " + draft.id()
+                    + " (" + request.type() + "); marking ERROR", e);
+            knowledge.markError(draft.id(), Errors.summary(e));
+        }
         return knowledge.findById(draft.id()).orElse(draft);
     }
 

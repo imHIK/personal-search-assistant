@@ -1,11 +1,13 @@
 package io.personalassistant.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorStatus;
+import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgeService;
 import io.personalassistant.ingestion.connector.SourceIterable;
@@ -53,6 +55,19 @@ class DefaultKnowledgeServiceTest {
         Knowledge kn = addKnowledge();
         // one iterable × {backward, forward} = 2 cursors
         assertEquals(2, cursors.findByKnowledge(kn.id()).size());
+    }
+
+    @Test
+    void discoveryFailureParksKnowledgeInErrorWithReason() {
+        connector.failDiscoveryWith(new IllegalStateException("source unreachable"));
+
+        Knowledge kn = addKnowledge();
+
+        Knowledge stored = knowledge.findById(kn.id()).orElseThrow();
+        assertEquals(KnowledgeStatus.ERROR, stored.status(), "a failed activation lands in ERROR");
+        assertNotNull(stored.lastError(), "the failure reason is captured for debugging");
+        assertTrue(stored.lastError().contains("source unreachable"), "lastError carries the cause");
+        assertEquals(0, cursors.findByKnowledge(kn.id()).size(), "no cursors are created on failure");
     }
 
     @Test

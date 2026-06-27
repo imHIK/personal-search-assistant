@@ -23,7 +23,7 @@ public final class TestData {
         Instant now = Instant.now();
         return new Knowledge(id, "test-" + id,
                 new Knowledge.ConnectorDetails(type, Map.of()), inputs,
-                Knowledge.Config.defaults(), anchor, KnowledgeStatus.ACTIVE,
+                Knowledge.Config.defaults(), anchor, KnowledgeStatus.ACTIVE, null,
                 Knowledge.Stats.zero(), now, now);
     }
 

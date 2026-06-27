@@ -20,6 +20,12 @@ public interface KnowledgeRepository {
 
     void updateStatus(String id, KnowledgeStatus status);
 
+    /**
+     * Flip a knowledge to {@code ERROR} and record why (a verification/discovery/activation
+     * failure), so the failure is inspectable from the stored record rather than only the log.
+     */
+    void markError(String id, String lastError);
+
     /** Replace the rollup counters surfaced for observability. */
     void updateStats(String id, Knowledge.Stats stats);
 

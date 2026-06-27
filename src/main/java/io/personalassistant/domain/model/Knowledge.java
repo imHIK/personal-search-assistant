@@ -18,6 +18,7 @@ import java.util.Map;
  * @param config           schedule / webhook / backfill settings
  * @param anchor           boundary between backward ({@code < anchor}) and forward ({@code >= anchor})
  * @param status           lifecycle state
+ * @param lastError        why the knowledge last failed (set with {@code ERROR}), else null
  * @param stats            rollup counters
  * @param createdAt        creation timestamp
  * @param updatedAt        last-modified timestamp
@@ -30,6 +31,7 @@ public record Knowledge(
         Config config,
         Instant anchor,
         KnowledgeStatus status,
+        String lastError,
         Stats stats,
         Instant createdAt,
         Instant updatedAt) {

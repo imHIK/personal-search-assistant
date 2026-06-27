@@ -1,6 +1,8 @@
 package io.personalassistant.ingestion.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
@@ -135,5 +137,7 @@ class IngestionRunnerTest {
         Cursor after = cursors.store.get(cursor.id());
         assertEquals(CursorStatus.AVAILABLE, after.status());
         assertEquals(1, after.retry().count());
+        assertNotNull(after.retry().lastError(), "the failure is captured on the cursor for debugging");
+        assertTrue(after.retry().lastError().contains("boom"), "lastError carries the exception message");
     }
 }

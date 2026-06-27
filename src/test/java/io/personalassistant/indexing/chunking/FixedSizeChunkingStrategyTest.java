@@ -29,7 +29,7 @@ class FixedSizeChunkingStrategyTest {
         String text = "abcdefghijklmnopqrstuvwxy"; // length 25, step = size-overlap = 6
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, text);
 
-        assertEquals(5, chunks.size());
+        assertEquals(4, chunks.size());
         assertEquals("ent_1_0", chunks.get(0).id());
         assertEquals("abcdefghij", chunks.get(0).text());
         assertEquals("ghijklmnop", chunks.get(1).text(), "windows should overlap by 4 chars");

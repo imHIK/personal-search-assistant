@@ -1,0 +1,186 @@
+{
+  "info": {
+    "name": "Personal Search Assistant",
+    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "knowledgeId", "value": "kn_123" },
+    { "key": "entityId", "value": "ent_123" }
+  ],
+  "item": [
+    {
+      "name": "Knowledge",
+      "item": [
+        {
+          "name": "List knowledge",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            }
+          }
+        },
+        {
+          "name": "Get knowledge by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Create knowledge",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            },
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION. cron, scheduleEnabled and backfillEnabled are optional."
+          }
+        },
+        {
+          "name": "Pause knowledge",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/pause",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "pause"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Resume knowledge",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/resume",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "resume"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Delete knowledge",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "Search",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"quarterly revenue\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"sourceType\": \"EMAIL\" },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"]
+            },
+            "description": "Only query is required. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Indexing",
+      "item": [
+        {
+          "name": "Trigger forward sync",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/knowledge/:id/sync",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "knowledge", ":id", "sync"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Returns { knowledgeId, cursorsArmed }."
+          }
+        },
+        {
+          "name": "Reindex entity",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/entities/:id/reindex",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "entities", ":id", "reindex"],
+              "variable": [{ "key": "id", "value": "{{entityId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Delete entity",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/entities/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "entities", ":id"],
+              "variable": [{ "key": "id", "value": "{{entityId}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

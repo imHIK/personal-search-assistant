@@ -1,5 +1,6 @@
 package io.personalassistant.indexing.job;
 
+import io.personalassistant.common.Errors;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.Embedding;
 import io.personalassistant.domain.model.Entity;
@@ -95,7 +96,7 @@ public class IndexingRunner {
 
             entities.markIndexed(entity.id(), embedded.size(), embeddings.model(), Instant.now());
         } catch (RuntimeException e) {
-            fail(entity, e.getMessage(), false);
+            fail(entity, Errors.summary(e), false);
             LOG.log(Level.WARNING, "Indexing failed for entity " + entity.id(), e);
         }
     }
