@@ -25,7 +25,8 @@ public class StubConnector implements SourceConnector {
 
     /** Test observability: how many times discover() was called, and the last iterable grabbed. */
     public int discoverCalls;
-    public SourceIterable lastGrabIterable;
+    public String lastGrabIterableId;
+    public Map<String, Object> lastGrabAttributes;
 
     public StubConnector(SourceType type, List<SourceIterable> iterables) {
         this.type = type;
@@ -81,7 +82,8 @@ public class StubConnector implements SourceConnector {
 
     @Override
     public GrabPage grab(GrabRequest request) {
-        lastGrabIterable = request.iterable();
+        lastGrabIterableId = request.iterableId();
+        lastGrabAttributes = request.attributes();
         if (failure != null) {
             RuntimeException toThrow = failure;
             failure = null;

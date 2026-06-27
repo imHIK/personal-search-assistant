@@ -106,13 +106,13 @@ public class LocalFsConnector implements SourceConnector {
 
     @Override
     public GrabPage grab(GrabRequest request) {
-        SourceIterable iterable = request.iterable();
+        Map<String, Object> attributes = request.attributes();
         CursorDirection direction = request.direction();
         CursorPosition position = request.position();
         int cap = request.maxItems() > 0 ? request.maxItems() : DEFAULT_CAP;
 
-        Path dir = Path.of((String) iterable.attributes().get(PATH_KEY)).toAbsolutePath().normalize();
-        boolean recursive = Boolean.TRUE.equals(iterable.attributes().get(RECURSIVE_KEY));
+        Path dir = Path.of((String) attributes.get(PATH_KEY)).toAbsolutePath().normalize();
+        boolean recursive = Boolean.TRUE.equals(attributes.get(RECURSIVE_KEY));
         Instant anchor = request.knowledge().anchor();
 
         if (!Files.isDirectory(dir)) {

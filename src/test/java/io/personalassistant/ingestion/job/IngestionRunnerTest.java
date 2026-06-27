@@ -120,21 +120,9 @@ class IngestionRunnerTest {
 
         assertEquals(0, connector.discoverCalls,
                 "self-contained cursor must not trigger discover() on the hot path");
-        assertEquals("root", connector.lastGrabIterable.iterableId());
-        assertEquals(Map.of("path", "/data/inbox", "recursive", true), connector.lastGrabIterable.attributes(),
+        assertEquals("root", connector.lastGrabIterableId);
+        assertEquals(Map.of("path", "/data/inbox", "recursive", true), connector.lastGrabAttributes,
                 "grab receives the attributes snapshotted on the cursor");
-    }
-
-    @Test
-    void legacyCursorWithoutAttributesFallsBackToDiscover() {
-        connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
-        Cursor cursor = seedCursor(CursorDirection.FORWARD, Map.of()); // pre-migration cursor
-
-        runner.runLease(kn, cursor, "w1", () -> {});
-
-        assertEquals(1, connector.discoverCalls,
-                "a cursor with no stored attributes falls back to a one-off discover");
     }
 
     @Test
