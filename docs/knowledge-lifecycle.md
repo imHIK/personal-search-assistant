@@ -47,7 +47,8 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
   "type": "LOCAL_FS",
   "auth": {},
   "inputs": { "rootPath": "/home/me/Documents" },
-  "cron": "0 */15 * * * ?",
+  "cron": null,
+  "interval": null,
   "scheduleEnabled": true,
   "backfillEnabled": true
 }'
@@ -56,7 +57,10 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
 - `type` selects the connector (`SourceType`).
 - `auth` is an opaque credentials blob the connector understands (empty for LOCAL_FS).
 - `inputs` is connector-specific (a root path here; a channel list or Gmail query for others).
-- `cron` / `scheduleEnabled` control forward (incremental) re-arming.
+- `cron` / `interval` / `scheduleEnabled` control forward (incremental) re-arming. Leave both `cron`
+  and `interval` `null` to inherit the **connector default** (LOCAL_FS = 1 day) and then the
+  **global default** (`app.scheduler.default-interval`, 1 day); set one to override (cron wins over
+  interval). `scheduleEnabled: false` turns forward scheduling off entirely. See `ScheduleResolver`.
 - `backfillEnabled` controls whether history is walked backward on activation.
 
 ### What happens synchronously (`DefaultKnowledgeService.add`)
@@ -201,9 +205,15 @@ with no lost or duplicated entities. The lease has a TTL, so a dead worker's cur
 automatically.
 
 ### Keeping incremental sync flowing (forward scheduling)
-`ForwardCursorScheduler` (every `app.scheduler.forward-interval`, default 60m) flips a Knowledge's
-forward cursors `IDLE → AVAILABLE` for every active, schedule-enabled Knowledge — the one
-forward-specific operation. The same flip is triggered on demand by:
+`ForwardCursorScheduler` flips a Knowledge's forward cursors `IDLE → AVAILABLE` — the one
+forward-specific operation. It wakes on a fast tick (`app.scheduler.forward-interval`, default 1m)
+but does **not** re-arm everything every tick: it arms only Knowledges whose `nextSyncDueAt` has
+arrived, then rolls that due time forward by the Knowledge's **resolved schedule**. The schedule is
+resolved per source by `ScheduleResolver` in three tiers — the Knowledge's own custom
+`cron`/`interval`, else the connector's `defaultSchedule()` (e.g. LOCAL_FS = 1 day), else the global
+default (`app.scheduler.default-interval` / `default-cron`); cron beats interval at the winning tier.
+A `null` `nextSyncDueAt` (e.g. a freshly activated Knowledge) means "due now". The same flip is
+triggered on demand by:
 - `POST /api/index/knowledge/{id}/sync` (manual), and
 - a webhook (future) calling `ForwardCursorScheduler.armNow(id)`.
 

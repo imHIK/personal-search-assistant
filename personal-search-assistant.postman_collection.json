@@ -45,7 +45,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true\n}",
+              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -53,7 +53,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION. cron, scheduleEnabled and backfillEnabled are optional."
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION. cron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day) then the global default; set one to override (cron wins if both are set)."
           }
         },
         {

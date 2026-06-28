@@ -25,6 +25,11 @@ dependencies {
     // Scheduler — drives the ingestion/indexing poll loops and forward re-arming.
     implementation 'io.quarkus:quarkus-scheduler'
 
+    // cron-utils — compute the next fire time for a knowledge's custom/connector/global cron
+    // schedule (the forward scheduler obeys per-source cadence). Version is managed by the Quarkus
+    // BOM (quarkus-scheduler already depends on it), so it stays aligned with the platform.
+    implementation 'com.cronutils:cron-utils'
+
     // OpenSearch clients (query engine). The typed client plus the stable low-level REST client
     // the SearchIndex adapter speaks the query DSL through.
     implementation 'org.opensearch.client:opensearch-java:2.13.0'

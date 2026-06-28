@@ -75,6 +75,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 request.inputs() == null ? java.util.Map.of() : request.inputs(),
                 config,
                 now,
+                null, // nextSyncDueAt: due now — the scheduler sets the first real due time on its next tick
                 KnowledgeStatus.DRAFT,
                 null,
                 Knowledge.Stats.zero(),

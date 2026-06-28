@@ -23,7 +23,19 @@ public final class TestData {
         Instant now = Instant.now();
         return new Knowledge(id, "test-" + id,
                 new Knowledge.ConnectorDetails(type, Map.of()), inputs,
-                Knowledge.Config.defaults(), anchor, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Config.defaults(), anchor, null, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Stats.zero(), now, now);
+    }
+
+    /** A knowledge whose config carries an explicit custom {@link Knowledge.ScheduleSettings}. */
+    public static Knowledge knowledgeWithSchedule(String id, SourceType type,
+                                                  Knowledge.ScheduleSettings schedule) {
+        Instant now = Instant.now();
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(schedule, defaults.webhookSettings(), defaults.backfill());
+        return new Knowledge(id, "test-" + id,
+                new Knowledge.ConnectorDetails(type, Map.of()), Map.of(),
+                config, now, null, KnowledgeStatus.ACTIVE, null,
                 Knowledge.Stats.zero(), now, now);
     }
 

@@ -3,6 +3,7 @@ package io.personalassistant.ingestion.connector.localfs;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
+import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.GrabPage;
@@ -13,6 +14,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -76,6 +78,15 @@ public class LocalFsConnector implements SourceConnector {
     @Override
     public boolean hasDynamicIterables() {
         return true; // new sub-directories can appear under the root after activation
+    }
+
+    @Override
+    public SyncSchedule defaultSchedule() {
+        // A filesystem has no push/change-feed, so incremental sync means re-walking the tree
+        // (see the forward-pagination notes above). That is relatively expensive, so the
+        // connector-level default is a gentle once-a-day re-arm; users wanting fresher sync can set
+        // a custom schedule on the knowledge, and webhooks/manual sync still trigger immediately.
+        return SyncSchedule.ofInterval(Duration.ofDays(1));
     }
 
     @Override

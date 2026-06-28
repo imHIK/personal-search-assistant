@@ -26,5 +26,13 @@ public interface KnowledgeRepository {
      */
     void markError(String id, String lastError);
 
+    /**
+     * Record when the forward scheduler may next re-arm this knowledge's forward cursors. Written by
+     * {@code ForwardCursorScheduler} after it arms (or defers) a knowledge, so the per-source cadence
+     * survives restarts and is not re-triggered every tick. Leaves {@code updatedAt} untouched — this
+     * is scheduler bookkeeping, not a user-visible config change.
+     */
+    void updateNextSyncDueAt(String id, java.time.Instant nextDueAt);
+
     void delete(String id);
 }

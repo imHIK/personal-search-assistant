@@ -1,6 +1,7 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.GrabPage;
@@ -23,6 +24,7 @@ public class StubConnector implements SourceConnector {
     private RuntimeException failure;
     private RuntimeException discoverFailure;
     private boolean dynamicIterables;
+    private SyncSchedule defaultSchedule = SyncSchedule.NONE;
 
     /** Test observability: how many times discover() was called, and the last iterable grabbed. */
     public int discoverCalls;
@@ -67,9 +69,20 @@ public class StubConnector implements SourceConnector {
         return this;
     }
 
+    /** Set the connector-level default schedule reported by {@link #defaultSchedule()}. */
+    public StubConnector withDefaultSchedule(SyncSchedule schedule) {
+        this.defaultSchedule = schedule == null ? SyncSchedule.NONE : schedule;
+        return this;
+    }
+
     @Override
     public boolean hasDynamicIterables() {
         return dynamicIterables;
+    }
+
+    @Override
+    public SyncSchedule defaultSchedule() {
+        return defaultSchedule;
     }
 
     @Override

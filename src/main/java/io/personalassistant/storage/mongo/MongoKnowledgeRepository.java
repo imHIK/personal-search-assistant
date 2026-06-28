@@ -82,6 +82,13 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public void updateNextSyncDueAt(String id, Instant nextDueAt) {
+        // Scheduler bookkeeping only — deliberately does NOT touch updatedAt.
+        collection().updateOne(eq("_id", id),
+                Updates.set("nextSyncDueAt", BsonSupport.date(nextDueAt)));
+    }
+
+    @Override
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }
@@ -98,11 +105,13 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                 .append("inputs", BsonSupport.toBsonMap(k.inputs()))
                 .append("config", new Document()
                         .append("scheduleSettings", new Document("cron", cfg.scheduleSettings().cron())
+                                .append("interval", cfg.scheduleSettings().interval())
                                 .append("enabled", cfg.scheduleSettings().enabled()))
                         .append("webhookSettings", new Document("enabled", cfg.webhookSettings().enabled())
                                 .append("secret", cfg.webhookSettings().secret()))
                         .append("backfill", new Document("enabled", cfg.backfill().enabled())))
                 .append("anchor", BsonSupport.date(k.anchor()))
+                .append("nextSyncDueAt", BsonSupport.date(k.nextSyncDueAt()))
                 .append("status", BsonSupport.enumName(k.status()))
                 .append("lastError", k.lastError())
                 .append("stats", new Document("entities", k.stats().entities())
@@ -129,12 +138,14 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                 new Knowledge.Config(
                         new Knowledge.ScheduleSettings(
                                 sched == null ? null : sched.getString("cron"),
+                                sched == null ? null : sched.getString("interval"),
                                 sched != null && Boolean.TRUE.equals(sched.getBoolean("enabled"))),
                         new Knowledge.WebhookSettings(
                                 hook != null && Boolean.TRUE.equals(hook.getBoolean("enabled")),
                                 hook == null ? null : hook.getString("secret")),
                         new Knowledge.Backfill(back != null && Boolean.TRUE.equals(back.getBoolean("enabled")))),
                 BsonSupport.instant(d.get("anchor")),
+                BsonSupport.instant(d.get("nextSyncDueAt")),
                 BsonSupport.enumOf(KnowledgeStatus.class, d.get("status")),
                 d.getString("lastError"),
                 stats == null ? Knowledge.Stats.zero() : new Knowledge.Stats(

@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector;
 
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.EnumSet;
@@ -44,6 +45,18 @@ public interface SourceConnector {
      */
     default boolean hasDynamicIterables() {
         return false;
+    }
+
+    /**
+     * This source's default forward-sync cadence — the connector-level tier of schedule resolution
+     * (custom &rarr; <strong>connector default</strong> &rarr; global default). Returned when the
+     * user has not set a custom schedule on the knowledge. The default is {@link SyncSchedule#NONE}
+     * (no opinion — fall through to the global default); a connector with a natural cadence should
+     * override it, e.g. a filesystem that has no change-feed might return {@code ofInterval(1 day)}
+     * while a webhook-driven API could return a much shorter interval.
+     */
+    default SyncSchedule defaultSchedule() {
+        return SyncSchedule.NONE;
     }
 
     /** Validate connectivity/credentials/inputs for a configured knowledge. */

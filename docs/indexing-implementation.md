@@ -63,6 +63,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §5 Backward/forward grabbers, anchor boundary | `ingestion.connector.localfs.LocalFsConnector` (`grabForward` = mtime-ordered bounded pass; `grabBackward` = path-ordered cursor-skipping DFS) |
 | §5 Ingestion loop (batch=page, lease=N batches, persist→advance) | `ingestion.job.IngestionRunner.runLease` + `IngestionJob.tick` |
 | §5 Forward scheduling (IDLE → AVAILABLE) | `ingestion.job.ForwardCursorScheduler` + `CursorRepository.armForwardCursors` |
+| Per-source schedule (custom → connector default → global) | `ingestion.schedule.ScheduleResolver` (+ `domain.model.SyncSchedule`, `SourceConnector.defaultSchedule`, `Knowledge.nextSyncDueAt`). Each tick arms only knowledges whose `nextSyncDueAt` has arrived, then rolls it forward by the resolved interval/cron |
 | Dynamic iterables (new sub-streams over time) | `SourceConnector.hasDynamicIterables` + `ingestion.job.IterableDiscoveryScheduler` + `KnowledgeService.reconcileCursors` |
 | Indexing fairness (round-robin across knowledges) | `IndexingJob.processIndexingFairly` + `EntityRepository.distinctPendingKnowledgeIds` / knowledge-scoped `claimForIndexing` |
 | §5 Updates & deletes (tombstones) | `IngestionRunner.persistItem` (`markDeleted`); cleanup in `IndexingRunner.deleteEntityChunks` |
@@ -189,7 +190,9 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.ingestion.retry-limit` | `5` | Cursor failures before `FAILED` |
 | `app.ingestion.permits.global` / `.connector` / `.knowledge` | `8` / `4` / `2` | Scoped ingestion concurrency ceilings |
 | `app.ingestion.permits.ttl-seconds` | `900` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
-| `app.scheduler.forward-interval` | `60m` | How often forward cursors are re-armed |
+| `app.scheduler.forward-interval` | `1m` | Scheduler **tick** granularity — how often it checks which knowledges are due. Bounds the finest schedule, not how often any one source syncs |
+| `app.scheduler.default-interval` | `1d` | Global-default forward-sync interval (last resort: used when a knowledge has no custom schedule and its connector declares no `defaultSchedule()`) |
+| `app.scheduler.default-cron` | _(empty)_ | Optional global-default cron; if set, wins over `default-interval`. Cron beats interval at every tier |
 | `app.scheduler.discovery-interval` | `60m` | How often dynamic-iterable sources are re-discovered (new folders/channels) |
 | `app.indexing.poll-interval` | `5s` | Indexing loop tick |
 | `app.indexing.batch` | `20` | Global budget of entities indexed per tick |
@@ -245,10 +248,6 @@ search are all source-agnostic. `LocalFsConnector` is a worked example: it defin
 These are intentionally out of scope for this build (per the design's phasing) and have their
 seams already in place:
 
-- **Per-knowledge cron scheduling.** `ForwardCursorScheduler` currently re-arms forward cursors on
-  a fixed interval (`app.scheduler.forward-interval`) for every active, schedule-enabled knowledge.
-  The next step is to honour each knowledge's `scheduleSettings.cron` (e.g. via the Quartz-backed
-  Quarkus scheduler). The re-arm primitive (`armNow` / `armForwardCursors`) is what it will call.
 - **Webhooks.** `ForwardCursorScheduler.armNow(knowledgeId)` is the on-demand trigger a webhook
   endpoint would invoke; the webhook config already lives on `Knowledge.Config.webhookSettings`.
 - **File splitting** for very large or container files (zip / mbox) — slots into

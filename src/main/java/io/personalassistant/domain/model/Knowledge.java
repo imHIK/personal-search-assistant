@@ -1,7 +1,9 @@
 package io.personalassistant.domain.model;
 
+import io.personalassistant.common.Durations;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.model.enums.SourceType;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
@@ -17,6 +19,9 @@ import java.util.Map;
  * @param inputs           what to index (paths, folder ids, channels, query…); connector-specific
  * @param config           schedule / webhook / backfill settings
  * @param anchor           boundary between backward ({@code < anchor}) and forward ({@code >= anchor})
+ * @param nextSyncDueAt    when the forward scheduler may next re-arm this knowledge's forward
+ *                         cursors; {@code null} means "due now" (e.g. fresh activation). Rolled
+ *                         forward by the scheduler using the knowledge's resolved {@link SyncSchedule}
  * @param status           lifecycle state
  * @param lastError        why the knowledge last failed (set with {@code ERROR}), else null
  * @param stats            rollup counters
@@ -30,6 +35,7 @@ public record Knowledge(
         Map<String, Object> inputs,
         Config config,
         Instant anchor,
+        Instant nextSyncDueAt,
         KnowledgeStatus status,
         String lastError,
         Stats stats,
@@ -43,8 +49,14 @@ public record Knowledge(
      * {@code updatedAt} untouched (it is not a persisted mutation).
      */
     public Knowledge withStats(Stats newStats) {
-        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, status, lastError,
-                newStats, createdAt, updatedAt);
+        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, nextSyncDueAt, status,
+                lastError, newStats, createdAt, updatedAt);
+    }
+
+    /** Copy with a new forward re-arm due time (used by the scheduler after it arms/defers). */
+    public Knowledge withNextSyncDueAt(Instant newDueAt) {
+        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, newDueAt, status,
+                lastError, stats, createdAt, updatedAt);
     }
 
     /** Which connector + opaque auth blob (never inspected by the core domain). */
@@ -58,14 +70,42 @@ public record Knowledge(
 
         public static Config defaults() {
             return new Config(
-                    new ScheduleSettings("0 */15 * * * ?", true),
+                    new ScheduleSettings(null, null, false),
                     new WebhookSettings(false, null),
                     new Backfill(true));
         }
     }
 
-    /** Forward-sync schedule. {@code cron} drives re-arming of forward cursors. */
-    public record ScheduleSettings(String cron, boolean enabled) {}
+    /**
+     * Forward-sync schedule chosen by the user for this specific knowledge — the <em>custom</em>
+     * tier of resolution. Either a {@code cron} or an {@code interval} (a {@link Durations}-style
+     * string such as {@code "15m"}/{@code "1d"}) may be set; both being unset means "inherit"
+     * (fall through to the connector default, then the global default). {@code enabled} is the
+     * master switch — when {@code false}, forward cursors are never re-armed on a schedule.
+     */
+    public record ScheduleSettings(String cron, String interval, boolean enabled) {
+
+        public ScheduleSettings {
+            if (cron != null && cron.isBlank()) {
+                cron = null;
+            }
+            if (interval != null && interval.isBlank()) {
+                interval = null;
+            }
+        }
+
+        /**
+         * The user's custom schedule as a {@link SyncSchedule}, or {@link SyncSchedule#NONE} when
+         * none is set (so the resolver moves to the next tier). Cron is preferred over interval.
+         */
+        public SyncSchedule customSchedule() {
+            if (cron != null) {
+                return SyncSchedule.ofCron(cron);
+            }
+            Duration parsed = Durations.parse(interval);
+            return parsed == null ? SyncSchedule.NONE : SyncSchedule.ofInterval(parsed);
+        }
+    }
 
     /** Inbound webhook configuration (forward re-arm on demand). */
     public record WebhookSettings(boolean enabled, String secret) {}

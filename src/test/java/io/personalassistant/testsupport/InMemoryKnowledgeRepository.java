@@ -41,7 +41,7 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), status, k.lastError(), k.stats(), k.createdAt(), Instant.now()));
+                    k.anchor(), k.nextSyncDueAt(), status, k.lastError(), k.stats(), k.createdAt(), Instant.now()));
         }
     }
 
@@ -50,7 +50,15 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), KnowledgeStatus.ERROR, lastError, k.stats(), k.createdAt(), Instant.now()));
+                    k.anchor(), k.nextSyncDueAt(), KnowledgeStatus.ERROR, lastError, k.stats(), k.createdAt(), Instant.now()));
+        }
+    }
+
+    @Override
+    public void updateNextSyncDueAt(String id, Instant nextDueAt) {
+        Knowledge k = store.get(id);
+        if (k != null) {
+            store.put(id, k.withNextSyncDueAt(nextDueAt));
         }
     }
 
