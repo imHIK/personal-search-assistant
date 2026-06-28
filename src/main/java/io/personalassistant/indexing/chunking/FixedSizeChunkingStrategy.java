@@ -52,7 +52,10 @@ public class FixedSizeChunkingStrategy implements ChunkingStrategy {
                     null,
                     entity.title(),
                     entity.uri(),
-                    Map.of()));
+                    // Carry the entity's facets (author, dates, labels, size…) onto every chunk so
+                    // they're searchable/filterable and returned with each hit. title/uri are also
+                    // denormalized into dedicated fields above; keeping them here is harmless.
+                    entity.metadata() == null ? Map.of() : entity.metadata()));
             ordinal++;
             if (end == text.length()) {
                 break;

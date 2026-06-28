@@ -42,6 +42,18 @@ class FixedSizeChunkingStrategyTest {
     }
 
     @Test
+    void carriesEntityMetadataOntoEveryChunk() {
+        var entity = TestData.ingestedText("ent_1", "kn_1", "doc.txt", "x");
+        List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "abcdefghijklmnop");
+
+        assertFalse(chunks.isEmpty());
+        for (Chunk c : chunks) {
+            assertEquals(entity.metadata(), c.metadata(),
+                    "each chunk should carry the entity's facets (was dropped as an empty map)");
+        }
+    }
+
+    @Test
     void blankTextYieldsNoChunks() {
         var entity = TestData.ingestedText("ent_2", "kn_1", "empty.txt", "x");
         assertTrue(chunker.chunk(entity, SourceType.LOCAL_FS, "   ").isEmpty());

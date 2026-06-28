@@ -55,15 +55,6 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public void updateStats(String id, Knowledge.Stats stats) {
-        Knowledge k = store.get(id);
-        if (k != null) {
-            store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), k.status(), k.lastError(), stats, k.createdAt(), Instant.now()));
-        }
-    }
-
-    @Override
     public void delete(String id) {
         store.remove(id);
     }

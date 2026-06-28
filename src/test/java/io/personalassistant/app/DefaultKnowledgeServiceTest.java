@@ -12,6 +12,7 @@ import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.DiscoveryOutcome;
 import io.personalassistant.domain.model.enums.DiscoveryTrigger;
+import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgeService;
@@ -24,6 +25,7 @@ import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
 import io.personalassistant.testsupport.TestData;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -248,6 +250,26 @@ class DefaultKnowledgeServiceTest {
         service.delete(kn.id());
 
         assertTrue(discovery.findByKnowledge(kn.id()).isEmpty(), "teardown purges the discovery records");
+    }
+
+    @Test
+    void statsAreComputedFromEntityCountsOnRead() {
+        Knowledge kn = addKnowledge();
+        // Three entities ingested; one gets indexed, one fails — the rest stay INGESTED.
+        entities.upsert(TestData.entityInIterable("ent_1", kn.id(), "chan_a", "x1"));
+        entities.upsert(TestData.entityInIterable("ent_2", kn.id(), "chan_a", "x2"));
+        entities.upsert(TestData.entityInIterable("ent_3", kn.id(), "chan_a", "x3"));
+        entities.markIndexed("ent_1", 4, "m", Instant.now());
+        entities.markFailed("ent_2", EntityStatus.FAILED, "boom", 1, null);
+
+        Knowledge.Stats stats = service.get(kn.id()).orElseThrow().stats();
+        assertEquals(3, stats.entities(), "total reflects all entities");
+        assertEquals(1, stats.indexed());
+        assertEquals(1, stats.failed());
+
+        // list() computes the same way.
+        Knowledge listed = service.list().stream().filter(k -> k.id().equals(kn.id())).findFirst().orElseThrow();
+        assertEquals(3, listed.stats().entities());
     }
 
 }

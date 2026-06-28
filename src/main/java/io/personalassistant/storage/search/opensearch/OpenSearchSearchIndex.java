@@ -200,9 +200,38 @@ public class OpenSearchSearchIndex implements SearchIndex {
                 vec.add(v);
             }
         }
-        doc.set("metadata", mapper.valueToTree(chunk.metadata() == null ? Map.of() : chunk.metadata()));
+        doc.set("metadata", mapper.valueToTree(jsonSafe(chunk.metadata() == null ? Map.of() : chunk.metadata())));
         doc.put("indexedAt", Instant.now().toString());
         return doc;
+    }
+
+    /**
+     * Convert metadata values into JSON-friendly forms before serialization. The chunk's metadata
+     * is carried verbatim from the entity, so it may contain {@link Instant}/{@link java.util.Date}
+     * facets (e.g. {@code modifiedAt}) — and this adapter's plain {@link ObjectMapper} has no
+     * java.time module, so it would otherwise throw. Temporals are emitted as ISO-8601 strings;
+     * maps/lists are converted recursively; everything else passes through.
+     */
+    private Object jsonSafe(Object value) {
+        if (value instanceof Instant instant) {
+            return instant.toString();
+        }
+        if (value instanceof java.util.Date date) {
+            return date.toInstant().toString();
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            map.forEach((k, v) -> out.put(String.valueOf(k), jsonSafe(v)));
+            return out;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> out = new ArrayList<>(list.size());
+            for (Object o : list) {
+                out.add(jsonSafe(o));
+            }
+            return out;
+        }
+        return value;
     }
 
     private JsonNode execute(Request request) {

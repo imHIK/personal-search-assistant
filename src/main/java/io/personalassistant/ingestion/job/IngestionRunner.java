@@ -10,14 +10,12 @@ import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
-import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.GrabPage;
 import io.personalassistant.ingestion.connector.GrabRequest;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.EntityRepository;
-import io.personalassistant.storage.repository.KnowledgeRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
@@ -45,7 +43,6 @@ public class IngestionRunner {
     private final ConnectorRegistry connectors;
     private final EntityRepository entities;
     private final CursorRepository cursors;
-    private final KnowledgeRepository knowledge;
 
     @ConfigProperty(name = "app.ingestion.batches-per-lease", defaultValue = "50")
     int batchesPerLease;
@@ -61,11 +58,10 @@ public class IngestionRunner {
 
     @Inject
     public IngestionRunner(ConnectorRegistry connectors, EntityRepository entities,
-                           CursorRepository cursors, KnowledgeRepository knowledge) {
+                           CursorRepository cursors) {
         this.connectors = connectors;
         this.entities = entities;
         this.cursors = cursors;
-        this.knowledge = knowledge;
     }
 
     /**
@@ -103,13 +99,11 @@ public class IngestionRunner {
                             ? CursorStatus.EXHAUSTED   // history drained (terminal)
                             : CursorStatus.IDLE;        // caught up; scheduler re-arms it
                     cursors.release(cursor.id(), worker, resting);
-                    refreshStats(kn.id());
                     return;
                 }
             }
             // Hit the batch cap with more pages remaining → re-pick next tick.
             cursors.release(cursor.id(), worker, CursorStatus.AVAILABLE);
-            refreshStats(kn.id());
         } catch (RuntimeException e) {
             int retryCount = cursor.retry().count() + 1;
             CursorStatus resting = retryCount > retryLimit ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
@@ -154,16 +148,6 @@ public class IngestionRunner {
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
                 EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now); // TODO: check if only first time, ow retry will also be copied
         entities.upsert(entity);
-    }
-
-    private void refreshStats(String knowledgeId) {
-        if (knowledge.findById(knowledgeId).map(k -> k.status() == KnowledgeStatus.DELETED).orElse(true)) {
-            return;
-        }
-        long total = entities.countByKnowledge(knowledgeId);
-        long indexed = entities.countByKnowledgeAndStatus(knowledgeId, EntityStatus.INDEXED);
-        long failed = entities.countByKnowledgeAndStatus(knowledgeId, EntityStatus.FAILED);
-        knowledge.updateStats(knowledgeId, new Knowledge.Stats(total, indexed, failed));
     }
 
     Duration leaseDuration() {

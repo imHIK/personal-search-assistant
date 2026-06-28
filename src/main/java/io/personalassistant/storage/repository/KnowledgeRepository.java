@@ -26,8 +26,5 @@ public interface KnowledgeRepository {
      */
     void markError(String id, String lastError);
 
-    /** Replace the rollup counters surfaced for observability. */
-    void updateStats(String id, Knowledge.Stats stats);
-
     void delete(String id);
 }

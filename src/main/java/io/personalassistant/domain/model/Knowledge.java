@@ -36,6 +36,17 @@ public record Knowledge(
         Instant createdAt,
         Instant updatedAt) {
 
+    /**
+     * Return a copy with the given rollup counters. Stats are a <em>derived, reporting-only</em>
+     * value computed from entity counts at read time (see {@code KnowledgeService}), not maintained
+     * on the write path — so this is used to overlay fresh counts onto a fetched record, leaving
+     * {@code updatedAt} untouched (it is not a persisted mutation).
+     */
+    public Knowledge withStats(Stats newStats) {
+        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, status, lastError,
+                newStats, createdAt, updatedAt);
+    }
+
     /** Which connector + opaque auth blob (never inspected by the core domain). */
     public record ConnectorDetails(SourceType type, Map<String, Object> auth) {}
 

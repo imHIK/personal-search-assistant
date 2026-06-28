@@ -82,15 +82,6 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public void updateStats(String id, Knowledge.Stats stats) {
-        collection().updateOne(eq("_id", id), Updates.combine(
-                Updates.set("stats.entities", stats.entities()),
-                Updates.set("stats.indexed", stats.indexed()),
-                Updates.set("stats.failed", stats.failed()),
-                Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
-    }
-
-    @Override
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }

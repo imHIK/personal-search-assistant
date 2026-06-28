@@ -43,7 +43,7 @@ class IngestionRunnerTest {
         knowledge = new InMemoryKnowledgeRepository();
         connector = new StubConnector(SourceType.LOCAL_FS,
                 List.of(new SourceIterable("root", "root", Map.of())));
-        runner = new IngestionRunner(new SingleConnectorRegistry(connector), entities, cursors, knowledge);
+        runner = new IngestionRunner(new SingleConnectorRegistry(connector), entities, cursors);
         runner.batchesPerLease = 50;
         runner.maxItemsPerBatch = 100;
         runner.leaseSeconds = 60;
@@ -84,7 +84,7 @@ class IngestionRunnerTest {
         Cursor after = cursors.store.get(cursor.id());
         assertEquals(CursorStatus.EXHAUSTED, after.status(), "drained history is terminal");
         assertEquals(1L, after.position().getLong("seq", 0L));
-        assertEquals(2, knowledge.findById("kn_1").orElseThrow().stats().entities());
+        assertEquals(2, entities.countByKnowledge("kn_1"), "both items were persisted as entities");
     }
 
     @Test

@@ -9,6 +9,7 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.DiscoveryTrigger;
+import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.KnowledgeService;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
@@ -103,12 +104,25 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
     @Override
     public Optional<Knowledge> get(String id) {
-        return knowledge.findById(id);
+        return knowledge.findById(id).map(this::withFreshStats);
     }
 
     @Override
     public List<Knowledge> list() {
-        return knowledge.findAll();
+        return knowledge.findAll().stream().map(this::withFreshStats).toList();
+    }
+
+    /**
+     * Overlay freshly-computed rollup counters onto a knowledge. Stats are derived and
+     * reporting-only, so rather than maintain them on the (hot) ingestion/indexing write path — which
+     * would mean recomputing on every entity — we compute them here, on the comparatively rare read.
+     * The counts are three indexed {@code entities} queries; always accurate, never stale.
+     */
+    private Knowledge withFreshStats(Knowledge kn) {
+        long total = entities.countByKnowledge(kn.id());
+        long indexed = entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.INDEXED);
+        long failed = entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.FAILED);
+        return kn.withStats(new Knowledge.Stats(total, indexed, failed));
     }
 
     @Override
