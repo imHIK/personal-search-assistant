@@ -58,6 +58,13 @@ public class MongoIndexInitializer {
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId", "status"));
 
+        db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
+                .createIndex(Indexes.ascending("knowledgeId"));
+        db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
+                .createIndex(Indexes.ascending("direction"));
+        db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
+                .createIndex(Indexes.ascending("lastOutcome"));
+
         LOG.info("Mongo indexes ensured for database '" + database + "'");
     }
 }

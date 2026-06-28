@@ -4,21 +4,25 @@ import io.personalassistant.common.Errors;
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
+import io.personalassistant.domain.model.DiscoveryStatus;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
+import io.personalassistant.domain.model.enums.DiscoveryTrigger;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.KnowledgeService;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.storage.repository.CursorRepository;
+import io.personalassistant.storage.repository.DiscoveryStatusRepository;
 import io.personalassistant.storage.repository.EntityRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.personalassistant.storage.search.SearchIndex;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -45,16 +49,18 @@ public class DefaultKnowledgeService implements KnowledgeService {
     private final EntityRepository entities;
     private final ConnectorRegistry connectors;
     private final SearchIndex index;
+    private final DiscoveryStatusRepository discoveryStatus;
 
     @Inject
     public DefaultKnowledgeService(KnowledgeRepository knowledge, CursorRepository cursors,
                                    EntityRepository entities, ConnectorRegistry connectors,
-                                   SearchIndex index) {
+                                   SearchIndex index, DiscoveryStatusRepository discoveryStatus) {
         this.knowledge = knowledge;
         this.cursors = cursors;
         this.entities = entities;
         this.connectors = connectors;
         this.index = index;
+        this.discoveryStatus = discoveryStatus;
     }
 
     @Override
@@ -80,8 +86,11 @@ public class DefaultKnowledgeService implements KnowledgeService {
         // than throwing it away — the user can see why it failed and retry.
         try {
             SourceConnector connector = connectors.get(request.type());
-            connector.verify(draft);          // throws on bad credentials/inputs
-            createCursors(connector, draft);  // runs discover(); throws if the source can't be enumerated
+            connector.verify(draft);                                  // throws on bad credentials/inputs
+            List<SourceIterable> iterables = discover(draft, DiscoveryTrigger.ACTIVATION); // throws if not enumerable
+            DirCounts created = createCursors(draft, iterables);
+            recordDiscovery(draft, DiscoveryTrigger.ACTIVATION, iterables.size(),
+                    created, DirCounts.zero(), DirCounts.zero());
             knowledge.updateStatus(draft.id(), KnowledgeStatus.ACTIVE);
             LOG.info("Activated knowledge " + draft.id() + " (" + request.type() + ")");
         } catch (RuntimeException e) {
@@ -120,6 +129,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         index.deleteByKnowledge(id);                          // remove derived chunks
         entities.deleteByKnowledge(id);                       // remove canonical entities
         cursors.deleteByKnowledge(id);                        // remove cursors
+        discoveryStatus.deleteByKnowledge(id);                // remove discovery-status record(s)
         knowledge.delete(id);                                 // finally drop the knowledge record
     }
 
@@ -135,33 +145,39 @@ public class DefaultKnowledgeService implements KnowledgeService {
             return 0;
         }
         Knowledge kn = known.get();
-        SourceConnector connector = connectors.get(kn.connectorDetails().type());
-        // One discover serves all three reconciliation steps below.
-        List<SourceIterable> iterables = connector.discover(kn);
+        // One discover serves all three reconciliation steps below (records its outcome/failure).
+        List<SourceIterable> iterables = discover(kn, DiscoveryTrigger.RECONCILE);
 
-        int created = createCursors(kn, iterables);
-        int revived = reviveReappearedIterables(kn, iterables);
-        int retired = retireDeletedIterables(kn, iterables);
+        DirCounts created = createCursors(kn, iterables);
+        DirCounts revived = reviveReappearedIterables(kn, iterables);
+        DirCounts retired = retireDeletedIterables(kn, iterables);
 
-        if (created > 0 || revived > 0 || retired > 0) {
-            LOG.info("Reconcile for knowledge " + id + ": +" + created + " new, "
-                    + revived + " revived, " + retired + " retired cursor(s)");
+        recordDiscovery(kn, DiscoveryTrigger.RECONCILE, iterables.size(), created, revived, retired);
+
+        if (created.total() > 0 || revived.total() > 0 || retired.total() > 0) {
+            LOG.info("Reconcile for knowledge " + id + ": +" + created.total() + " new, "
+                    + revived.total() + " revived, " + retired.total() + " retired cursor(s)");
         }
-        return created;
+        return created.total();
     }
 
     /** Revive cursors retired for an iterable that has since reappeared, refreshing their attributes. */
-    private int reviveReappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
+    private DirCounts reviveReappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
         Map<String, Map<String, Object>> live = new HashMap<>();
         iterables.forEach(it -> live.put(it.iterableId(), it.attributes()));
-        int revived = 0;
+        int backward = 0;
+        int forward = 0;
         for (Cursor c : cursors.findByKnowledge(kn.id())) {
             if (c.status() == CursorStatus.RETIRED && live.containsKey(c.iterableId())
                     && cursors.revive(c.id(), live.get(c.iterableId()))) {
-                revived++;
+                if (c.direction() == CursorDirection.BACKWARD) {
+                    backward++;
+                } else {
+                    forward++;
+                }
             }
         }
-        return revived;
+        return new DirCounts(backward, forward);
     }
 
     /**
@@ -169,7 +185,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
      * indexed data (chunks) and canonical entities first. Idempotent: already-retired or
      * currently-running cursors are skipped and caught on a later pass.
      */
-    private int retireDeletedIterables(Knowledge kn, List<SourceIterable> iterables) {
+    private DirCounts retireDeletedIterables(Knowledge kn, List<SourceIterable> iterables) {
         Set<String> liveIds = new HashSet<>();
         iterables.forEach(it -> liveIds.add(it.iterableId()));
         List<Cursor> all = cursors.findByKnowledge(kn.id());
@@ -187,41 +203,106 @@ public class DefaultKnowledgeService implements KnowledgeService {
             index.deleteByIterable(kn.id(), iterableId);
             entities.deleteByKnowledgeAndIterable(kn.id(), iterableId);
         }
-        int retired = 0;
+        int backward = 0;
+        int forward = 0;
         for (Cursor c : all) {
             if (goneIterables.contains(c.iterableId()) && cursors.retire(c.id())) {
-                retired++;
+                if (c.direction() == CursorDirection.BACKWARD) {
+                    backward++;
+                } else {
+                    forward++;
+                }
             }
         }
-        return retired;
+        return new DirCounts(backward, forward);
+    }
+
+    /**
+     * Run {@code connector.discover}, recording a {@code FAILED} discovery status for each of the
+     * knowledge's active grabber directions before rethrowing — so a failed enumeration is always
+     * inspectable from the {@code discovery} collection (not just the log). On success the caller
+     * records the {@code OK} runs once it knows the per-direction cursor counts.
+     */
+    private List<SourceIterable> discover(Knowledge kn, DiscoveryTrigger trigger) {
+        SourceConnector connector = connectors.get(kn.connectorDetails().type());
+        try {
+            return connector.discover(kn);
+        } catch (RuntimeException e) {
+            String error = Errors.summary(e);
+            for (CursorDirection direction : activeGrabberDirections(kn)) {
+                discoveryStatus.record(DiscoveryStatus.Run.failed(kn.id(), direction, trigger, error));
+            }
+            throw e;
+        }
+    }
+
+    /** Record one discovery status per active grabber direction, attributing each its own counts. */
+    private void recordDiscovery(Knowledge kn, DiscoveryTrigger trigger, int iterablesFound,
+                                 DirCounts created, DirCounts revived, DirCounts retired) {
+        for (CursorDirection direction : activeGrabberDirections(kn)) {
+            discoveryStatus.record(DiscoveryStatus.Run.ok(kn.id(), direction, trigger, iterablesFound,
+                    new DiscoveryStatus.Counts(created.of(direction), revived.of(direction),
+                            retired.of(direction))));
+        }
+    }
+
+    /**
+     * The grabber directions this knowledge actually runs — and therefore the discovery records it
+     * has: a forward grabber whenever the source supports it, and a backward grabber only when the
+     * source supports it <em>and</em> backfill is enabled. Mirrors exactly which cursors
+     * {@link #createCursors} makes, so a record exists per real grabber and no phantom one.
+     */
+    private List<CursorDirection> activeGrabberDirections(Knowledge kn) {
+        var supported = connectors.get(kn.connectorDetails().type()).supportedDirections();
+        boolean backfill = kn.config().backfill() != null && kn.config().backfill().enabled();
+        List<CursorDirection> directions = new ArrayList<>();
+        if (supported.contains(CursorDirection.FORWARD)) {
+            directions.add(CursorDirection.FORWARD);
+        }
+        if (backfill && supported.contains(CursorDirection.BACKWARD)) {
+            directions.add(CursorDirection.BACKWARD);
+        }
+        return directions;
     }
 
     /**
      * Create cursors for every (iterable × supported direction) the source exposes. Idempotent:
      * deterministic cursor ids + {@code insertIfAbsent} mean re-running only adds cursors for
-     * iterables that appeared since last time. Returns the number of newly-created cursors.
+     * iterables that appeared since last time. Returns the newly-created cursors split by direction.
      */
-    private int createCursors(SourceConnector connector, Knowledge kn) {
-        return createCursors(kn, connector.discover(kn));
-    }
-
-    private int createCursors(Knowledge kn, List<SourceIterable> iterables) {
+    private DirCounts createCursors(Knowledge kn, List<SourceIterable> iterables) {
         var supported = connectors.get(kn.connectorDetails().type()).supportedDirections();
         boolean backfill = kn.config().backfill() != null && kn.config().backfill().enabled();
-        int created = 0;
+        int backward = 0;
+        int forward = 0;
         for (SourceIterable iterable : iterables) {
             // Backward (history) only if the source supports it AND backfill is enabled.
             if (backfill && supported.contains(CursorDirection.BACKWARD)
                     && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.BACKWARD))) {
-                created++;
+                backward++;
             }
             // Forward (incremental) whenever the source supports it.
             if (supported.contains(CursorDirection.FORWARD)
                     && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.FORWARD))) {
-                created++;
+                forward++;
             }
         }
-        return created;
+        return new DirCounts(backward, forward);
+    }
+
+    /** Per-direction tallies for the grabber-scoped discovery records. */
+    private record DirCounts(int backward, int forward) {
+        static DirCounts zero() {
+            return new DirCounts(0, 0);
+        }
+
+        int of(CursorDirection direction) {
+            return direction == CursorDirection.BACKWARD ? backward : forward;
+        }
+
+        int total() {
+            return backward + forward;
+        }
     }
 
     private Cursor newCursor(Knowledge kn, SourceIterable iterable, CursorDirection direction) {

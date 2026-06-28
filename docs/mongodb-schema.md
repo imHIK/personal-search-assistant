@@ -83,6 +83,48 @@ Indexes:
 
 ---
 
+## Collection: `discovery`
+One document per `(knowledgeId, direction)` — the observability record for a single **grabber's**
+discovery step (the `connector.discover` call that enumerates the iterables a grabber walks). A
+knowledge runs up to two grabbers — a **backward** (backfill) and a **forward** (incremental) one —
+so it has up to two discovery records. Each is overwritten with the latest outcome on each run, while
+the `runCount`/`failureCount` counters accumulate. This closes a visibility gap: previously only an
+*activation-time* discovery failure was recorded (as `knowledge.status = ERROR`); the recurring
+reconcile discovery (`IterableDiscoveryScheduler` → `reconcileCursors`) left no trace, so there was
+no way to check, per grabber, when discovery last ran, what it found, or why it failed.
+
+```jsonc
+{
+  "_id": "dsc_kn_8f3a...:FORWARD",   // dsc_<knowledgeId>:<DIRECTION>
+  "knowledgeId": "kn_8f3a...",
+  "direction": "FORWARD",             // CursorDirection — BACKWARD | FORWARD (one record per grabber)
+  "lastOutcome": "OK",                // OK | FAILED (DiscoveryOutcome)
+  "lastTrigger": "RECONCILE",         // ACTIVATION | RECONCILE (DiscoveryTrigger)
+  "lastRunAt": "2026-06-28T10:00:00Z",
+  "iterablesFound": 12,               // from the last SUCCESSFUL discover (left intact on failure)
+  "lastCounts": { "created": 2, "revived": 0, "retired": 1 },  // THIS grabber's cursors changed, last OK run
+  "runCount": 37,                     // total discovery runs (success + failure)
+  "failureCount": 1,                  // total failed runs
+  "lastError": null,                  // compact reason when lastOutcome = FAILED, else null
+  "createdAt": "...",
+  "updatedAt": "..."
+}
+```
+
+Indexes: `{ knowledgeId: 1 }`, `{ direction: 1 }`, `{ lastOutcome: 1 }`.
+
+> A record exists for each grabber the knowledge actually runs: a forward grabber whenever the source
+> supports it, and a backward grabber only when the source supports it **and** backfill is enabled.
+> `iterablesFound` is the same across a knowledge's grabbers (one `discover` feeds both), while
+> `lastCounts` is attributed per direction.
+>
+> `record` is an atomic upsert with `$inc` counters, so repeated runs accumulate correctly without a
+> read-modify-write race. A `FAILED` run leaves `iterablesFound`/`lastCounts` untouched, so a failure
+> never clobbers the last known-good snapshot. The records are torn down with their knowledge (the
+> knowledge-delete cascade calls `DiscoveryStatusRepository.deleteByKnowledge`).
+
+---
+
 ## Chunks — NOT a Mongo collection
 
 Chunks are **not stored in Mongo**. They are a derived artifact produced at indexing time

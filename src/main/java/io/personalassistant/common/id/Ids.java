@@ -13,6 +13,7 @@ public final class Ids {
     public static final String KNOWLEDGE_PREFIX = "kn_";
     public static final String CURSOR_PREFIX = "cur_";
     public static final String ENTITY_PREFIX = "ent_";
+    public static final String DISCOVERY_PREFIX = "dsc_";
 
     private Ids() {
     }
@@ -35,6 +36,14 @@ public final class Ids {
      */
     public static String cursorFor(String knowledgeId, String iterableId, String direction) {
         return CURSOR_PREFIX + knowledgeId + ":" + iterableId + ":" + direction;
+    }
+
+    /**
+     * Deterministic discovery-status id for a {@code (knowledgeId, direction)} pair so the same
+     * logical record is upserted (one discovery status per knowledge per grabber direction).
+     */
+    public static String discoveryFor(String knowledgeId, String direction) {
+        return DISCOVERY_PREFIX + knowledgeId + ":" + direction;
     }
 
     /** Derived, stable chunk id so re-indexing the same chunk overwrites rather than dupes. */
