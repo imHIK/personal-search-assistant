@@ -279,6 +279,7 @@ Every query filters on `knowledgeId`, so results are scoped to the sources the u
 
 | Action | Endpoint | Effect |
 |---|---|---|
+| Edit | `PATCH /api/knowledge/{id}` | Update name/schedule (in place) or auth/inputs (re-verify → re-discover → reconcile). See [`knowledge-edit-design.md`](./knowledge-edit-design.md). |
 | Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
 | Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |

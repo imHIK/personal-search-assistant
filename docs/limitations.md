@@ -41,3 +41,31 @@ low-probability, self-recoverable stall (see below). Deferred pending the full l
   but doesn't fully close it.
 - *Version/epoch on knowledge* — tag park writes with the knowledge status version and reject stale
   ones. Most correct, most invasive.
+
+---
+
+## L2 — Edit cleanup is deferred (no purge on shrink)
+
+**Area:** Knowledge editing · reconcile (`knowledge-edit-design.md` Phase 2)
+
+**What:** Editing a knowledge (`PATCH /api/knowledge/{id}`) is shipping in two phases. Phase 1 makes
+*additions* correct — re-verify, re-discover, and re-walk iterables whose membership signature changed
+so newly-matching items get ingested — but performs **no deletion**. Two kinds of now-stale data are
+deliberately left in place:
+
+1. **Parked iterables.** When `discover()` returns fewer iterables after an edit, the missing ones are
+   retired (`RETIRED`) but their chunks/entities are **kept** (park-don't-purge), because the
+   framework can't tell an intentional removal from an accidental scope/account drop.
+2. **Narrowed-out items.** When a filter narrows within an iterable (e.g. drop `docx`), the
+   no-longer-matching entities stay indexed. They are *marked* — `Knowledge.syncGeneration` is bumped
+   and `Entity.lastSeenGeneration` is stamped on every walk — but not removed.
+
+**Impact:** Medium. Stale results remain searchable until cleaned up. Not data loss; purely
+over-inclusion. The marks mean no extra re-walk is needed later to identify what is stale.
+
+**Why we left it:** Deletion on ambiguous shrink is unsafe, and we chose to record the staleness
+signal now and build one deliberate cleanup path rather than scatter ad-hoc deletes.
+
+**Candidate approach (Phase 2):** a single explicit/confirmed purge that (a) sweeps entities with
+`lastSeenGeneration < syncGeneration` after a *completed* re-walk (completion-gated so a partial walk
+can't mass-delete), and (b) removes parked (`RETIRED`) iterables' kept data.
