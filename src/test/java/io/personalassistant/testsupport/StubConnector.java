@@ -10,10 +10,14 @@ import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Scriptable {@link SourceConnector} for ingestion tests: queue pages per direction. */
 public class StubConnector implements SourceConnector {
@@ -25,9 +29,11 @@ public class StubConnector implements SourceConnector {
     private RuntimeException discoverFailure;
     private boolean dynamicIterables;
     private SyncSchedule defaultSchedule = SyncSchedule.NONE;
+    private Set<String> membershipKeys; // null = signature hashes the whole inputs map (default)
 
-    /** Test observability: how many times discover() was called, and the last iterable grabbed. */
+    /** Test observability: how many times discover()/verify() ran, and the last iterable grabbed. */
     public int discoverCalls;
+    public int verifyCalls;
     public String lastGrabIterableId;
     public Map<String, Object> lastGrabAttributes;
 
@@ -75,6 +81,30 @@ public class StubConnector implements SourceConnector {
         return this;
     }
 
+    /**
+     * Restrict {@link #membershipSignature} to only these input keys, so tests can make a
+     * membership-affecting change (touch a listed key) vs. a cosmetic one (touch any other key).
+     */
+    public StubConnector withMembershipKeys(String... keys) {
+        this.membershipKeys = new LinkedHashSet<>(Arrays.asList(keys));
+        return this;
+    }
+
+    @Override
+    public String membershipSignature(Map<String, Object> inputs) {
+        Map<String, Object> src = inputs == null ? Map.of() : inputs;
+        if (membershipKeys == null) {
+            return String.valueOf(src);
+        }
+        Map<String, Object> subset = new LinkedHashMap<>();
+        for (String key : membershipKeys) {
+            if (src.containsKey(key)) {
+                subset.put(key, src.get(key));
+            }
+        }
+        return String.valueOf(subset);
+    }
+
     @Override
     public boolean hasDynamicIterables() {
         return dynamicIterables;
@@ -92,6 +122,7 @@ public class StubConnector implements SourceConnector {
 
     @Override
     public void verify(Knowledge knowledge) {
+        verifyCalls++;
     }
 
     @Override

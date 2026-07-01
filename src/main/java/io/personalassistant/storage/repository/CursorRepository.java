@@ -119,5 +119,17 @@ public interface CursorRepository {
      */
     boolean revive(String cursorId, java.util.Map<String, Object> attributes);
 
+    /**
+     * Rewind a cursor for a membership re-walk: position back to {@link CursorPosition#start()},
+     * status {@code AVAILABLE} (re-arming a backward cursor that had {@code EXHAUSTED} and rewinding
+     * a forward one), retry and lease cleared. Snapshotted {@code attributes} and {@code stats} are
+     * left intact. Skips a cursor a worker is mid-run on ({@code IN_PROGRESS}) so a live lease is not
+     * clobbered. Used by the edit path when the connector's membership signature changed, so the
+     * cursor re-covers its full range under the new rule (change-detection then skips unchanged items).
+     *
+     * @return {@code true} if the cursor was reset
+     */
+    boolean resetToStart(String cursorId);
+
     void deleteByKnowledge(String knowledgeId);
 }

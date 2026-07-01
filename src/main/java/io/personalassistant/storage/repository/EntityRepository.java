@@ -56,6 +56,13 @@ public interface EntityRepository {
     /** Flag entities for re-indexing without re-fetching (e.g. after a config/model bump). */
     void flagNeedsReindex(String id);
 
+    /**
+     * Stamp the generation a walk last saw this entity at — the cheap single-field touch used by the
+     * change-detection skip path so an unchanged, already-{@code INDEXED} entity is still recorded as
+     * "seen this generation" and doesn't later look stale. Idempotent; leaves {@code updatedAt}.
+     */
+    void stampLastSeen(String id, long generation);
+
     /** Tombstone an entity so the indexing stage removes its chunks. */
     void markDeleted(String id, Instant updatedAt);
 

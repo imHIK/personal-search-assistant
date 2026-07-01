@@ -27,6 +27,11 @@ import java.util.Map;
  * @param stats            rollup counters
  * @param createdAt        creation timestamp
  * @param updatedAt        last-modified timestamp
+ * @param syncGeneration   monotonically increasing counter bumped on every membership-affecting
+ *                         edit (see {@code knowledge-edit-design.md}). A walk stamps each entity it
+ *                         sees with the current value ({@code Entity.lastSeenGeneration}); an entity
+ *                         left behind at a lower generation is, by construction, one that no longer
+ *                         matches — the signal the (deferred) Phase 2 purge sweeps on.
  */
 public record Knowledge(
         String id,
@@ -40,7 +45,8 @@ public record Knowledge(
         String lastError,
         Stats stats,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        long syncGeneration) {
 
     /**
      * Return a copy with the given rollup counters. Stats are a <em>derived, reporting-only</em>
@@ -50,13 +56,40 @@ public record Knowledge(
      */
     public Knowledge withStats(Stats newStats) {
         return new Knowledge(id, name, connectorDetails, inputs, config, anchor, nextSyncDueAt, status,
-                lastError, newStats, createdAt, updatedAt);
+                lastError, newStats, createdAt, updatedAt, syncGeneration);
     }
 
     /** Copy with a new forward re-arm due time (used by the scheduler after it arms/defers). */
     public Knowledge withNextSyncDueAt(Instant newDueAt) {
         return new Knowledge(id, name, connectorDetails, inputs, config, anchor, newDueAt, status,
-                lastError, stats, createdAt, updatedAt);
+                lastError, stats, createdAt, updatedAt, syncGeneration);
+    }
+
+    /** Copy with a new lifecycle status (used by the edit path to hold/restore status in place). */
+    public Knowledge withStatus(KnowledgeStatus newStatus) {
+        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, nextSyncDueAt, newStatus,
+                lastError, stats, createdAt, updatedAt, syncGeneration);
+    }
+
+    /**
+     * Copy with the edited user-facing fields (name / auth / inputs / schedule-webhook-backfill
+     * config) applied and {@code updatedAt} bumped. Everything derived or lifecycle-owned (anchor,
+     * status, stats, generation, next-due) is preserved — the edit path adjusts those explicitly.
+     */
+    public Knowledge withEdits(String newName, ConnectorDetails newConnectorDetails,
+                               Map<String, Object> newInputs, Config newConfig, Instant updatedAt) {
+        return new Knowledge(id, newName, newConnectorDetails, newInputs, newConfig, anchor,
+                nextSyncDueAt, status, lastError, stats, createdAt, updatedAt, syncGeneration);
+    }
+
+    /**
+     * Copy with the sync generation bumped by one. Called on every membership-affecting edit so a
+     * subsequent re-walk stamps freshly-seen entities at the new generation, leaving narrowed-out
+     * ones detectably behind.
+     */
+    public Knowledge bumpGeneration() {
+        return new Knowledge(id, name, connectorDetails, inputs, config, anchor, nextSyncDueAt, status,
+                lastError, stats, createdAt, updatedAt, syncGeneration + 1);
     }
 
     /** Which connector + opaque auth blob (never inspected by the core domain). */

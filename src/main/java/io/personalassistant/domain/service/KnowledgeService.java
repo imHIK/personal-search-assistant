@@ -16,6 +16,23 @@ public interface KnowledgeService {
     /** Validate, persist, discover iterables, create cursors, and activate a new knowledge. */
     Knowledge add(NewKnowledge request);
 
+    /**
+     * Apply a partial edit to an existing knowledge, routed by what actually changed
+     * (see {@code knowledge-edit-design.md}). Config-class fields (name / schedule / webhook /
+     * backfill-off) are written in place; provisioning-class fields (auth / inputs / backfill-on)
+     * pause the knowledge, re-verify and re-discover the source, reconcile cursors
+     * (park-don't-purge on shrink), re-walk iterables whose membership signature moved, and restore
+     * status. Works across any lifecycle status.
+     *
+     * @throws java.util.NoSuchElementException if no knowledge with {@code id} exists
+     * @throws IllegalArgumentException          if the patch tries to change the immutable connector
+     *                                           {@code type}
+     * @throws IllegalStateException             if the knowledge is {@code DELETED} (cannot be edited)
+     * @return the updated knowledge (in {@code ERROR} with {@code lastError} set if re-verify/
+     *         re-discover failed, mirroring {@link #add})
+     */
+    Knowledge update(String id, KnowledgePatch patch);
+
     Optional<Knowledge> get(String id);
 
     List<Knowledge> list();

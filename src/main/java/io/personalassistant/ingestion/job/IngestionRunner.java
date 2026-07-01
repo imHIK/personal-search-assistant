@@ -129,10 +129,17 @@ public class IngestionRunner {
             existing.ifPresent(e -> entities.markDeleted(e.id(), Instant.now()));
             return;
         }
-        // Change detection: skip unchanged items that are already up to date.
+        // Change detection: skip unchanged items that are already up to date. The skip must still
+        // touch the generation mark — otherwise a valid, unchanged file that a membership re-walk
+        // re-saw would later look stale (lastSeenGeneration frozen below the knowledge's current
+        // syncGeneration). Only write when it actually differs, so an ordinary poll of an unchanged
+        // knowledge (generations equal) stays a pure no-op.
         if (existing.isPresent() && item.checksum() != null
                 && item.checksum().equals(existing.get().checksum())
                 && existing.get().status() == EntityStatus.INDEXED) {
+            if (existing.get().lastSeenGeneration() != kn.syncGeneration()) {
+                entities.stampLastSeen(existing.get().id(), kn.syncGeneration());
+            }
             return;
         }
 
@@ -146,7 +153,8 @@ public class IngestionRunner {
 
         Entity entity = new Entity(id, kn.id(), cursor.iterableId(), item.entityType(),
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
-                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now); // TODO: check if only first time, ow retry will also be copied
+                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now,
+                kn.syncGeneration()); // stamp the walk generation so re-walked items aren't seen as stale
         entities.upsert(entity);
     }
 

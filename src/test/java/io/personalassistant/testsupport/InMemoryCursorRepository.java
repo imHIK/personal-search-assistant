@@ -170,6 +170,18 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     @Override
+    public boolean resetToStart(String cursorId) {
+        Cursor c = store.get(cursorId);
+        if (c == null || c.status() == CursorStatus.IN_PROGRESS) {
+            return false;
+        }
+        store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.attributes(),
+                c.direction(), CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
+                c.stats(), c.scope()));
+        return true;
+    }
+
+    @Override
     public void deleteByKnowledge(String knowledgeId) {
         store.values().removeIf(c -> c.knowledgeId().equals(knowledgeId));
     }

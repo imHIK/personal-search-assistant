@@ -7,9 +7,12 @@ corrupting already-indexed data.
 Read alongside [`knowledge-lifecycle.md`](./knowledge-lifecycle.md) (the add → ingest → index flow
 this builds on) and [`limitations.md`](./limitations.md) (where the deferred parts are tracked).
 
-> **Status of this document.** This is the agreed design, not yet implemented. It is scoped into a
-> **Phase 1** (build now) and a **Phase 2** (deferred — the unified deletion/purge path). The split
-> is called out in [§7](#7-phasing).
+> **Status of this document.** **Phase 1 is implemented** — the `update` routing, config/provisioning
+> edits, park-don't-purge on shrink, the membership-signature re-walk, the generation marks, and the
+> `PATCH` endpoint (see the [implementation map](#71-phase-1-implementation-map)). **Phase 2** (the
+> unified deletion/purge path) remains deferred and is tracked as
+> [L2 in `limitations.md`](./limitations.md#l2--edit-cleanup-is-deferred-no-purge-on-shrink). The
+> split is called out in [§7](#7-phasing).
 
 ---
 
@@ -210,16 +213,23 @@ Content-Type: application/json
 - Returns the updated `Knowledge` (in `ERROR` with `lastError` set if re-verify/discover failed,
   mirroring `add`).
 
-The DTO maps to a `KnowledgePatch` carrying only the provided fields, so the service can diff
-present-vs-changed precisely (a `null` "not provided" must be distinguishable from an explicit clear;
-the DTO uses optional/boxed fields for this, as the current `KnowledgeDto` already does for
-`scheduleEnabled`/`backfillEnabled`).
+The DTO (`KnowledgePatchDto`) maps to a `KnowledgePatch` carrying only the provided fields, so the
+service can diff present-vs-changed precisely. `KnowledgePatch` models this with `Optional<…>` per
+field (empty = "not provided", present = "set to this"), and the service routes on it.
+
+> **Wire caveat (Phase 1).** At the JSON boundary an *omitted* field and an explicit `null` both
+> deserialize to a `null` Java field, so `KnowledgePatchDto` treats `null` as "not provided /
+> unchanged" (the same boxed-nullable convention `KnowledgeDto` already uses for
+> `scheduleEnabled`/`backfillEnabled`). One consequence: `cron`/`interval` cannot be *cleared back to
+> inherit* through the patch API (a `null` there means "leave it"), only overwritten. The service-layer
+> `KnowledgePatch` can express the clear precisely; exposing it would need a typed-null wire format
+> (e.g. JSON-nullable), which is not built yet.
 
 ---
 
 ## 7. Phasing
 
-**Phase 1 — build now (no deletion):**
+**Phase 1 — implemented (no deletion):**
 - `update(id, patch)` with config/provisioning routing; `type` and `DELETED` guards.
 - Config-class in-place writes + scheduling side-effects.
 - Provisioning-class pause → verify → discover → reconcile → restore status.
@@ -233,7 +243,25 @@ the DTO uses optional/boxed fields for this, as the current `KnowledgeDto` alrea
 - **Purge** of parked (`RETIRED`) iterables' kept data.
 - A single explicit/confirmed deletion path covering both, so destructive cleanup is deliberate.
 
-Tracked as a deferred limitation in [`limitations.md`](./limitations.md).
+Tracked as a deferred limitation in [`limitations.md`](./limitations.md) ([L2](./limitations.md#l2--edit-cleanup-is-deferred-no-purge-on-shrink)).
+
+### 7.1 Phase 1 implementation map
+
+Where each Phase 1 piece lives (all **framework**; the only source-side addition is the connector hook):
+
+| Piece | Code |
+|---|---|
+| `update` routing + config/provisioning split, `type`/`DELETED` guards | `app/DefaultKnowledgeService#update` |
+| Config-class in-place write + scheduling side-effects (clear `nextSyncDueAt`, re-arm on enable) | `DefaultKnowledgeService#applyConfigEdit` |
+| Provisioning pause → verify → discover → reconcile → restore | `DefaultKnowledgeService#reprovision` |
+| Park-don't-purge on shrink | `DefaultKnowledgeService#parkDisappearedIterables` (retire, no `deleteByIterable`) |
+| Membership re-walk (rewind cursors) | `DefaultKnowledgeService#rewalkForMembership` + `CursorRepository#resetToStart` |
+| `membershipSignature` connector hook | `ingestion.connector.SourceConnector#membershipSignature` (default hashes all inputs) |
+| `syncGeneration` on Knowledge, bumped on membership edits | `domain.model.Knowledge#syncGeneration` / `#bumpGeneration` |
+| `lastSeenGeneration` on Entity, stamped on every walk incl. the skip path | `domain.model.Entity#lastSeenGeneration`, `EntityRepository#stampLastSeen`, `IngestionRunner#persistItem` |
+| Patch model + wire DTO + endpoint | `domain.service.KnowledgePatch`, `api.dto.KnowledgePatchDto`, `api.resource.KnowledgeResource#update` (+ `api.resource.PATCH`) |
+
+Tests: `app/DefaultKnowledgeServiceEditTest` (covers every case in [§8](#8-test-plan-phase-1)).
 
 ---
 

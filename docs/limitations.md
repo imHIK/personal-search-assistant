@@ -48,10 +48,11 @@ low-probability, self-recoverable stall (see below). Deferred pending the full l
 
 **Area:** Knowledge editing · reconcile (`knowledge-edit-design.md` Phase 2)
 
-**What:** Editing a knowledge (`PATCH /api/knowledge/{id}`) is shipping in two phases. Phase 1 makes
-*additions* correct — re-verify, re-discover, and re-walk iterables whose membership signature changed
-so newly-matching items get ingested — but performs **no deletion**. Two kinds of now-stale data are
-deliberately left in place:
+**What:** Editing a knowledge (`PATCH /api/knowledge/{id}`) ships in two phases. **Phase 1 is
+implemented** — it makes *additions* correct (re-verify, re-discover, and re-walk iterables whose
+membership signature changed so newly-matching items get ingested) and records the staleness marks,
+but performs **no deletion**. **Phase 2 (this limitation) is deferred.** Two kinds of now-stale data
+are deliberately left in place:
 
 1. **Parked iterables.** When `discover()` returns fewer iterables after an edit, the missing ones are
    retired (`RETIRED`) but their chunks/entities are **kept** (park-don't-purge), because the

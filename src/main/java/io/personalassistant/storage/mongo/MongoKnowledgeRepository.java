@@ -117,6 +117,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                 .append("stats", new Document("entities", k.stats().entities())
                         .append("indexed", k.stats().indexed())
                         .append("failed", k.stats().failed()))
+                .append("syncGeneration", k.syncGeneration())
                 .append("createdAt", BsonSupport.date(k.createdAt()))
                 .append("updatedAt", BsonSupport.date(k.updatedAt()));
     }
@@ -153,7 +154,8 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                         longValue(stats.get("indexed")),
                         longValue(stats.get("failed"))),
                 BsonSupport.instant(d.get("createdAt")),
-                BsonSupport.instant(d.get("updatedAt")));
+                BsonSupport.instant(d.get("updatedAt")),
+                longValue(d.get("syncGeneration")));
     }
 
     private static long longValue(Object o) {

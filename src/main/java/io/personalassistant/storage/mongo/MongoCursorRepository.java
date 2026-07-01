@@ -206,6 +206,19 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
+    public boolean resetToStart(String cursorId) {
+        // Skip a cursor mid-run; its live lease would otherwise be clobbered. Attributes/stats kept.
+        var result = collection().updateOne(
+                and(eq("_id", cursorId), ne("status", CursorStatus.IN_PROGRESS.name())),
+                Updates.combine(
+                        Updates.set("status", CursorStatus.AVAILABLE.name()),
+                        Updates.set("position", new Document()),
+                        Updates.set("retry", new Document("count", 0).append("lastError", null)),
+                        Updates.unset("lease")));
+        return result.getModifiedCount() > 0;
+    }
+
+    @Override
     public void deleteByKnowledge(String knowledgeId) {
         collection().deleteMany(eq("knowledgeId", knowledgeId));
     }

@@ -24,7 +24,7 @@ public class InMemoryEntityRepository implements EntityRepository {
         Entity stored = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
                 entity.status(), entity.needsReindex(), entity.index(), entity.lease(), entity.retry(),
-                createdAt, entity.updatedAt());
+                createdAt, entity.updatedAt(), entity.lastSeenGeneration());
         store.put(id, stored);
         return stored;
     }
@@ -119,6 +119,11 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
+    public void stampLastSeen(String id, long generation) {
+        mutate(id, e -> e.withLastSeenGeneration(generation));
+    }
+
+    @Override
     public void markDeleted(String id, Instant updatedAt) {
         mutate(id, e -> rebuild(e, EntityStatus.DELETED, true, e.index(), e.lease(), e.retry()));
     }
@@ -181,6 +186,6 @@ public class InMemoryEntityRepository implements EntityRepository {
                                   Entity.IndexInfo index, Entity.Lease lease, Entity.Retry retry) {
         return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
                 e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, index, lease,
-                retry, e.createdAt(), Instant.now());
+                retry, e.createdAt(), Instant.now(), e.lastSeenGeneration());
     }
 }

@@ -63,7 +63,7 @@ public class MongoEntityRepository implements EntityRepository {
         Entity toStore = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
                 entity.status(), entity.needsReindex(), entity.index(), entity.lease(), entity.retry(),
-                createdAt, entity.updatedAt());
+                createdAt, entity.updatedAt(), entity.lastSeenGeneration());
         collection().replaceOne(eq("_id", id), toDoc(toStore), new ReplaceOptions().upsert(true));
         return toStore;
     }
@@ -189,6 +189,13 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
+    public void stampLastSeen(String id, long generation) {
+        // Cheap single-field touch on the change-detection skip path — deliberately does NOT bump
+        // updatedAt (this is walk bookkeeping, not a content change).
+        collection().updateOne(eq("_id", id), Updates.set("lastSeenGeneration", generation));
+    }
+
+    @Override
     public void markDeleted(String id, Instant updatedAt) {
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("status", EntityStatus.DELETED.name()),
@@ -258,6 +265,7 @@ public class MongoEntityRepository implements EntityRepository {
                 .append("lease", lease)
                 .append("retry", new Document("count", retry.count())
                         .append("nextAttemptAt", BsonSupport.date(retry.nextAttemptAt())))
+                .append("lastSeenGeneration", e.lastSeenGeneration())
                 .append("createdAt", BsonSupport.date(e.createdAt()))
                 .append("updatedAt", BsonSupport.date(e.updatedAt()));
     }
@@ -288,10 +296,15 @@ public class MongoEntityRepository implements EntityRepository {
                 retry == null ? Entity.Retry.zero() : new Entity.Retry(
                         intValue(retry.get("count")), BsonSupport.instant(retry.get("nextAttemptAt"))),
                 BsonSupport.instant(d.get("createdAt")),
-                BsonSupport.instant(d.get("updatedAt")));
+                BsonSupport.instant(d.get("updatedAt")),
+                longValue(d.get("lastSeenGeneration")));
     }
 
     private static int intValue(Object o) {
         return o instanceof Number n ? n.intValue() : 0;
+    }
+
+    private static long longValue(Object o) {
+        return o instanceof Number n ? n.longValue() : 0L;
     }
 }

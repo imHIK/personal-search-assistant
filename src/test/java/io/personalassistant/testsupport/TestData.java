@@ -24,7 +24,7 @@ public final class TestData {
         return new Knowledge(id, "test-" + id,
                 new Knowledge.ConnectorDetails(type, Map.of()), inputs,
                 Knowledge.Config.defaults(), anchor, null, KnowledgeStatus.ACTIVE, null,
-                Knowledge.Stats.zero(), now, now);
+                Knowledge.Stats.zero(), now, now, 0L);
     }
 
     /** A knowledge whose config carries an explicit custom {@link Knowledge.ScheduleSettings}. */
@@ -36,7 +36,7 @@ public final class TestData {
         return new Knowledge(id, "test-" + id,
                 new Knowledge.ConnectorDetails(type, Map.of()), Map.of(),
                 config, now, null, KnowledgeStatus.ACTIVE, null,
-                Knowledge.Stats.zero(), now, now);
+                Knowledge.Stats.zero(), now, now, 0L);
     }
 
     public static Cursor cursor(String knowledgeId, String iterableId, CursorDirection direction, SourceType type) {
@@ -56,7 +56,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText("body"), Map.of("title", externalId, "uri", "test://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now);
+                Entity.Retry.zero(), now, now, 0L);
     }
 
     public static Entity ingestedText(String id, String knowledgeId, String externalId, String text) {
@@ -64,7 +64,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText(text), Map.of("title", externalId, "uri", "test://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now);
+                Entity.Retry.zero(), now, now, 0L);
     }
 
     public static Entity ingestedFile(String id, String knowledgeId, String externalId, String fileRef, String contentType) {
@@ -73,6 +73,6 @@ public final class TestData {
                 Map.of("contentType", contentType), Entity.Content.ofFile(fileRef),
                 Map.of("title", externalId, "uri", "file://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now);
+                Entity.Retry.zero(), now, now, 0L);
     }
 }

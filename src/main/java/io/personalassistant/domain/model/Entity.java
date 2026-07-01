@@ -30,6 +30,11 @@ import java.util.Map;
  * @param retry        retry bookkeeping for indexing failures
  * @param createdAt    creation timestamp
  * @param updatedAt    last-modified timestamp
+ * @param lastSeenGeneration the owning knowledge's {@code syncGeneration} the last time a walk saw
+ *                     this item. Stamped on every walk — including the change-detection skip path —
+ *                     so that after a membership re-walk for generation {@code G}, any entity still
+ *                     stamped {@code < G} is one the current rule no longer matches (the Phase 2
+ *                     purge signal). See {@code knowledge-edit-design.md}.
  */
 public record Entity(
         String id,
@@ -47,7 +52,8 @@ public record Entity(
         Lease lease,
         Retry retry,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        long lastSeenGeneration) {
 
     /**
      * Where the indexable content lives. {@code text} is populated for text entities at
@@ -99,12 +105,21 @@ public record Entity(
 
     public Entity withStatus(EntityStatus newStatus, Instant updatedAt) {
         return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
-                metadata, checksum, newStatus, needsReindex, index, lease, retry, createdAt, updatedAt);
+                metadata, checksum, newStatus, needsReindex, index, lease, retry, createdAt, updatedAt,
+                lastSeenGeneration);
     }
 
     public Entity withLease(Lease newLease) {
         return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
-                metadata, checksum, status, needsReindex, index, newLease, retry, createdAt, updatedAt);
+                metadata, checksum, status, needsReindex, index, newLease, retry, createdAt, updatedAt,
+                lastSeenGeneration);
+    }
+
+    /** Copy stamped with the generation a walk last saw this entity at (leaves {@code updatedAt}). */
+    public Entity withLastSeenGeneration(long generation) {
+        return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
+                metadata, checksum, status, needsReindex, index, lease, retry, createdAt, updatedAt,
+                generation);
     }
 
     /** Convenience accessor for the display title carried in metadata. */

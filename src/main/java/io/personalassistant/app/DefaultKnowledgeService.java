@@ -11,6 +11,7 @@ import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.DiscoveryTrigger;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
+import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
@@ -29,6 +30,8 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Level;
@@ -80,7 +83,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 null,
                 Knowledge.Stats.zero(),
                 now,
-                now);
+                now,
+                0L); // syncGeneration starts at 0; bumped on each membership-affecting edit
         knowledge.save(draft); // persist as DRAFT first, so any activation failure is recorded against a real record
 
         // Verify + discover + create cursors can all fail (bad credentials, unreachable source,
@@ -101,6 +105,217 @@ public class DefaultKnowledgeService implements KnowledgeService {
             knowledge.markError(draft.id(), Errors.summary(e));
         }
         return knowledge.findById(draft.id()).orElse(draft);
+    }
+
+    /**
+     * Edit an existing knowledge. Loads the stored record, diffs the patch against it, and routes by
+     * <em>what actually changed</em> — because the two kinds of edit have completely different blast
+     * radius. Config-class fields (name / schedule / webhook / backfill-off) are a single in-place
+     * write; provisioning-class fields (auth / inputs / backfill-on) re-verify, re-discover, and
+     * reconcile. See {@code knowledge-edit-design.md}.
+     */
+    @Override
+    public Knowledge update(String id, KnowledgePatch patch) {
+        Knowledge current = knowledge.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("No knowledge with id " + id));
+
+        // Two hard rules, independent of what changed.
+        if (current.status() == KnowledgeStatus.DELETED) {
+            throw new IllegalStateException("A DELETED knowledge cannot be edited");
+        }
+        if (patch.type().isPresent() && patch.type().get() != current.connectorDetails().type()) {
+            throw new IllegalArgumentException(
+                    "connectorDetails.type is immutable; delete and recreate to change connector");
+        }
+
+        // Classify the edit by diffing the patch against the stored record.
+        boolean authChanged = patch.auth().isPresent()
+                && !patch.auth().get().equals(current.connectorDetails().auth());
+        boolean inputsChanged = patch.inputs().isPresent()
+                && !patch.inputs().get().equals(current.inputs());
+        boolean backfillOn = current.config().backfill() != null && current.config().backfill().enabled();
+        boolean backfillTurnedOn = patch.backfillEnabled().orElse(backfillOn) && !backfillOn;
+
+        Knowledge updated = applyPatch(current, patch, Instant.now());
+
+        // auth / inputs / backfill-off→on can change WHAT is fetched and WHICH items belong, so they
+        // run the re-provision pipeline. Everything else is an in-place config write.
+        boolean provisioning = authChanged || inputsChanged || backfillTurnedOn;
+        if (!provisioning) {
+            return applyConfigEdit(current, updated);
+        }
+
+        boolean membershipChanged = inputsChanged && membershipSignatureChanged(current, updated);
+        return reprovision(current, updated, membershipChanged);
+    }
+
+    /** Build the edited record by overlaying only the patch's present fields onto {@code current}. */
+    private Knowledge applyPatch(Knowledge current, KnowledgePatch patch, Instant now) {
+        Map<String, Object> auth = patch.auth().orElse(current.connectorDetails().auth());
+        Knowledge.ConnectorDetails cd =
+                new Knowledge.ConnectorDetails(current.connectorDetails().type(), auth);
+
+        Knowledge.Config cur = current.config();
+        Knowledge.ScheduleSettings schedule = new Knowledge.ScheduleSettings(
+                patch.cron().orElse(cur.scheduleSettings().cron()),
+                patch.interval().orElse(cur.scheduleSettings().interval()),
+                patch.scheduleEnabled().orElse(cur.scheduleSettings().enabled()));
+        Knowledge.WebhookSettings webhook = new Knowledge.WebhookSettings(
+                patch.webhookEnabled().orElse(cur.webhookSettings().enabled()),
+                patch.webhookSecret().orElse(cur.webhookSettings().secret()));
+        Knowledge.Backfill backfill = new Knowledge.Backfill(
+                patch.backfillEnabled().orElse(cur.backfill().enabled()));
+        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill);
+
+        return current.withEdits(patch.name().orElse(current.name()), cd,
+                patch.inputs().orElse(current.inputs()), config, now);
+    }
+
+    /** True when the resolved cadence (custom cron/interval) changed and must be re-resolved. */
+    private static boolean cadenceChanged(Knowledge a, Knowledge b) {
+        Knowledge.ScheduleSettings sa = a.config().scheduleSettings();
+        Knowledge.ScheduleSettings sb = b.config().scheduleSettings();
+        return !Objects.equals(sa.cron(), sb.cron()) || !Objects.equals(sa.interval(), sb.interval());
+    }
+
+    private boolean membershipSignatureChanged(Knowledge current, Knowledge updated) {
+        SourceConnector connector = connectors.get(current.connectorDetails().type());
+        return !Objects.equals(
+                connector.membershipSignature(current.inputs()),
+                connector.membershipSignature(updated.inputs()));
+    }
+
+    /**
+     * Config-class edit: a single in-place write, plus at most a small scheduling side-effect. None
+     * of these change what is fetched or how an item is identified, so no source calls and no cursor
+     * disruption.
+     */
+    private Knowledge applyConfigEdit(Knowledge current, Knowledge updated) {
+        Knowledge toSave = updated;
+        // A cadence change clears nextSyncDueAt (→ null = "due now") so ForwardCursorScheduler
+        // re-resolves the cadence on its next tick instead of waiting out the old due time.
+        if (cadenceChanged(current, updated)) {
+            toSave = toSave.withNextSyncDueAt(null);
+        }
+        knowledge.save(toSave);
+
+        // scheduleEnabled false→true: re-arm forward cursors so sync resumes promptly.
+        if (!current.config().scheduleSettings().enabled()
+                && updated.config().scheduleSettings().enabled()) {
+            triggerSync(current.id());
+        }
+        return get(current.id()).orElse(toSave);
+    }
+
+    /**
+     * Provisioning-class edit: pause → re-verify → re-discover → reconcile → restore status. Reuses
+     * the existing add/reconcile machinery. The anchor stays fixed across the edit, so forward still
+     * means {@code >= anchor} and backward {@code < anchor} — no gap or overlap is introduced.
+     */
+    private Knowledge reprovision(Knowledge current, Knowledge updated, boolean membershipChanged) {
+        String id = current.id();
+        KnowledgeStatus original = current.status();
+
+        // 1. Pause: park claimable cursors and hold the knowledge non-ACTIVE so nothing is leased
+        //    mid-change. Persist the edited config now (mirrors add: the record reflects the attempt;
+        //    a verify failure below then lands it in ERROR without discarding what the user submitted).
+        cursors.suspendByKnowledge(id);
+        Knowledge held = updated.withStatus(KnowledgeStatus.PAUSED);
+        knowledge.save(held);
+
+        try {
+            SourceConnector connector = connectors.get(held.connectorDetails().type());
+            connector.verify(held);                                  // bad creds/inputs → throw → ERROR
+            List<SourceIterable> iterables = discover(held, DiscoveryTrigger.RECONCILE);
+
+            // 3.1 Iterable-level reconcile — but PARK, don't purge, on shrink (design §3.1).
+            DirCounts created = createCursors(held, iterables);
+            DirCounts revived = reviveReappearedIterables(held, iterables);
+            DirCounts parked = parkDisappearedIterables(held, iterables);
+
+            // 3.2 Within-iterable membership re-walk when the signature moved (design §3.2). Bump the
+            //     generation and persist it BEFORE resetting cursors, so the async re-walk stamps
+            //     freshly-seen entities at the new value and narrowed-out ones are left behind.
+            Knowledge effective = held;
+            if (membershipChanged) {
+                effective = held.bumpGeneration().withStatus(KnowledgeStatus.PAUSED);
+                knowledge.save(effective);
+                rewalkForMembership(effective, iterables);
+            }
+
+            recordDiscovery(effective, DiscoveryTrigger.RECONCILE, iterables.size(),
+                    created, revived, parked);
+
+            // 5. Restore status. A knowledge that was PAUSED stays parked — its freshly created/
+            //    revived/re-walked cursors are parked too so the ingestion loop won't pick them up.
+            //    Anything else ends ACTIVE with its cursors re-armed.
+            if (original == KnowledgeStatus.PAUSED) {
+                cursors.suspendByKnowledge(id);
+            } else {
+                knowledge.updateStatus(id, KnowledgeStatus.ACTIVE);
+                cursors.resumeByKnowledge(id);
+            }
+            LOG.info("Re-provisioned knowledge " + id + " (+" + created.total() + " new, "
+                    + revived.total() + " revived, " + parked.total() + " parked"
+                    + (membershipChanged ? ", membership re-walk" : "") + ")");
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Re-provision failed for knowledge " + id + "; marking ERROR", e);
+            knowledge.markError(id, Errors.summary(e));
+        }
+        return get(id).orElse(updated);
+    }
+
+    /**
+     * Park (retire) the cursors of iterables that {@code discover} no longer returns — but, unlike
+     * the dynamic-discovery reconcile, WITHOUT purging their chunks/entities. On an edit the framework
+     * can't tell an intentional narrowing from an accidental scope/account drop, so the data is kept
+     * and stays searchable; the deferred Phase 2 purge removes it deliberately. Using {@code RETIRED}
+     * (not {@code SUSPENDED}) keeps them out of the end-of-flow resume and lets the existing revive
+     * path bring them back automatically if the iterable returns.
+     */
+    private DirCounts parkDisappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
+        Set<String> liveIds = new HashSet<>();
+        iterables.forEach(it -> liveIds.add(it.iterableId()));
+        int backward = 0;
+        int forward = 0;
+        for (Cursor c : cursors.findByKnowledge(kn.id())) {
+            if (!liveIds.contains(c.iterableId())
+                    && c.status() != CursorStatus.RETIRED && c.status() != CursorStatus.IN_PROGRESS
+                    && cursors.retire(c.id())) {
+                if (c.direction() == CursorDirection.BACKWARD) {
+                    backward++;
+                } else {
+                    forward++;
+                }
+            }
+        }
+        return new DirCounts(backward, forward);
+    }
+
+    /**
+     * Re-walk every live iterable after a membership-signature change: rewind both its cursors to the
+     * start so the async ingestion loop re-covers the full range under the new rule — backward
+     * re-covers {@code < anchor}, forward re-covers {@code [anchor, now]}. Change-detection makes this
+     * cheap: every unchanged, already-{@code INDEXED} item is skipped (no re-embed) and only its
+     * generation mark is touched.
+     *
+     * <p>Backfill caveat (design §3.2): reaching historical adds below the anchor needs a backward
+     * cursor. When backfill is off there is none, so this is a forward-only re-walk that still catches
+     * adds in {@code [anchor, now]}; temporarily creating a backward cursor for the walk is deferred.
+     */
+    private void rewalkForMembership(Knowledge kn, List<SourceIterable> iterables) {
+        Set<String> liveIds = new HashSet<>();
+        iterables.forEach(it -> liveIds.add(it.iterableId()));
+        int reset = 0;
+        for (Cursor c : cursors.findByKnowledge(kn.id())) {
+            if (liveIds.contains(c.iterableId()) && cursors.resetToStart(c.id())) {
+                reset++;
+            }
+        }
+        if (reset > 0) {
+            LOG.info("Membership re-walk for knowledge " + kn.id() + ": reset " + reset
+                    + " cursor(s) to start");
+        }
     }
 
     @Override

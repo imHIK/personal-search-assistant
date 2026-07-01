@@ -59,6 +59,25 @@ public interface SourceConnector {
         return SyncSchedule.NONE;
     }
 
+    /**
+     * A stable signature over <em>only</em> the {@code inputs} dimensions that change which items
+     * belong to an iterable (e.g. {@code fileTypes}, {@code query}, {@code globs}) — never the
+     * cosmetic ones (a display label). The edit path compares this before vs. after a change: when
+     * it differs, the membership boundary has moved <em>inside</em> the existing iterables, so the
+     * framework re-walks them (reset cursors, re-arm backward) to pick up newly-matching items and
+     * bumps the knowledge's {@code syncGeneration} to mark the narrowed-out ones.
+     *
+     * <p>Iterable-level appearance/disappearance is handled separately by discovery reconcile; this
+     * hook exists purely for the within-iterable case that a discover-diff cannot see.
+     *
+     * <p>The default hashes the entire {@code inputs} map: always correct, just coarser — a cosmetic
+     * edit will trigger a needless (but harmless, change-detection-skipped) re-walk. A connector that
+     * has cosmetic inputs should override this to exclude them.
+     */
+    default String membershipSignature(java.util.Map<String, Object> inputs) {
+        return String.valueOf(inputs == null ? java.util.Map.of() : inputs);
+    }
+
     /** Validate connectivity/credentials/inputs for a configured knowledge. */
     void verify(Knowledge knowledge);
 

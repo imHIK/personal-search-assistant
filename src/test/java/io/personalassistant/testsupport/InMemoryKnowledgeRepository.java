@@ -41,7 +41,8 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), k.nextSyncDueAt(), status, k.lastError(), k.stats(), k.createdAt(), Instant.now()));
+                    k.anchor(), k.nextSyncDueAt(), status, k.lastError(), k.stats(), k.createdAt(), Instant.now(),
+                    k.syncGeneration()));
         }
     }
 
@@ -50,7 +51,8 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
         Knowledge k = store.get(id);
         if (k != null) {
             store.put(id, new Knowledge(k.id(), k.name(), k.connectorDetails(), k.inputs(), k.config(),
-                    k.anchor(), k.nextSyncDueAt(), KnowledgeStatus.ERROR, lastError, k.stats(), k.createdAt(), Instant.now()));
+                    k.anchor(), k.nextSyncDueAt(), KnowledgeStatus.ERROR, lastError, k.stats(), k.createdAt(), Instant.now(),
+                    k.syncGeneration()));
         }
     }
 
