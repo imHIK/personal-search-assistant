@@ -157,12 +157,12 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
         Knowledge.Config cur = current.config();
         Knowledge.ScheduleSettings schedule = new Knowledge.ScheduleSettings(
-                patch.cron().orElse(cur.scheduleSettings().cron()),
-                patch.interval().orElse(cur.scheduleSettings().interval()),
-                patch.scheduleEnabled().orElse(cur.scheduleSettings().enabled()));
+                patch.schedule().cron().orElse(cur.scheduleSettings().cron()),
+                patch.schedule().interval().orElse(cur.scheduleSettings().interval()),
+                patch.schedule().enabled().orElse(cur.scheduleSettings().enabled()));
         Knowledge.WebhookSettings webhook = new Knowledge.WebhookSettings(
-                patch.webhookEnabled().orElse(cur.webhookSettings().enabled()),
-                patch.webhookSecret().orElse(cur.webhookSettings().secret()));
+                patch.webhook().enabled().orElse(cur.webhookSettings().enabled()),
+                patch.webhook().secret().orElse(cur.webhookSettings().secret()));
         Knowledge.Backfill backfill = new Knowledge.Backfill(
                 patch.backfillEnabled().orElse(cur.backfill().enabled()));
         Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill);

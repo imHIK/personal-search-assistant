@@ -214,8 +214,13 @@ Content-Type: application/json
   mirroring `add`).
 
 The DTO (`KnowledgePatchDto`) maps to a `KnowledgePatch` carrying only the provided fields, so the
-service can diff present-vs-changed precisely. `KnowledgePatch` models this with `Optional<…>` per
-field (empty = "not provided", present = "set to this"), and the service routes on it.
+service can diff present-vs-changed precisely. `KnowledgePatch` mirrors `Knowledge`'s shape where that
+shape is real — the cohesive config groups get `SchedulePatch` / `WebhookPatch` sub-patches — but the
+`Optional<…>` optionality sits on the **leaves inside** each sub-patch (empty = "not provided",
+present = "set to this"), never on the group. That leaf granularity is deliberate: a group-level
+`Optional<ScheduleSettings>` could not express "flip just `enabled`" without a whole-group replace,
+whereas the routing needs exactly that (e.g. `scheduleEnabled` false→true, `backfill` false→true). The
+`Builder` exposes flat setters that fold into the sub-patches, so call sites stay ergonomic.
 
 > **Wire caveat (Phase 1).** At the JSON boundary an *omitted* field and an explicit `null` both
 > deserialize to a `null` Java field, so `KnowledgePatchDto` treats `null` as "not provided /

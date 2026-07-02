@@ -45,16 +45,16 @@ public class IngestionRunner {
     private final CursorRepository cursors;
 
     @ConfigProperty(name = "app.ingestion.batches-per-lease", defaultValue = "50")
-    int batchesPerLease;
+    public int batchesPerLease;
 
     @ConfigProperty(name = "app.ingestion.max-items-per-batch", defaultValue = "100")
-    int maxItemsPerBatch;
+    public int maxItemsPerBatch;
 
     @ConfigProperty(name = "app.ingestion.lease-seconds", defaultValue = "900")
-    long leaseSeconds;
+    public long leaseSeconds;
 
     @ConfigProperty(name = "app.ingestion.retry-limit", defaultValue = "5")
-    int retryLimit;
+    public int retryLimit;
 
     @Inject
     public IngestionRunner(ConnectorRegistry connectors, EntityRepository entities,

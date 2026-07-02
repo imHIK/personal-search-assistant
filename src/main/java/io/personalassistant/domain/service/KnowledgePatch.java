@@ -1,48 +1,80 @@
 package io.personalassistant.domain.service;
 
+import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * A partial edit to an existing {@link io.personalassistant.domain.model.Knowledge}. Every field is
- * an {@link Optional}: {@code empty} means "not part of this edit — leave untouched", {@code present}
- * means "set to this value". This present-vs-absent distinction is what lets
- * {@code KnowledgeService.update} diff precisely and route by <em>what actually changed</em> (see
- * {@code knowledge-edit-design.md}): config-class fields ({@code name}, schedule, webhook, backfill
- * off) are applied in place, while provisioning-class fields ({@code auth}, {@code inputs}, backfill
- * on) trigger re-verify → re-discover → reconcile.
+ * A partial edit to an existing {@link Knowledge}. Every value is an {@link Optional}: {@code empty}
+ * means "not part of this edit — leave untouched", {@code present} means "set to this value". That
+ * present-vs-absent distinction is what lets {@code KnowledgeService.update} diff precisely and route
+ * by <em>what actually changed</em> (see {@code knowledge-edit-design.md}).
  *
- * <p>{@code type} is included only so an attempt to change it can be rejected — the connector type is
- * immutable.
+ * <p><b>Shape.</b> The patch mirrors {@link Knowledge}'s structure where that structure is real — the
+ * cohesive, multi-field config groups {@link Knowledge.ScheduleSettings} and
+ * {@link Knowledge.WebhookSettings} get their own {@link SchedulePatch} / {@link WebhookPatch}
+ * sub-patches — but stays flat for single fields. Crucially the optionality lives on the <em>leaves</em>
+ * inside each sub-patch (the sub-patch itself is always present), not on the group: that is what lets a
+ * caller flip just {@code scheduleEnabled} without having to resend {@code cron}/{@code interval}. A
+ * group-level {@code Optional<ScheduleSettings>} could not express that — it would force a
+ * whole-group replace.
+ *
+ * <p>{@code type} is included only so an attempt to change it can be <em>rejected</em> — the connector
+ * type is immutable — so it sits flat rather than grouped with the (freely editable) {@code auth}.
+ *
+ * <p>The {@link Builder} keeps flat setters ({@code cron}, {@code scheduleEnabled}, …) for ergonomic
+ * call sites; it folds them into the sub-patches at {@link Builder#build()}.
  */
 public record KnowledgePatch(
+        // identity
         Optional<String> name,
+        // connector — type is immutable (carried only to reject a change); auth is freely editable
         Optional<SourceType> type,
         Optional<Map<String, Object>> auth,
+        // what to index
         Optional<Map<String, Object>> inputs,
-        Optional<String> cron,
-        Optional<String> interval,
-        Optional<Boolean> scheduleEnabled,
-        Optional<Boolean> backfillEnabled,
-        Optional<Boolean> webhookEnabled,
-        Optional<String> webhookSecret) {
+        // operational config — mirrors Knowledge.Config (schedule, webhook, backfill)
+        SchedulePatch schedule,
+        WebhookPatch webhook,
+        Optional<Boolean> backfillEnabled) {
 
-    /** Normalize any {@code null} field to {@link Optional#empty()} so callers can pass either. */
+    /** Normalize any {@code null} to its empty form so callers can pass either. */
     public KnowledgePatch {
         name = orEmpty(name);
         type = orEmpty(type);
         auth = orEmpty(auth);
         inputs = orEmpty(inputs);
-        cron = orEmpty(cron);
-        interval = orEmpty(interval);
-        scheduleEnabled = orEmpty(scheduleEnabled);
+        schedule = schedule == null ? SchedulePatch.empty() : schedule;
+        webhook = webhook == null ? WebhookPatch.empty() : webhook;
         backfillEnabled = orEmpty(backfillEnabled);
-        webhookEnabled = orEmpty(webhookEnabled);
-        webhookSecret = orEmpty(webhookSecret);
     }
 
-    @SuppressWarnings("unchecked")
+    /** Leaf-optional patch over {@link Knowledge.ScheduleSettings}. */
+    public record SchedulePatch(Optional<String> cron, Optional<String> interval, Optional<Boolean> enabled) {
+        public SchedulePatch {
+            cron = orEmpty(cron);
+            interval = orEmpty(interval);
+            enabled = orEmpty(enabled);
+        }
+
+        public static SchedulePatch empty() {
+            return new SchedulePatch(Optional.empty(), Optional.empty(), Optional.empty());
+        }
+    }
+
+    /** Leaf-optional patch over {@link Knowledge.WebhookSettings}. */
+    public record WebhookPatch(Optional<Boolean> enabled, Optional<String> secret) {
+        public WebhookPatch {
+            enabled = orEmpty(enabled);
+            secret = orEmpty(secret);
+        }
+
+        public static WebhookPatch empty() {
+            return new WebhookPatch(Optional.empty(), Optional.empty());
+        }
+    }
+
     private static <T> Optional<T> orEmpty(Optional<T> value) {
         return value == null ? Optional.empty() : value;
     }
@@ -52,9 +84,9 @@ public record KnowledgePatch(
     }
 
     /**
-     * Fluent builder taking plain (nullable) values — a {@code null} argument leaves that field
-     * absent from the patch. Keeps call sites (DTO mapping, tests) readable without wrapping every
-     * argument in {@link Optional}.
+     * Fluent builder with flat setters taking plain (nullable) values — a {@code null} argument leaves
+     * that field absent. Keeps call sites (DTO mapping, tests) readable without wrapping every argument
+     * in {@link Optional} or reaching into the sub-patches.
      */
     public static final class Builder {
         private Optional<String> name = Optional.empty();
@@ -64,9 +96,9 @@ public record KnowledgePatch(
         private Optional<String> cron = Optional.empty();
         private Optional<String> interval = Optional.empty();
         private Optional<Boolean> scheduleEnabled = Optional.empty();
-        private Optional<Boolean> backfillEnabled = Optional.empty();
         private Optional<Boolean> webhookEnabled = Optional.empty();
         private Optional<String> webhookSecret = Optional.empty();
+        private Optional<Boolean> backfillEnabled = Optional.empty();
 
         public Builder name(String v) {
             this.name = Optional.ofNullable(v);
@@ -103,11 +135,6 @@ public record KnowledgePatch(
             return this;
         }
 
-        public Builder backfillEnabled(Boolean v) {
-            this.backfillEnabled = Optional.ofNullable(v);
-            return this;
-        }
-
         public Builder webhookEnabled(Boolean v) {
             this.webhookEnabled = Optional.ofNullable(v);
             return this;
@@ -118,9 +145,16 @@ public record KnowledgePatch(
             return this;
         }
 
+        public Builder backfillEnabled(Boolean v) {
+            this.backfillEnabled = Optional.ofNullable(v);
+            return this;
+        }
+
         public KnowledgePatch build() {
-            return new KnowledgePatch(name, type, auth, inputs, cron, interval,
-                    scheduleEnabled, backfillEnabled, webhookEnabled, webhookSecret);
+            return new KnowledgePatch(name, type, auth, inputs,
+                    new SchedulePatch(cron, interval, scheduleEnabled),
+                    new WebhookPatch(webhookEnabled, webhookSecret),
+                    backfillEnabled);
         }
     }
 }
