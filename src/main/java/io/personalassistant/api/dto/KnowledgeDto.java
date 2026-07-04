@@ -11,7 +11,9 @@ import java.util.Map;
  *
  * @param name            human-friendly label
  * @param type            connector type name (e.g. {@code LOCAL_FS})
- * @param auth            opaque connector credentials
+ * @param connectionId    id of the {@code Connection} to authenticate through, or null to use the
+ *                        type's default connection (ignored by no-auth connectors like LOCAL_FS)
+ * @param auth            inline connector credentials fallback (normally omitted when using a connection)
  * @param inputs          what to index (e.g. {@code {"rootPath": "/home/me/Documents"}})
  * @param cron            custom forward-sync cron, or null to inherit (connector then global default)
  * @param interval        custom forward-sync interval (e.g. {@code "15m"}, {@code "1d"}), or null to
@@ -22,6 +24,7 @@ import java.util.Map;
 public record KnowledgeDto(
         String name,
         String type,
+        String connectionId,
         Map<String, Object> auth,
         Map<String, Object> inputs,
         String cron,
@@ -40,6 +43,6 @@ public record KnowledgeDto(
                         scheduleEnabled != null ? scheduleEnabled : defaults.scheduleSettings().enabled()),
                 defaults.webhookSettings(),
                 new Knowledge.Backfill(backfillEnabled != null ? backfillEnabled : defaults.backfill().enabled()));
-        return new KnowledgeService.NewKnowledge(name, SourceType.valueOf(type), auth, inputs, config);
+        return new KnowledgeService.NewKnowledge(name, SourceType.valueOf(type), connectionId, auth, inputs, config);
     }
 }

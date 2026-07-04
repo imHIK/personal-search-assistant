@@ -2,6 +2,7 @@ package io.personalassistant.app;
 
 import io.personalassistant.common.Errors;
 import io.personalassistant.common.id.Ids;
+import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.DiscoveryStatus;
@@ -13,6 +14,7 @@ import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
+import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
@@ -52,19 +54,35 @@ public class DefaultKnowledgeService implements KnowledgeService {
     private final CursorRepository cursors;
     private final EntityRepository entities;
     private final ConnectorRegistry connectors;
+    private final ConnectionResolver connections;
     private final SearchIndex index;
     private final DiscoveryStatusRepository discoveryStatus;
 
     @Inject
     public DefaultKnowledgeService(KnowledgeRepository knowledge, CursorRepository cursors,
                                    EntityRepository entities, ConnectorRegistry connectors,
-                                   SearchIndex index, DiscoveryStatusRepository discoveryStatus) {
+                                   ConnectionResolver connections, SearchIndex index,
+                                   DiscoveryStatusRepository discoveryStatus) {
         this.knowledge = knowledge;
         this.cursors = cursors;
         this.entities = entities;
         this.connectors = connectors;
+        this.connections = connections;
         this.index = index;
         this.discoveryStatus = discoveryStatus;
+    }
+
+    /**
+     * For connectors that authenticate through a {@link Connection}, resolve the bound (or default)
+     * connection and verify its credentials before touching the source. Throws (→ knowledge parked in
+     * {@code ERROR}) when no connection resolves or the credentials are rejected. A no-op for no-auth
+     * connectors like {@code LOCAL_FS}.
+     */
+    private void verifyConnectionIfRequired(SourceConnector connector, Knowledge kn) {
+        if (connector.requiresConnection()) {
+            Connection connection = connections.resolve(kn); // missing/unknown connection → throws
+            connector.verifyConnection(connection);          // bad credentials → throws
+        }
     }
 
     @Override
@@ -74,7 +92,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
         Knowledge draft = new Knowledge(
                 Ids.knowledge(),
                 request.name(),
-                new Knowledge.ConnectorDetails(request.type(), request.auth() == null ? java.util.Map.of() : request.auth()),
+                new Knowledge.ConnectorDetails(request.type(), request.connectionId(),
+                        request.auth() == null ? java.util.Map.of() : request.auth()),
                 request.inputs() == null ? java.util.Map.of() : request.inputs(),
                 config,
                 now,
@@ -92,7 +111,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
         // than throwing it away — the user can see why it failed and retry.
         try {
             SourceConnector connector = connectors.get(request.type());
-            connector.verify(draft);                                  // throws on bad credentials/inputs
+            verifyConnectionIfRequired(connector, draft);            // resolve + verify the connection
+            connector.verify(draft);                                  // throws on bad inputs
             List<SourceIterable> iterables = discover(draft, DiscoveryTrigger.ACTIVATION); // throws if not enumerable
             DirCounts created = createCursors(draft, iterables);
             recordDiscovery(draft, DiscoveryTrigger.ACTIVATION, iterables.size(),
@@ -152,8 +172,10 @@ public class DefaultKnowledgeService implements KnowledgeService {
     /** Build the edited record by overlaying only the patch's present fields onto {@code current}. */
     private Knowledge applyPatch(Knowledge current, KnowledgePatch patch, Instant now) {
         Map<String, Object> auth = patch.auth().orElse(current.connectorDetails().auth());
-        Knowledge.ConnectorDetails cd =
-                new Knowledge.ConnectorDetails(current.connectorDetails().type(), auth);
+        Knowledge.ConnectorDetails cd = new Knowledge.ConnectorDetails(
+                current.connectorDetails().type(),
+                current.connectorDetails().connectionId(), // connection binding is stable across edits
+                auth);
 
         Knowledge.Config cur = current.config();
         Knowledge.ScheduleSettings schedule = new Knowledge.ScheduleSettings(
@@ -225,7 +247,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
         try {
             SourceConnector connector = connectors.get(held.connectorDetails().type());
-            connector.verify(held);                                  // bad creds/inputs → throw → ERROR
+            verifyConnectionIfRequired(connector, held);             // resolve + verify the connection
+            connector.verify(held);                                  // bad inputs → throw → ERROR
             List<SourceIterable> iterables = discover(held, DiscoveryTrigger.RECONCILE);
 
             // 3.1 Iterable-level reconcile — but PARK, don't purge, on shrink (design §3.1).

@@ -39,6 +39,16 @@ dependencies {
     implementation 'org.apache.tika:tika-core:2.9.2'
     implementation 'org.apache.tika:tika-parsers-standard-package:2.9.2'
 
+    // DJL — local, in-JVM embeddings via ONNX Runtime (OnnxEmbeddingProvider). The BOM aligns
+    // the api / tokenizers / engine versions. tokenizers brings the HuggingFace tokenizer plus the
+    // TextEmbeddingTranslatorFactory (tokenize → model → mean-pool → L2-normalize). onnxruntime-engine
+    // is the runtime that actually executes the sentence-transformer .onnx graph; it is only needed at
+    // run time, so it is a runtimeOnly dependency. Only exercised when app.embedding.provider=onnx-bge.
+    implementation platform('ai.djl:bom:0.28.0')
+    implementation 'ai.djl:api'
+    implementation 'ai.djl.huggingface:tokenizers'
+    runtimeOnly 'ai.djl.onnxruntime:onnxruntime-engine'
+
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.rest-assured:rest-assured'
 }

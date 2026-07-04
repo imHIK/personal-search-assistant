@@ -1,5 +1,6 @@
 package io.personalassistant.testsupport;
 
+import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -30,10 +31,13 @@ public class StubConnector implements SourceConnector {
     private boolean dynamicIterables;
     private SyncSchedule defaultSchedule = SyncSchedule.NONE;
     private Set<String> membershipKeys; // null = signature hashes the whole inputs map (default)
+    private boolean requiresConnection;
+    private RuntimeException verifyConnectionFailure;
 
-    /** Test observability: how many times discover()/verify() ran, and the last iterable grabbed. */
+    /** Test observability: how many times discover()/verify()/verifyConnection() ran, and the last iterable grabbed. */
     public int discoverCalls;
     public int verifyCalls;
+    public int verifyConnectionCalls;
     public String lastGrabIterableId;
     public Map<String, Object> lastGrabAttributes;
 
@@ -72,6 +76,18 @@ public class StubConnector implements SourceConnector {
 
     public StubConnector withDynamicIterables(boolean dynamic) {
         this.dynamicIterables = dynamic;
+        return this;
+    }
+
+    /** Make this stub behave like a credentialed connector (needs a Connection). */
+    public StubConnector withRequiresConnection(boolean requires) {
+        this.requiresConnection = requires;
+        return this;
+    }
+
+    /** Make {@link #verifyConnection} throw, to exercise create/verify failure handling. */
+    public StubConnector failVerifyConnectionWith(RuntimeException failure) {
+        this.verifyConnectionFailure = failure;
         return this;
     }
 
@@ -118,6 +134,19 @@ public class StubConnector implements SourceConnector {
     @Override
     public SourceType type() {
         return type;
+    }
+
+    @Override
+    public boolean requiresConnection() {
+        return requiresConnection;
+    }
+
+    @Override
+    public void verifyConnection(Connection connection) {
+        verifyConnectionCalls++;
+        if (verifyConnectionFailure != null) {
+            throw verifyConnectionFailure;
+        }
     }
 
     @Override

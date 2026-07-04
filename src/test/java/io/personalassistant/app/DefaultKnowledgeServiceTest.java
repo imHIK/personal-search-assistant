@@ -51,13 +51,15 @@ class DefaultKnowledgeServiceTest {
         connector = new StubConnector(SourceType.SLACK,
                 List.of(new SourceIterable("chan_a", "A", Map.of())))
                 .withDynamicIterables(true);
+        // SLACK stub needs no connection, so a trivial resolver suffices here.
+        io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         service = new DefaultKnowledgeService(knowledge, cursors,
-                entities, new SingleConnectorRegistry(connector), index, discovery);
+                entities, new SingleConnectorRegistry(connector), connections, index, discovery);
     }
 
     private Knowledge addKnowledge() {
         return service.add(new KnowledgeService.NewKnowledge(
-                "team slack", SourceType.SLACK, Map.of(), Map.of(), null));
+                "team slack", SourceType.SLACK, null, Map.of(), Map.of(), null));
     }
 
     @Test

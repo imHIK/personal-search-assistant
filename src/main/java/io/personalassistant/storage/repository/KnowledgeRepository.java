@@ -18,6 +18,12 @@ public interface KnowledgeRepository {
     /** Used by the scheduler to find knowledge eligible for forward re-arming. */
     List<Knowledge> findByStatus(KnowledgeStatus status);
 
+    /**
+     * Knowledges bound to a given connection. Used to enforce referential integrity when a
+     * connection is deleted (block or reassign) — see {@code ConnectionService.delete}.
+     */
+    List<Knowledge> findByConnectionId(String connectionId);
+
     void updateStatus(String id, KnowledgeStatus status);
 
     /**

@@ -92,8 +92,28 @@ public record Knowledge(
                 lastError, stats, createdAt, updatedAt, syncGeneration + 1);
     }
 
-    /** Which connector + opaque auth blob (never inspected by the core domain). */
-    public record ConnectorDetails(SourceType type, Map<String, Object> auth) {}
+    /**
+     * Which connector this knowledge uses, plus how it authenticates. Credentials normally live in a
+     * reusable {@link Connection} referenced by {@link #connectionId} (null → the default connection
+     * for {@link #type}); the inline {@link #auth} blob is a legacy/no-connection fallback the core
+     * still tolerates but the connection path supersedes. Neither {@code connectionId} nor {@code auth}
+     * is interpreted by the core domain.
+     *
+     * @param type         the connector family
+     * @param connectionId the bound {@link Connection}, or null to resolve the type's default
+     * @param auth         inline credentials fallback (empty when a connection is used)
+     */
+    public record ConnectorDetails(SourceType type, String connectionId, Map<String, Object> auth) {
+
+        public ConnectorDetails {
+            auth = auth == null ? Map.of() : auth;
+        }
+
+        /** Convenience for the no-connection / inline-auth case (connectionId = null). */
+        public static ConnectorDetails of(SourceType type, Map<String, Object> auth) {
+            return new ConnectorDetails(type, null, auth);
+        }
+    }
 
     /** Operational configuration controlling how the knowledge is kept in sync. */
     public record Config(

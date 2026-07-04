@@ -15,6 +15,11 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
     }
 
     @Override
+    public String providerId() {
+        return "fake";
+    }
+
+    @Override
     public String model() {
         return "fake-" + dim;
     }

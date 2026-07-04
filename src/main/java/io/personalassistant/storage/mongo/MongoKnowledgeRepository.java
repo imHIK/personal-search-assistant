@@ -67,6 +67,13 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public List<Knowledge> findByConnectionId(String connectionId) {
+        List<Knowledge> out = new ArrayList<>();
+        collection().find(eq("connectorDetails.connectionId", connectionId)).forEach(d -> out.add(fromDoc(d)));
+        return out;
+    }
+
+    @Override
     public void updateStatus(String id, KnowledgeStatus status) {
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("status", status.name()),
@@ -101,6 +108,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         return new Document("_id", k.id())
                 .append("name", k.name())
                 .append("connectorDetails", new Document("type", BsonSupport.enumName(cd.type()))
+                        .append("connectionId", cd.connectionId())
                         .append("auth", BsonSupport.toBsonMap(cd.auth())))
                 .append("inputs", BsonSupport.toBsonMap(k.inputs()))
                 .append("config", new Document()
@@ -134,6 +142,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                 d.getString("name"),
                 new Knowledge.ConnectorDetails(
                         BsonSupport.enumOf(SourceType.class, cd == null ? null : cd.get("type")),
+                        cd == null ? null : cd.getString("connectionId"),
                         cd == null ? java.util.Map.of() : BsonSupport.toPlainMap(cd.get("auth"))),
                 BsonSupport.toPlainMap(d.get("inputs")),
                 new Knowledge.Config(

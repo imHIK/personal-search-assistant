@@ -59,12 +59,14 @@ public interface KnowledgeService {
     /**
      * The inputs needed to register a knowledge.
      *
-     * @param name   human-friendly label
-     * @param type   connector type
-     * @param auth   opaque credentials for the connector
-     * @param inputs what to index (e.g. {@code rootPath} for LOCAL_FS)
-     * @param config schedule/webhook/backfill settings, or null for defaults
+     * @param name         human-friendly label
+     * @param type         connector type
+     * @param connectionId the {@link io.personalassistant.domain.model.Connection} to authenticate
+     *                     through, or null to use the type's default (ignored by no-auth connectors)
+     * @param auth         inline credentials fallback (normally empty when a connection is used)
+     * @param inputs       what to index (e.g. {@code rootPath} for LOCAL_FS)
+     * @param config       schedule/webhook/backfill settings, or null for defaults
      */
-    record NewKnowledge(String name, SourceType type, Map<String, Object> auth,
+    record NewKnowledge(String name, SourceType type, String connectionId, Map<String, Object> auth,
                         Map<String, Object> inputs, Knowledge.Config config) {}
 }

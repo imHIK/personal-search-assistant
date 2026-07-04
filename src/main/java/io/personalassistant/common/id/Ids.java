@@ -11,6 +11,7 @@ import java.util.UUID;
 public final class Ids {
 
     public static final String KNOWLEDGE_PREFIX = "kn_";
+    public static final String CONNECTION_PREFIX = "conn_";
     public static final String CURSOR_PREFIX = "cur_";
     public static final String ENTITY_PREFIX = "ent_";
     public static final String DISCOVERY_PREFIX = "dsc_";
@@ -20,6 +21,10 @@ public final class Ids {
 
     public static String knowledge() {
         return KNOWLEDGE_PREFIX + token();
+    }
+
+    public static String connection() {
+        return CONNECTION_PREFIX + token();
     }
 
     public static String cursor() {

@@ -39,6 +39,13 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.ascending("status"));
         db.getCollection(MongoKnowledgeRepository.COLLECTION)
                 .createIndex(Indexes.ascending("connectorDetails.type"));
+        db.getCollection(MongoKnowledgeRepository.COLLECTION)
+                .createIndex(Indexes.ascending("connectorDetails.connectionId"));
+
+        db.getCollection(MongoConnectionRepository.COLLECTION)
+                .createIndex(Indexes.ascending("type"));
+        db.getCollection(MongoConnectionRepository.COLLECTION)
+                .createIndex(Indexes.ascending("type", "isDefault"));
 
         db.getCollection(MongoCursorRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId"));

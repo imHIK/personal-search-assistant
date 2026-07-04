@@ -1,9 +1,11 @@
 package io.personalassistant.testsupport;
 
+import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
@@ -22,9 +24,27 @@ public final class TestData {
     public static Knowledge knowledge(String id, SourceType type, Instant anchor, Map<String, Object> inputs) {
         Instant now = Instant.now();
         return new Knowledge(id, "test-" + id,
-                new Knowledge.ConnectorDetails(type, Map.of()), inputs,
+                Knowledge.ConnectorDetails.of(type, Map.of()), inputs,
                 Knowledge.Config.defaults(), anchor, null, KnowledgeStatus.ACTIVE, null,
                 Knowledge.Stats.zero(), now, now, 0L);
+    }
+
+    /** A knowledge bound to a specific connection id (for connection-resolution tests). */
+    public static Knowledge knowledgeWithConnection(String id, SourceType type, String connectionId,
+                                                    Instant anchor, Map<String, Object> inputs) {
+        Instant now = Instant.now();
+        return new Knowledge(id, "test-" + id,
+                new Knowledge.ConnectorDetails(type, connectionId, Map.of()), inputs,
+                Knowledge.Config.defaults(), anchor, null, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Stats.zero(), now, now, 0L);
+    }
+
+    /** A simple ACTIVE connection for a type (default flag as given). */
+    public static Connection connection(String id, SourceType type, boolean isDefault,
+                                        Map<String, Object> auth) {
+        Instant now = Instant.now();
+        return new Connection(id, "test-" + id, type, auth, Map.of(), isDefault,
+                ConnectionStatus.ACTIVE, null, now, now);
     }
 
     /** A knowledge whose config carries an explicit custom {@link Knowledge.ScheduleSettings}. */
@@ -34,7 +54,7 @@ public final class TestData {
         Knowledge.Config defaults = Knowledge.Config.defaults();
         Knowledge.Config config = new Knowledge.Config(schedule, defaults.webhookSettings(), defaults.backfill());
         return new Knowledge(id, "test-" + id,
-                new Knowledge.ConnectorDetails(type, Map.of()), Map.of(),
+                Knowledge.ConnectorDetails.of(type, Map.of()), Map.of(),
                 config, now, null, KnowledgeStatus.ACTIVE, null,
                 Knowledge.Stats.zero(), now, now, 0L);
     }

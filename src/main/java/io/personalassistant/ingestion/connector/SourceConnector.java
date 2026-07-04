@@ -1,5 +1,6 @@
 package io.personalassistant.ingestion.connector;
 
+import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -76,6 +77,26 @@ public interface SourceConnector {
      */
     default String membershipSignature(java.util.Map<String, Object> inputs) {
         return String.valueOf(inputs == null ? java.util.Map.of() : inputs);
+    }
+
+    /**
+     * Whether this connector authenticates through a reusable {@link Connection}. Defaults to
+     * {@code false} — a no-auth source like the local filesystem needs no connection. Credentialed
+     * connectors (Gmail, Drive, Slack…) override this to {@code true}; the knowledge lifecycle then
+     * resolves and verifies a connection before activation, and {@code grab} reads its credentials.
+     */
+    default boolean requiresConnection() {
+        return false;
+    }
+
+    /**
+     * Validate a {@link Connection}'s credentials for this connector — the account-level check that
+     * runs once when a connection is created/edited (e.g. call an identity endpoint), independent of
+     * any knowledge. Default is a no-op for connectors that {@link #requiresConnection() need none}.
+     *
+     * @throws RuntimeException if the credentials are missing, malformed, or rejected by the source
+     */
+    default void verifyConnection(Connection connection) {
     }
 
     /** Validate connectivity/credentials/inputs for a configured knowledge. */

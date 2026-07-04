@@ -62,7 +62,9 @@ class DefaultKnowledgeServiceEditTest {
                 List.of(new SourceIterable("chan_a", "A", Map.of())))
                 .withDynamicIterables(true);
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
-        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, index, discovery);
+        // SLACK stub needs no connection, so a trivial resolver suffices here.
+        io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
+        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections, index, discovery);
 
         runner = new IngestionRunner(registry, entities, cursors);
         runner.batchesPerLease = 50;
@@ -73,7 +75,7 @@ class DefaultKnowledgeServiceEditTest {
 
     private Knowledge add(Map<String, Object> inputs) {
         return service.add(new KnowledgeService.NewKnowledge(
-                "team slack", SourceType.SLACK, Map.of(), inputs, null));
+                "team slack", SourceType.SLACK, null, Map.of(), inputs, null));
     }
 
     private Cursor cursorFor(String knowledgeId, String iterableId, CursorDirection direction) {

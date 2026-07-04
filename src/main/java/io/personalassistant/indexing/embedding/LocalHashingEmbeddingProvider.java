@@ -1,5 +1,6 @@
 package io.personalassistant.indexing.embedding;
 
+import io.personalassistant.common.ProviderImpl;
 import io.personalassistant.domain.model.Embedding;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * (model + dimension) pinned to whatever the OpenSearch {@code knn_vector} mapping expects.
  */
 @ApplicationScoped
+@ProviderImpl
 public class LocalHashingEmbeddingProvider implements EmbeddingProvider {
 
     @ConfigProperty(name = "app.embedding.model", defaultValue = "local-hashing-v1")
@@ -27,6 +29,11 @@ public class LocalHashingEmbeddingProvider implements EmbeddingProvider {
 
     @ConfigProperty(name = "app.embedding.dimension", defaultValue = "384")
     int dimension;
+
+    @Override
+    public String providerId() {
+        return "local-hashing";
+    }
 
     @Override
     public String model() {

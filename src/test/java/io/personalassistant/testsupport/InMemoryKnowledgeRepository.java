@@ -37,6 +37,13 @@ public class InMemoryKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public List<Knowledge> findByConnectionId(String connectionId) {
+        return store.values().stream()
+                .filter(k -> connectionId.equals(k.connectorDetails().connectionId()))
+                .toList();
+    }
+
+    @Override
     public void updateStatus(String id, KnowledgeStatus status) {
         Knowledge k = store.get(id);
         if (k != null) {
