@@ -2,18 +2,16 @@ package io.personalassistant.ingestion.connector.google.drive;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.EntityType;
-import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
-import io.personalassistant.ingestion.connector.SourceConnector;
+import io.personalassistant.ingestion.connector.GrabContext;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
+import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import io.personalassistant.ingestion.connector.google.GoogleApiException;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -37,7 +35,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Google Drive connector. Like {@code LocalFsConnector} it turns a folder tree into independently
- * paged iterables, but over an authenticated cloud API — proving the {@link SourceConnector} SPI
+ * paged iterables, but over an authenticated cloud API — proving the {@link TokenWindowGrabber} base
  * against remote, paginated, mixed-content storage.
  *
  * <h2>Iterables</h2>
@@ -47,21 +45,14 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * it and lets each folder page independently. New folders appearing later are picked up by the
  * periodic discovery pass ({@link #hasDynamicIterables()} is true).
  *
- * <h2>Why pagination is direction-specific</h2>
- * Drive exposes {@code modifiedTime} ordering and a {@code modifiedTime} predicate, so each direction
- * uses the walk that is O(page):
- * <ul>
- *   <li><b>Forward (incremental, {@code modifiedTime >= anchor}).</b> Ordered ascending by
- *       {@code (modifiedTime, name)} with a high-water floor that starts at the anchor. The run pages
- *       by token and records the newest {@code modifiedTime} seen; when it drains, that max becomes
- *       the next floor, so a scheduled re-arm (which resumes the forward cursor from its stored
- *       position) only lists files modified since. The floor uses {@code >=} so a file sharing the
- *       boundary timestamp is never skipped; the ingestion runner's checksum ({@code version})
- *       change-detection drops the re-listed boundary files, giving progress without gaps.</li>
- *   <li><b>Backward (backfill, {@code modifiedTime < anchor}).</b> A one-time sweep, ordered
- *       {@code modifiedTime desc}; page by token until it runs out ({@code EXHAUSTED}). The position is
- *       just the page token.</li>
- * </ul>
+ * <h2>Pagination</h2>
+ * Drive exposes {@code modifiedTime} ordering and a {@code modifiedTime} predicate — the token-paged,
+ * time-windowed shape {@link TokenWindowGrabber} drives — so this connector extends it and implements a
+ * single {@link #fetchWindow}: translate the {@link TimeWindow} to a {@code modifiedTime} clause, list
+ * (oldest-first for a forward window so the high-water advances cleanly, newest-first for a backfill
+ * window), and map. The base owns the forward floor and the backward sweep. The lower bound is
+ * {@code >=} so a file sharing the boundary timestamp is never skipped; the ingestion runner's checksum
+ * ({@code version}) change-detection drops the re-listed boundary files, giving progress without gaps.
  *
  * <h2>Content</h2>
  * Google-native docs are exported to text ({@code Document}→text/plain, {@code Spreadsheet}→text/csv,
@@ -71,18 +62,12 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * drawings) are skipped.
  */
 @ApplicationScoped
-public class GoogleDriveConnector implements SourceConnector {
+public class GoogleDriveConnector extends TokenWindowGrabber {
 
     static final String ROOT_ALIAS = "root";
     private static final String FOLDER_MIME = "application/vnd.google-apps.folder";
     private static final String NATIVE_PREFIX = "application/vnd.google-apps";
     private static final String FOLDER_KEY = "folderId";
-    private static final int DEFAULT_CAP = 100;
-
-    // CursorPosition field names this connector owns:
-    private static final String POS_PAGE_TOKEN = "pageToken";
-    private static final String POS_FLOOR_MS = "floorMs";  // forward: high-water boundary for the run
-    private static final String POS_MAX_MS = "maxMs";      // forward: newest modifiedTime seen this run
 
     /** Google-native mime → export mime. Types absent here (forms, maps, drawings) are skipped. */
     private static final Map<String, String> EXPORT_AS = Map.of(
@@ -134,8 +119,15 @@ public class GoogleDriveConnector implements SourceConnector {
 
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        Object folders = inputs == null ? null : inputs.get("folderIds");
-        return "folderIds=" + folders;
+        // Drive's only input, folderIds, is a discovery-set dimension: it selects the roots of the
+        // walk — i.e. WHICH folder iterables exist. Adding/removing a root is an iterable add/remove
+        // handled by iterable-level reconcile (design §3.1: create/park), not a within-iterable
+        // re-walk (§3.2). A folder iterable's membership is "the files directly in that folder id,"
+        // independent of the configured root list, and fetchWindow applies no input-based file filter
+        // (no fileTypes/query/globs) — so no input here moves the boundary *inside* an existing
+        // iterable. Constant signature → editing folderIds never forces a needless re-walk of the
+        // surviving folders (reconcile still walks any newly-added root's fresh cursor).
+        return "";
     }
 
     @Override
@@ -196,66 +188,18 @@ public class GoogleDriveConnector implements SourceConnector {
     }
 
     @Override
-    public GrabPage grab(GrabRequest request) {
-        String token = tokens.bearer(connections.resolve(request.knowledge()));
-        int cap = request.maxItems() > 0 ? request.maxItems() : DEFAULT_CAP;
-        Object folderId = request.attributes().get(FOLDER_KEY);
+    protected Page fetchWindow(GrabContext ctx, TimeWindow window, String pageToken, int cap) {
+        Object folderId = ctx.attributes().get(FOLDER_KEY);
         if (folderId == null) {
-            return GrabPage.end(request.position());
+            return Page.end();
         }
-        Instant anchor = request.knowledge().anchor();
-
-        return request.direction() == CursorDirection.FORWARD
-                ? grabForward(token, folderId.toString(), anchor, request.position(), cap)
-                : grabBackward(token, folderId.toString(), anchor, request.position(), cap);
-    }
-
-    // ---- forward: ascending high-water walk ---------------------------------------------------
-
-    private GrabPage grabForward(String token, String folderId, Instant anchor,
-                                 CursorPosition position, int cap) {
-        long floorMs = position.getLong(POS_FLOOR_MS, anchor.toEpochMilli());
-        String pageToken = position.getString(POS_PAGE_TOKEN); // null => fresh run for this arm
-        long runMaxMs = position.getLong(POS_MAX_MS, floorMs);
-
-        String query = childrenQuery(folderId)
-                + " and modifiedTime >= '" + Instant.ofEpochMilli(floorMs) + "'";
-        JsonNode page = api.listFiles(token, query, "modifiedTime,name", pageToken, cap);
-
-        List<RawItem> items = new ArrayList<>();
-        long pageMax = runMaxMs;
-        for (JsonNode f : page.path("files")) {
-            RawItem item = toRawItem(token, f);
-            if (item == null) {
-                continue;
-            }
-            items.add(item);
-            long ms = item.modifiedAt().toEpochMilli();
-            if (ms > pageMax) {
-                pageMax = ms;
-            }
-        }
-
-        String next = page.path("nextPageToken").asText(null);
-        if (next != null) {
-            CursorPosition pos = CursorPosition.builder()
-                    .put(POS_FLOOR_MS, floorMs)
-                    .put(POS_PAGE_TOKEN, next)
-                    .put(POS_MAX_MS, pageMax)
-                    .build();
-            return new GrabPage(items, pos, true);
-        }
-        CursorPosition pos = CursorPosition.builder().put(POS_FLOOR_MS, pageMax).build();
-        return new GrabPage(items, pos, false);
-    }
-
-    // ---- backward: descending backfill sweep --------------------------------------------------
-
-    private GrabPage grabBackward(String token, String folderId, Instant anchor,
-                                  CursorPosition position, int cap) {
-        String pageToken = position.getString(POS_PAGE_TOKEN);
-        String query = childrenQuery(folderId) + " and modifiedTime < '" + anchor + "'";
-        JsonNode page = api.listFiles(token, query, "modifiedTime desc", pageToken, cap);
+        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        String query = childrenQuery(folderId.toString()) + windowClause(window);
+        // A forward (lower-bounded) window lists oldest-first so the high-water advances cleanly; a
+        // backfill window lists newest-first. Either way the base drains the whole window, so the order
+        // is a free, source-native choice.
+        String orderBy = window.hasLo() ? "modifiedTime,name" : "modifiedTime desc";
+        JsonNode page = api.listFiles(token, query, orderBy, pageToken, cap);
 
         List<RawItem> items = new ArrayList<>();
         for (JsonNode f : page.path("files")) {
@@ -264,13 +208,19 @@ public class GoogleDriveConnector implements SourceConnector {
                 items.add(item);
             }
         }
+        return new Page(items, page.path("nextPageToken").asText(null));
+    }
 
-        String next = page.path("nextPageToken").asText(null);
-        if (next == null) {
-            return new GrabPage(items, position, false); // history drained -> EXHAUSTED
+    /** Translate the window's bounds into Drive's {@code modifiedTime} predicates (open bound = none). */
+    private static String windowClause(TimeWindow window) {
+        StringBuilder q = new StringBuilder();
+        if (window.hasLo()) {
+            q.append(" and modifiedTime >= '").append(window.lo()).append('\'');
         }
-        CursorPosition pos = CursorPosition.builder().put(POS_PAGE_TOKEN, next).build();
-        return new GrabPage(items, pos, true);
+        if (window.hasHi()) {
+            q.append(" and modifiedTime < '").append(window.hi()).append('\'');
+        }
+        return q.toString();
     }
 
     private static String childrenQuery(String folderId) {

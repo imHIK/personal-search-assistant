@@ -263,7 +263,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
             if (membershipChanged) {
                 effective = held.bumpGeneration().withStatus(KnowledgeStatus.PAUSED);
                 knowledge.save(effective);
-                rewalkForMembership(effective, iterables);
+                rewalkForMembershipChange(effective, iterables);
             }
 
             recordDiscovery(effective, DiscoveryTrigger.RECONCILE, iterables.size(),
@@ -326,7 +326,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
      * cursor. When backfill is off there is none, so this is a forward-only re-walk that still catches
      * adds in {@code [anchor, now]}; temporarily creating a backward cursor for the walk is deferred.
      */
-    private void rewalkForMembership(Knowledge kn, List<SourceIterable> iterables) {
+    private void rewalkForMembershipChange(Knowledge kn, List<SourceIterable> iterables) {
         Set<String> liveIds = new HashSet<>();
         iterables.forEach(it -> liveIds.add(it.iterableId()));
         int reset = 0;

@@ -4,6 +4,7 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.KnowledgeService;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
+import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,12 +24,12 @@ public class IterableDiscoveryScheduler {
 
     private static final Logger LOG = Logger.getLogger(IterableDiscoveryScheduler.class.getName());
 
-    private final io.personalassistant.storage.repository.KnowledgeRepository knowledge;
+    private final KnowledgeRepository knowledge;
     private final ConnectorRegistry connectors;
     private final KnowledgeService knowledgeService;
 
     @Inject
-    public IterableDiscoveryScheduler(io.personalassistant.storage.repository.KnowledgeRepository knowledge,
+    public IterableDiscoveryScheduler(KnowledgeRepository knowledge,
                                       ConnectorRegistry connectors,
                                       KnowledgeService knowledgeService) {
         this.knowledge = knowledge;

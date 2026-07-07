@@ -13,7 +13,7 @@ import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabPage;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
@@ -74,7 +74,7 @@ class IngestionRunnerTest {
     @Test
     void backwardDrainPersistsEntitiesAndExhausts() {
         connector.enqueue(CursorDirection.BACKWARD,
-                new GrabPage(List.of(textItem("a"), textItem("b")), CursorPosition.of(Map.of("seq", 1L)), false));
+                new GrabResult(List.of(textItem("a"), textItem("b")), CursorPosition.of(Map.of("seq", 1L)), false));
         Cursor cursor = seedCursor(CursorDirection.BACKWARD);
 
         runner.runLease(kn, cursor, "w1", () -> {});
@@ -90,7 +90,7 @@ class IngestionRunnerTest {
     @Test
     void forwardCaughtUpRestsIdle() {
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 2L)), false));
+                new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 2L)), false));
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
 
         runner.runLease(kn, cursor, "w1", () -> {});
@@ -102,7 +102,7 @@ class IngestionRunnerTest {
     @Test
     void continuesAvailableWhenMorePagesRemain() {
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 3L)), true)); // hasMore, but only one page queued
+                new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 3L)), true)); // hasMore, but only one page queued
         runner.batchesPerLease = 1; // stop after one page
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
 
@@ -115,7 +115,7 @@ class IngestionRunnerTest {
     @Test
     void rebuildsIterableFromCursorAttributesWithoutDiscovering() {
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 9L)), false));
+                new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 9L)), false));
         Cursor cursor = seedCursor(CursorDirection.FORWARD, Map.of("path", "/data/inbox", "recursive", true));
 
         runner.runLease(kn, cursor, "w1", () -> {});

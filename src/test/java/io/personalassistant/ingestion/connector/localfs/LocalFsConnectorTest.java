@@ -10,9 +10,10 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.testsupport.TestData;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -53,11 +54,13 @@ class LocalFsConnectorTest {
     }
 
     /** A cursor is self-contained, so grab() takes the iterable's id + attributes — not the whole record. */
-    private static GrabRequest req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
-        return new GrabRequest(kn, it.iterableId(), it.attributes(), dir, pos, cap);
+    private static GrabContext req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
+        TimeWindow seed = dir == CursorDirection.BACKWARD
+                ? TimeWindow.before(kn.anchor()) : TimeWindow.atOrAfter(kn.anchor());
+        return new GrabContext(kn, it.iterableId(), it.attributes(), pos, seed, cap);
     }
 
-    private static List<String> titles(GrabPage page) {
+    private static List<String> titles(GrabResult page) {
         List<String> out = new ArrayList<>();
         page.items().forEach(i -> out.add(i.title()));
         return out;
@@ -89,12 +92,12 @@ class LocalFsConnectorTest {
         Knowledge kn = knowledgeAt(root, anchor);
         SourceIterable rootIt = rootIterable(kn);
 
-        GrabPage page1 = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, CursorPosition.start(), 1));
+        GrabResult page1 = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, CursorPosition.start(), 1));
         assertEquals(1, page1.items().size());
         assertEquals("new1.txt", page1.items().get(0).title(), "oldest-after-anchor comes first (ascending)");
         assertTrue(page1.hasMore());
 
-        GrabPage page2 = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, page1.nextPosition(), 1));
+        GrabResult page2 = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, page1.cursor(), 1));
         assertEquals(1, page2.items().size());
         assertEquals("new2.txt", page2.items().get(0).title());
         assertFalse(page2.hasMore(), "no forward items remain after the second page");
@@ -124,9 +127,9 @@ class LocalFsConnectorTest {
         boolean more = true;
         int guard = 0;
         while (more && guard++ < 10) {
-            GrabPage page = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, rootIt, CursorDirection.FORWARD, pos, 2));
             all.addAll(titles(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("a.txt", "b.txt", "c.txt", "d.txt", "e.txt"), all,
@@ -145,7 +148,7 @@ class LocalFsConnectorTest {
         write(root.resolve("future.txt"), "future", anchor.plusSeconds(30)); // excluded from backward
 
         Knowledge kn = knowledgeAt(root, anchor);
-        GrabPage page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
         assertEquals(List.of("a.txt", "z.txt"), titles(page), "backward backfill is ordered by path, not mtime");
         assertFalse(page.hasMore());
     }
@@ -163,7 +166,7 @@ class LocalFsConnectorTest {
         write(root.resolve("docs/mz.txt"), "mz", old);
 
         Knowledge kn = knowledgeAt(root, anchor);
-        GrabPage page = connector.grab(req(kn, iterable(kn, "docs"), CursorDirection.BACKWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, iterable(kn, "docs"), CursorDirection.BACKWARD, CursorPosition.start(), 10));
         assertEquals(List.of("a.txt", "x.txt", "y.txt", "m.txt", "mz.txt"), titles(page),
                 "m/ contents precede m.txt, which precedes mz.txt (component-wise path order)");
         assertFalse(page.hasMore());
@@ -189,11 +192,11 @@ class LocalFsConnectorTest {
         int pages = 0;
         boolean more = true;
         while (more && pages < 10) {
-            GrabPage page = connector.grab(req(kn, docs, CursorDirection.BACKWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, docs, CursorDirection.BACKWARD, pos, 2));
             pages++;
             assertTrue(page.items().size() <= 2);
             all.addAll(titles(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("a.txt", "x.txt", "y.txt", "m.txt", "mz.txt"), all,
@@ -209,12 +212,12 @@ class LocalFsConnectorTest {
         Knowledge kn = knowledgeAt(root, anchor);
         SourceIterable rootIt = rootIterable(kn);
 
-        GrabPage page = connector.grab(req(kn, rootIt, CursorDirection.BACKWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, rootIt, CursorDirection.BACKWARD, CursorPosition.start(), 10));
         assertEquals(List.of("only.txt"), titles(page));
         assertFalse(page.hasMore());
 
         // resuming past the last item yields nothing and stays terminal
-        GrabPage drained = connector.grab(req(kn, rootIt, CursorDirection.BACKWARD, page.nextPosition(), 10));
+        GrabResult drained = connector.grab(req(kn, rootIt, CursorDirection.BACKWARD, page.cursor(), 10));
         assertTrue(drained.items().isEmpty());
         assertFalse(drained.hasMore());
     }
@@ -227,7 +230,7 @@ class LocalFsConnectorTest {
         write(root.resolve("sub/deep.txt"), "deep", old);
 
         Knowledge kn = knowledgeAt(root, anchor);
-        GrabPage page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
         assertEquals(List.of("top.txt"), titles(page), "the root iterable only emits top-level files");
     }
 }

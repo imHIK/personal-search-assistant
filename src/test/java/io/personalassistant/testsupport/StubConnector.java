@@ -5,8 +5,8 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import java.util.ArrayDeque;
@@ -25,7 +25,7 @@ public class StubConnector implements SourceConnector {
 
     private final SourceType type;
     private final List<SourceIterable> iterables;
-    private final Map<CursorDirection, Deque<GrabPage>> pages = new EnumMap<>(CursorDirection.class);
+    private final Map<CursorDirection, Deque<GrabResult>> pages = new EnumMap<>(CursorDirection.class);
     private RuntimeException failure;
     private RuntimeException discoverFailure;
     private boolean dynamicIterables;
@@ -46,7 +46,7 @@ public class StubConnector implements SourceConnector {
         this.iterables = new ArrayList<>(iterables);
     }
 
-    public StubConnector enqueue(CursorDirection direction, GrabPage page) {
+    public StubConnector enqueue(CursorDirection direction, GrabResult page) {
         pages.computeIfAbsent(direction, d -> new ArrayDeque<>()).add(page);
         return this;
     }
@@ -164,17 +164,21 @@ public class StubConnector implements SourceConnector {
     }
 
     @Override
-    public GrabPage grab(GrabRequest request) {
-        lastGrabIterableId = request.iterableId();
-        lastGrabAttributes = request.attributes();
+    public GrabResult grab(GrabContext ctx) {
+        lastGrabIterableId = ctx.iterableId();
+        lastGrabAttributes = ctx.attributes();
         if (failure != null) {
             RuntimeException toThrow = failure;
             failure = null;
             throw toThrow;
         }
-        Deque<GrabPage> queue = pages.get(request.direction());
+        // The framework no longer passes a direction; recover it from the seed window's shape
+        // (lower-bounded => forward, upper-bounded => backward) to pick the scripted queue.
+        CursorDirection direction = ctx.seedWindow().hasLo()
+                ? CursorDirection.FORWARD : CursorDirection.BACKWARD;
+        Deque<GrabResult> queue = pages.get(direction);
         if (queue == null || queue.isEmpty()) {
-            return GrabPage.end(request.position());
+            return GrabResult.end(ctx.cursor());
         }
         return queue.poll();
     }

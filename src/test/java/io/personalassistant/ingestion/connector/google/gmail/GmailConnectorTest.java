@@ -13,9 +13,10 @@ import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import io.personalassistant.testsupport.TestData;
 import java.time.Instant;
@@ -38,11 +39,13 @@ class GmailConnectorTest {
         return TestData.knowledge("kn_gmail", SourceType.GMAIL, anchor, inputs);
     }
 
-    private static GrabRequest req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
-        return new GrabRequest(kn, it.iterableId(), it.attributes(), dir, pos, cap);
+    private static GrabContext req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
+        TimeWindow seed = dir == CursorDirection.BACKWARD
+                ? TimeWindow.before(kn.anchor()) : TimeWindow.atOrAfter(kn.anchor());
+        return new GrabContext(kn, it.iterableId(), it.attributes(), pos, seed, cap);
     }
 
-    private static List<String> ids(GrabPage page) {
+    private static List<String> ids(GrabResult page) {
         List<String> out = new ArrayList<>();
         page.items().forEach(i -> out.add(i.externalId()));
         return out;
@@ -80,13 +83,13 @@ class GmailConnectorTest {
         Knowledge kn = knowledge(anchor, Map.of());
         SourceIterable all = connector.discover(kn).get(0);
 
-        GrabPage page = connector.grab(req(kn, all, CursorDirection.FORWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, all, CursorDirection.FORWARD, CursorPosition.start(), 10));
         assertEquals(List.of("m_new2", "m_new1"), ids(page), "newest-first, excludes pre-anchor mail");
         assertFalse(page.hasMore());
 
         // A newer mail arrives; re-grabbing from the returned (high-water) position picks it up.
         api.add("m_new3", anchor.plusSeconds(40).toEpochMilli(), List.of("INBOX"), "New three", "d@x.com", "hello three");
-        GrabPage next = connector.grab(req(kn, all, CursorDirection.FORWARD, page.nextPosition(), 10));
+        GrabResult next = connector.grab(req(kn, all, CursorDirection.FORWARD, page.cursor(), 10));
         assertTrue(ids(next).contains("m_new3"), "high-water floor advanced so the new mail is returned");
     }
 
@@ -104,9 +107,9 @@ class GmailConnectorTest {
         boolean more = true;
         int guard = 0;
         while (more && guard++ < 10) {
-            GrabPage page = connector.grab(req(kn, all, CursorDirection.FORWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, all, CursorDirection.FORWARD, pos, 2));
             collected.addAll(ids(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("m5", "m4", "m3", "m2", "m1"), collected, "all matches, newest-first, once each");
@@ -130,10 +133,10 @@ class GmailConnectorTest {
         boolean more = true;
         int pages = 0;
         while (more && pages < 10) {
-            GrabPage page = connector.grab(req(kn, all, CursorDirection.BACKWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, all, CursorDirection.BACKWARD, pos, 2));
             pages++;
             collected.addAll(ids(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("h1", "h2", "h3"), collected, "newest-of-old first, excludes post-anchor mail");

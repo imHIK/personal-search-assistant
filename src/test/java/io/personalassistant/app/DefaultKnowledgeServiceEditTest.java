@@ -17,7 +17,7 @@ import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
-import io.personalassistant.ingestion.connector.GrabPage;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.ingestion.job.IngestionRunner;
 import io.personalassistant.testsupport.InMemoryCursorRepository;
@@ -258,7 +258,7 @@ class DefaultKnowledgeServiceEditTest {
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
         Cursor leased = cursors.claim(fwd.id(), "w1", Duration.ofMinutes(5)).orElseThrow();
         connector.enqueue(CursorDirection.FORWARD,
-                new GrabPage(List.of(textItem("keep"), textItem("new_txt")),
+                new GrabResult(List.of(textItem("keep"), textItem("new_txt")),
                         CursorPosition.of(Map.of("seq", 1L)), false));
 
         runner.runLease(knowledge.findById(kn.id()).orElseThrow(), leased, "w1", () -> {});

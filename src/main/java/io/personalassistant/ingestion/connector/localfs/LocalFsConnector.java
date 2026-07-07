@@ -4,12 +4,12 @@ import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
-import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -29,6 +29,11 @@ import java.util.stream.Stream;
  * Local filesystem connector. The {@code rootPath} input is partitioned into iterables — one per
  * immediate sub-directory (walked recursively) plus a {@code root} iterable for the files directly
  * under the root — so large trees page independently with no overlap.
+ *
+ * <p>Unlike the cloud connectors it does <em>not</em> extend a shared grabber base
+ * ({@code TokenWindowGrabber}/{@code TimeWindowGrabber}): a filesystem has no continuation token and no
+ * server-side time filter, so it implements {@link SourceConnector} directly and reads the walk's sense
+ * (forward vs. backfill) from the seed {@link TimeWindow}'s shape.
  *
  * <h2>Why pagination is direction-specific</h2>
  * A filesystem exposes no index, so the only way to enumerate it is to walk it — and a walk visits
@@ -116,22 +121,24 @@ public class LocalFsConnector implements SourceConnector {
     }
 
     @Override
-    public GrabPage grab(GrabRequest request) {
-        Map<String, Object> attributes = request.attributes();
-        CursorDirection direction = request.direction();
-        CursorPosition position = request.position();
-        int cap = request.maxItems() > 0 ? request.maxItems() : DEFAULT_CAP;
+    public GrabResult grab(GrabContext ctx) {
+        Map<String, Object> attributes = ctx.attributes();
+        CursorPosition position = ctx.cursor();
+        int cap = ctx.maxItems() > 0 ? ctx.maxItems() : DEFAULT_CAP;
 
         Path dir = Path.of((String) attributes.get(PATH_KEY)).toAbsolutePath().normalize();
         boolean recursive = Boolean.TRUE.equals(attributes.get(RECURSIVE_KEY));
-        Instant anchor = request.knowledge().anchor();
 
         if (!Files.isDirectory(dir)) {
-            return GrabPage.end(position);
+            return GrabResult.end(position);
         }
-        return direction == CursorDirection.FORWARD
-                ? grabForward(dir, recursive, anchor, position, cap)
-                : grabBackward(dir, recursive, anchor, position, cap);
+        // The window's shape is the sense of the walk: a lower-bounded window is the forward
+        // (mtime >= anchor) walk, an upper-bounded one the backfill (mtime < anchor). The bound itself
+        // is the anchor, so we never branch on a direction enum.
+        TimeWindow window = ctx.seedWindow();
+        return window.hasLo()
+                ? grabForward(dir, recursive, window.lo(), position, cap)
+                : grabBackward(dir, recursive, window.hi(), position, cap);
     }
 
     // ---- forward: mtime order, single streaming pass + bounded heap --------------------------
@@ -142,8 +149,8 @@ public class LocalFsConnector implements SourceConnector {
      * (the largest of the {@code cap} smallest sits on top and is evicted when a smaller key
      * arrives), so we never sort or hold the whole subtree.
      */
-    private GrabPage grabForward(Path dir, boolean recursive, Instant anchor,
-                                 CursorPosition position, int cap) {
+    private GrabResult grabForward(Path dir, boolean recursive, Instant anchor,
+                                   CursorPosition position, int cap) {
         FileKey from = position == null || position.isStart() ? null : decode(position);
         PriorityQueue<FileKey> heap = new PriorityQueue<>(ASCENDING.reversed());
         int[] qualifying = {0};
@@ -165,12 +172,12 @@ public class LocalFsConnector implements SourceConnector {
         });
 
         if (heap.isEmpty()) {
-            return GrabPage.end(position);
+            return GrabResult.end(position);
         }
         List<FileKey> page = new ArrayList<>(heap);
         page.sort(ASCENDING);
         boolean hasMore = qualifying[0] > page.size();
-        return new GrabPage(toItems(page), encode(page.get(page.size() - 1)), hasMore);
+        return new GrabResult(toItems(page), encode(page.get(page.size() - 1)), hasMore);
     }
 
     private void forEachFile(Path dir, boolean recursive, Consumer<FileKey> sink) {
@@ -196,8 +203,8 @@ public class LocalFsConnector implements SourceConnector {
      * cursor descended) and stops as soon as {@code cap + 1} files are collected — so each page
      * touches only the cursor's path plus the next {@code cap} files, never the whole subtree again.
      */
-    private GrabPage grabBackward(Path dir, boolean recursive, Instant anchor,
-                                  CursorPosition position, int cap) {
+    private GrabResult grabBackward(Path dir, boolean recursive, Instant anchor,
+                                    CursorPosition position, int cap) {
         String cursorPath = position == null || position.isStart() ? null : decode(position).path();
         String[] spine = spineComponents(dir, cursorPath);
 
@@ -206,11 +213,11 @@ public class LocalFsConnector implements SourceConnector {
 
         List<FileKey> found = walk.found;
         if (found.isEmpty()) {
-            return GrabPage.end(position);
+            return GrabResult.end(position);
         }
         boolean hasMore = found.size() > cap;
         List<FileKey> page = hasMore ? found.subList(0, cap) : found;
-        return new GrabPage(toItems(page), encode(page.get(page.size() - 1)), hasMore);
+        return new GrabResult(toItems(page), encode(page.get(page.size() - 1)), hasMore);
     }
 
     /** Cursor path relative to {@code dir}, split into name components, or {@code null} to start. */

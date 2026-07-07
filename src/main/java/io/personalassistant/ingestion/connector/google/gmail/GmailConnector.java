@@ -2,18 +2,16 @@ package io.personalassistant.ingestion.connector.google.gmail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.EntityType;
-import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
-import io.personalassistant.ingestion.connector.SourceConnector;
+import io.personalassistant.ingestion.connector.GrabContext;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
+import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,7 +25,7 @@ import java.util.Map;
 
 /**
  * Gmail connector. Where the local filesystem is a no-auth walk, Gmail is the interesting case that
- * proves the {@link SourceConnector} SPI against a real cloud API: OAuth bearer auth, opaque
+ * proves the {@link TokenWindowGrabber} base against a real cloud API: OAuth bearer auth, opaque
  * page-token pagination, an N+1 list→get fetch shape, and a source whose native order (newest-first)
  * differs from the anchor-relative window the framework asks for.
  *
@@ -38,41 +36,22 @@ import java.util.Map;
  * labels is grabbed once per matching label iterable but upserts to the same {@code (knowledge,
  * externalId)} entity, so storage never duplicates it.
  *
- * <h2>Why pagination is direction-specific</h2>
+ * <h2>Pagination</h2>
  * Gmail's {@code messages.list} always returns newest-first and paginates by opaque token; the only
- * lever on the window is the {@code after:}/{@code before:} search predicate. That shapes both walks:
- *
- * <ul>
- *   <li><b>Backward (backfill, {@code internalDate < anchor}).</b> A one-time sweep, so its order is
- *       free: we take Gmail's native newest-first with {@code before:<anchor>} and follow
- *       {@code nextPageToken} until it runs out ({@code EXHAUSTED}). The position is just the page
- *       token.</li>
- *   <li><b>Forward (incremental, {@code internalDate >= anchor}).</b> Catching new mail is
- *       timestamp-driven. We query {@code after:<floor>} (a high-water mark that starts at the
- *       anchor), page the run by token, and record the newest {@code internalDate} seen. When the run
- *       drains we persist that max as the next floor — so the next scheduled re-arm only lists mail
- *       newer than the newest we have (the forward cursor resumes from its stored position; the
- *       scheduler re-arms {@code IDLE → AVAILABLE} without resetting it). {@code after:} is applied at
- *       second granularity, so the boundary second can re-list a handful of already-seen messages;
- *       the ingestion runner's checksum change-detection drops them, guaranteeing progress without
- *       gaps.</li>
- * </ul>
- *
- * <p>The pagination state is a small {@link CursorPosition}: backward {@code {pageToken}}; forward
- * {@code {floorMs, pageToken?, maxMs?}}. Bodies travel inline in {@link RawItem#text()} (subject +
+ * lever on the window is the {@code after:}/{@code before:} search predicate. That is exactly the shape
+ * {@link TokenWindowGrabber} drives, so this connector extends it and implements a single
+ * {@link #fetchWindow}: translate the {@link TimeWindow} to {@code after:}/{@code before:}, list, map.
+ * The base owns the forward high-water floor and the backward token sweep — the connector never
+ * branches on direction. {@code after:} is applied at second granularity, so a boundary second can
+ * re-list a handful of already-seen messages; the ingestion runner's checksum change-detection drops
+ * them, guaranteeing progress without gaps. Bodies travel inline in {@link RawItem#text()} (subject +
  * participants + plain-text body), never as a file ref.
  */
 @ApplicationScoped
-public class GmailConnector implements SourceConnector {
+public class GmailConnector extends TokenWindowGrabber {
 
     static final String ALL_MAIL_ITERABLE = "all-mail";
     private static final String LABEL_KEY = "labelId";
-    private static final int DEFAULT_CAP = 100;
-
-    // CursorPosition field names this connector owns:
-    private static final String POS_PAGE_TOKEN = "pageToken";
-    private static final String POS_FLOOR_MS = "floorMs";   // forward: high-water boundary for the run
-    private static final String POS_MAX_MS = "maxMs";       // forward: newest internalDate seen this run
 
     private final GmailApi api;
     private final GoogleAccessTokens tokens;
@@ -109,10 +88,15 @@ public class GmailConnector implements SourceConnector {
 
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        // Only labelIds + query change which messages belong to an iterable; a display name does not.
-        Object labels = inputs == null ? null : inputs.get("labelIds");
+        // Only `query` is a within-iterable filter (design §3.2): it is combined into EVERY iterable's
+        // fetch, so changing it moves the membership boundary *inside* each surviving iterable — the
+        // case a discovery diff can't see, which must trigger a re-walk. `labelIds` is deliberately
+        // NOT here: each label is its own iterable, so adding/removing a label is an iterable
+        // add/remove handled by reconcile (§3.1: create/park), and a given label iterable's messages
+        // don't change because a *different* label was added. Including labelIds would force a
+        // needless re-walk of the untouched labels on every label add/remove.
         Object query = inputs == null ? null : inputs.get("query");
-        return "labelIds=" + labels + ";query=" + query;
+        return "query=" + query;
     }
 
     @Override
@@ -148,68 +132,13 @@ public class GmailConnector implements SourceConnector {
     }
 
     @Override
-    public GrabPage grab(GrabRequest request) {
-        String token = tokens.bearer(connections.resolve(request.knowledge()));
-        int cap = request.maxItems() > 0 ? request.maxItems() : DEFAULT_CAP;
-
-        Object labelId = request.attributes().get(LABEL_KEY);
+    protected Page fetchWindow(GrabContext ctx, TimeWindow window, String pageToken, int cap) {
+        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        Object labelId = ctx.attributes().get(LABEL_KEY);
         List<String> labelIds = labelId == null ? List.of() : List.of(labelId.toString());
-        String extraQuery = str(request.knowledge().inputs(), "query");
-        long anchorMs = request.knowledge().anchor().toEpochMilli();
+        String query = combine(str(ctx.knowledge().inputs(), "query"), windowQuery(window));
 
-        return request.direction() == CursorDirection.FORWARD
-                ? grabForward(token, labelIds, extraQuery, anchorMs, request.position(), cap)
-                : grabBackward(token, labelIds, extraQuery, anchorMs, request.position(), cap);
-    }
-
-    // ---- forward: incremental high-water walk ------------------------------------------------
-
-    private GrabPage grabForward(String token, List<String> labelIds, String extraQuery,
-                                 long anchorMs, CursorPosition position, int cap) {
-        long floorMs = position.getLong(POS_FLOOR_MS, anchorMs);
-        String pageToken = position.getString(POS_PAGE_TOKEN); // null => fresh run for this arm
-        long runMaxMs = position.getLong(POS_MAX_MS, floorMs);
-
-        String query = combine(extraQuery, "after:" + (floorMs / 1000));
         JsonNode list = api.listMessages(token, labelIds, query, pageToken, cap);
-
-        List<RawItem> items = new ArrayList<>();
-        long pageMax = runMaxMs;
-        for (JsonNode ref : list.path("messages")) {
-            RawItem item = fetchAndMap(token, ref.path("id").asText());
-            if (item == null) {
-                continue;
-            }
-            items.add(item);
-            Long ms = item.modifiedAt() == null ? null : item.modifiedAt().toEpochMilli();
-            if (ms != null && ms > pageMax) {
-                pageMax = ms;
-            }
-        }
-
-        String next = list.path("nextPageToken").asText(null);
-        if (next != null) {
-            // more pages this run: keep the same floor, carry the token + running max forward
-            CursorPosition pos = CursorPosition.builder()
-                    .put(POS_FLOOR_MS, floorMs)
-                    .put(POS_PAGE_TOKEN, next)
-                    .put(POS_MAX_MS, pageMax)
-                    .build();
-            return new GrabPage(items, pos, true);
-        }
-        // run drained: advance the floor to the newest we saw so the next arm only lists newer mail
-        CursorPosition pos = CursorPosition.builder().put(POS_FLOOR_MS, pageMax).build();
-        return new GrabPage(items, pos, false);
-    }
-
-    // ---- backward: newest-first backfill sweep -----------------------------------------------
-
-    private GrabPage grabBackward(String token, List<String> labelIds, String extraQuery,
-                                  long anchorMs, CursorPosition position, int cap) {
-        String pageToken = position.getString(POS_PAGE_TOKEN);
-        String query = combine(extraQuery, "before:" + (anchorMs / 1000));
-        JsonNode list = api.listMessages(token, labelIds, query, pageToken, cap);
-
         List<RawItem> items = new ArrayList<>();
         for (JsonNode ref : list.path("messages")) {
             RawItem item = fetchAndMap(token, ref.path("id").asText());
@@ -217,13 +146,26 @@ public class GmailConnector implements SourceConnector {
                 items.add(item);
             }
         }
+        return new Page(items, list.path("nextPageToken").asText(null));
+    }
 
-        String next = list.path("nextPageToken").asText(null);
-        if (next == null) {
-            return new GrabPage(items, position, false); // history drained -> EXHAUSTED
+    /**
+     * Translate the window's bounds into Gmail's {@code after:}/{@code before:} search predicates
+     * (second granularity). An open bound emits no predicate on that side, so the same method serves
+     * the forward window ({@code after:<floor>}) and the backward window ({@code before:<anchor>}).
+     */
+    private static String windowQuery(TimeWindow window) {
+        StringBuilder q = new StringBuilder();
+        if (window.hasLo()) {
+            q.append("after:").append(window.lo().toEpochMilli() / 1000);
         }
-        CursorPosition pos = CursorPosition.builder().put(POS_PAGE_TOKEN, next).build();
-        return new GrabPage(items, pos, true);
+        if (window.hasHi()) {
+            if (q.length() > 0) {
+                q.append(' ');
+            }
+            q.append("before:").append(window.hi().toEpochMilli() / 1000);
+        }
+        return q.toString();
     }
 
     // ---- message -> RawItem ------------------------------------------------------------------

@@ -14,11 +14,17 @@ import java.util.Set;
  * FS, Gmail, Slack…). Implementations live in adapter sub-packages and register themselves with
  * the {@link ConnectorRegistry} via CDI.
  *
- * <p>A connector is also the <em>grabber</em>: it pulls data in a {@link CursorDirection} a page
- * at a time and <strong>owns its own pagination state</strong> (see
- * {@link io.personalassistant.domain.model.CursorPosition}). The ingestion job drives it
- * uniformly — it never inspects the position or branches on direction; the only difference is
- * what re-arms a cursor afterwards (see the indexing design).
+ * <p>A connector is also the <em>grabber</em>: it fetches one {@linkplain GrabContext page} at a time
+ * and <strong>owns its own pagination state</strong> (see
+ * {@link io.personalassistant.domain.model.CursorPosition}) — a page token, an offset, a
+ * {@code (timestamp,id)} keyset, whatever the source needs. The grab is direction-free: the framework
+ * hands over a {@link TimeWindow} to seed the walk and the opaque cursor to resume from, and the
+ * connector just returns the next page + updated cursor + whether more remain. It never branches on a
+ * direction; the framework tracks that on the {@link io.personalassistant.domain.model.Cursor} row and
+ * uses it only to seed the window and to pick the resting status (backfill drains to {@code EXHAUSTED},
+ * incremental parks {@code IDLE}). Rather than implement {@link #grab} by hand, most sources extend a
+ * ready-made base: {@link TokenWindowGrabber} for token-paged APIs (Gmail, Drive), or
+ * {@link TimeWindowGrabber} for keyset APIs that resume by {@code (timestamp, id)} with no page token.
  *
  * <p>Connectors get real freedom here: discover whatever iterables make sense (or a single one),
  * paginate however the source works, declare which directions they support, and decide what
@@ -110,9 +116,9 @@ public interface SourceConnector {
     List<SourceIterable> discover(Knowledge knowledge);
 
     /**
-     * Grab one page for the given {@link GrabRequest}. The connector resumes from
-     * {@code request.position()} and returns the items, the next position to persist, and whether
-     * more pages remain.
+     * Grab one page for the given {@link GrabContext}. The connector resumes from
+     * {@code context.cursor()} (empty on the first page, seeded by {@code context.seedWindow()}) and
+     * returns the items, the updated cursor to persist, and whether more pages remain.
      */
-    GrabPage grab(GrabRequest request);
+    GrabResult grab(GrabContext context);
 }

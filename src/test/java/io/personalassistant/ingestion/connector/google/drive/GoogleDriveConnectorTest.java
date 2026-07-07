@@ -14,9 +14,10 @@ import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import io.personalassistant.testsupport.TestData;
 import java.nio.file.Files;
@@ -51,11 +52,13 @@ class GoogleDriveConnectorTest {
         return TestData.knowledge("kn_drive", SourceType.GOOGLE_DRIVE, anchor, inputs);
     }
 
-    private static GrabRequest req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
-        return new GrabRequest(kn, it.iterableId(), it.attributes(), dir, pos, cap);
+    private static GrabContext req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
+        TimeWindow seed = dir == CursorDirection.BACKWARD
+                ? TimeWindow.before(kn.anchor()) : TimeWindow.atOrAfter(kn.anchor());
+        return new GrabContext(kn, it.iterableId(), it.attributes(), pos, seed, cap);
     }
 
-    private static List<String> ids(GrabPage page) {
+    private static List<String> ids(GrabResult page) {
         List<String> out = new ArrayList<>();
         page.items().forEach(i -> out.add(i.externalId()));
         return out;
@@ -100,13 +103,13 @@ class GoogleDriveConnectorTest {
         Knowledge kn = knowledge(anchor, Map.of());
         SourceIterable root = iterable(connector.discover(kn), "root");
 
-        GrabPage page = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10));
+        GrabResult page = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10));
         assertEquals(List.of("d1", "d2"), ids(page), "oldest-first ascending, excludes pre-anchor");
         assertFalse(page.hasMore());
 
         api.nativeDoc("d3", "Doc Three", "application/vnd.google-apps.document", "root",
                 anchor.plusSeconds(40).toEpochMilli(), 1, "third doc body");
-        GrabPage next = connector.grab(req(kn, root, CursorDirection.FORWARD, page.nextPosition(), 10));
+        GrabResult next = connector.grab(req(kn, root, CursorDirection.FORWARD, page.cursor(), 10));
         assertTrue(ids(next).contains("d3"), "high-water floor advanced to pick up the newer file");
     }
 
@@ -126,9 +129,9 @@ class GoogleDriveConnectorTest {
         boolean more = true;
         int guard = 0;
         while (more && guard++ < 10) {
-            GrabPage page = connector.grab(req(kn, root, CursorDirection.FORWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, root, CursorDirection.FORWARD, pos, 2));
             collected.addAll(ids(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("d1", "d2", "d3", "d4", "d5"), collected, "ascending, once each, no gaps");
@@ -153,10 +156,10 @@ class GoogleDriveConnectorTest {
         boolean more = true;
         int pages = 0;
         while (more && pages < 10) {
-            GrabPage page = connector.grab(req(kn, root, CursorDirection.BACKWARD, pos, 2));
+            GrabResult page = connector.grab(req(kn, root, CursorDirection.BACKWARD, pos, 2));
             pages++;
             collected.addAll(ids(page));
-            pos = page.nextPosition();
+            pos = page.cursor();
             more = page.hasMore();
         }
         assertEquals(List.of("h1", "h2", "h3"), collected, "newest-of-old first, excludes post-anchor");

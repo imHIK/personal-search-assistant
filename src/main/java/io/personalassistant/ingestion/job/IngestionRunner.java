@@ -11,9 +11,10 @@ import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
-import io.personalassistant.ingestion.connector.GrabPage;
-import io.personalassistant.ingestion.connector.GrabRequest;
+import io.personalassistant.ingestion.connector.GrabContext;
+import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceConnector;
+import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.EntityRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -44,7 +45,7 @@ public class IngestionRunner {
     private final EntityRepository entities;
     private final CursorRepository cursors;
 
-    @ConfigProperty(name = "app.ingestion.batches-per-lease", defaultValue = "50")
+    @ConfigProperty(name = "app.ingestion.batches-per-lease", defaultValue = "50")  // number of iterations per cursor
     public int batchesPerLease;
 
     @ConfigProperty(name = "app.ingestion.max-items-per-batch", defaultValue = "100")
@@ -72,14 +73,15 @@ public class IngestionRunner {
         SourceConnector connector = connectors.get(kn.connectorDetails().type());
 
         CursorPosition position = cursor.position() == null ? CursorPosition.start() : cursor.position();
+        TimeWindow seedWindow = seedWindow(cursor.direction(), kn.anchor());
         try {
             for (int batch = 0; batch < batchesPerLease; batch++) {
-                GrabPage page = connector.grab(new GrabRequest(
+                GrabResult page = connector.grab(new GrabContext(
                         kn, cursor.iterableId(), cursor.attributes(),
-                        cursor.direction(), position, maxItemsPerBatch));
+                        position, seedWindow, maxItemsPerBatch));
 
                 long persisted = persistPage(kn, cursor, page.items());
-                position = page.nextPosition();
+                position = page.cursor();
                 Instant now = Instant.now();
 
                 // Persist progress AND renew the lease in one fenced write. If we no longer own the
@@ -111,6 +113,18 @@ public class IngestionRunner {
                     + " (attempt " + retryCount + ", resting " + resting + ")", e);
             cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e));
         }
+    }
+
+    /**
+     * The window that seeds a grab: forward walks {@code [anchor, +inf)} (incremental), backward walks
+     * {@code (-inf, anchor)} (backfill). The connector receives this on {@link GrabContext#seedWindow()}
+     * and never sees the direction; the runner keeps direction (on the cursor row) only to seed the
+     * window here and to pick the resting status above.
+     */
+    private static TimeWindow seedWindow(CursorDirection direction, Instant anchor) {
+        return direction == CursorDirection.BACKWARD
+                ? TimeWindow.before(anchor)
+                : TimeWindow.atOrAfter(anchor);
     }
 
     private long persistPage(Knowledge kn, Cursor cursor, List<RawItem> items) {
