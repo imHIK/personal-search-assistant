@@ -8,7 +8,10 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.ParsedContent;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
+import io.personalassistant.indexing.chunking.ChunkingSpec;
+import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
 import io.personalassistant.indexing.chunking.ChunkingStrategy;
+import io.personalassistant.indexing.chunking.ChunkingStrategyRegistry;
 import io.personalassistant.indexing.embedding.EmbeddingProvider;
 import io.personalassistant.indexing.parser.ParserRegistry;
 import io.personalassistant.storage.repository.EntityRepository;
@@ -48,7 +51,8 @@ public class IndexingRunner {
     private final EntityRepository entities;
     private final KnowledgeRepository knowledge;
     private final ParserRegistry parsers;
-    private final ChunkingStrategy chunking;
+    private final ChunkingStrategyRegistry chunking;
+    private final ChunkingSpecResolver chunkingSpecs;
     private final EmbeddingProvider embeddings;
     private final SearchIndex index;
 
@@ -66,12 +70,14 @@ public class IndexingRunner {
 
     @Inject
     public IndexingRunner(EntityRepository entities, KnowledgeRepository knowledge,
-                          ParserRegistry parsers, ChunkingStrategy chunking,
+                          ParserRegistry parsers, ChunkingStrategyRegistry chunking,
+                          ChunkingSpecResolver chunkingSpecs,
                           EmbeddingProvider embeddings, SearchIndex index) {
         this.entities = entities;
         this.knowledge = knowledge;
         this.parsers = parsers;
         this.chunking = chunking;
+        this.chunkingSpecs = chunkingSpecs;
         this.embeddings = embeddings;
         this.index = index;
     }
@@ -87,7 +93,12 @@ public class IndexingRunner {
             SourceType sourceType = kn.get().connectorDetails().type();
 
             String text = extractText(entity);
-            List<Chunk> chunks = chunking.chunk(entity, sourceType, text);
+            // Resolve the chunking strategy per knowledge on every pass: an entity indexed after a
+            // chunking-settings change is chunked the new way, while already-indexed chunks are left
+            // untouched (there is no re-chunk of existing entities — the "direct update" contract).
+            ChunkingSpec spec = chunkingSpecs.resolve(kn.get());
+            ChunkingStrategy strategy = chunking.get(spec.strategy());
+            List<Chunk> chunks = strategy.chunk(entity, sourceType, text, spec);
             List<Chunk> embedded = embed(chunks);
 
             // Idempotent replace: drop old chunks, write the fresh set keyed by chunkId.

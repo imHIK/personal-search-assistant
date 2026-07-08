@@ -7,27 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.testsupport.TestData;
-import java.time.Instant;
 import java.util.List;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class FixedSizeChunkingStrategyTest {
 
-    private FixedSizeChunkingStrategy chunker;
+    private final FixedSizeChunkingStrategy chunker = new FixedSizeChunkingStrategy();
 
-    @BeforeEach
-    void setUp() {
-        chunker = new FixedSizeChunkingStrategy();
-        chunker.size = 10;
-        chunker.overlap = 4;
+    private static ChunkingSpec spec(int size, int overlap) {
+        return new ChunkingSpec(FixedSizeChunkingStrategy.NAME, size, overlap, List.of());
     }
 
     @Test
     void splitsWithOverlapAndStableIds() {
         var entity = TestData.ingestedText("ent_1", "kn_1", "doc.txt", "x");
         String text = "abcdefghijklmnopqrstuvwxy"; // length 25, step = size-overlap = 6
-        List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, text);
+        List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, text, spec(10, 4));
 
         assertEquals(4, chunks.size());
         assertEquals("ent_1_0", chunks.get(0).id());
@@ -44,7 +39,7 @@ class FixedSizeChunkingStrategyTest {
     @Test
     void carriesEntityMetadataOntoEveryChunk() {
         var entity = TestData.ingestedText("ent_1", "kn_1", "doc.txt", "x");
-        List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "abcdefghijklmnop");
+        List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "abcdefghijklmnop", spec(10, 4));
 
         assertFalse(chunks.isEmpty());
         for (Chunk c : chunks) {
@@ -56,8 +51,7 @@ class FixedSizeChunkingStrategyTest {
     @Test
     void blankTextYieldsNoChunks() {
         var entity = TestData.ingestedText("ent_2", "kn_1", "empty.txt", "x");
-        assertTrue(chunker.chunk(entity, SourceType.LOCAL_FS, "   ").isEmpty());
-        assertFalse(chunker.chunk(entity, SourceType.LOCAL_FS, "hello").isEmpty());
-        Instant.now(); // touch import
+        assertTrue(chunker.chunk(entity, SourceType.LOCAL_FS, "   ", spec(10, 4)).isEmpty());
+        assertFalse(chunker.chunk(entity, SourceType.LOCAL_FS, "hello", spec(10, 4)).isEmpty());
     }
 }

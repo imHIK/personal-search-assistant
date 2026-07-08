@@ -187,7 +187,17 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 patch.webhook().secret().orElse(cur.webhookSettings().secret()));
         Knowledge.Backfill backfill = new Knowledge.Backfill(
                 patch.backfillEnabled().orElse(cur.backfill().enabled()));
-        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill);
+
+        // Chunking is a config-class edit: overlay only the provided leaves onto the current settings.
+        // No membership impact and no re-chunk — new chunks use it, existing chunks are left as-is.
+        Knowledge.ChunkingSettings curChunk = cur.chunking();
+        Knowledge.ChunkingSettings chunking = new Knowledge.ChunkingSettings(
+                patch.chunking().strategy().orElse(curChunk.strategy()),
+                patch.chunking().maxSize().orElse(curChunk.maxSize()),
+                patch.chunking().overlap().orElse(curChunk.overlap()),
+                patch.chunking().separators().orElse(curChunk.separators()));
+
+        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking);
 
         return current.withEdits(patch.name().orElse(current.name()), cd,
                 patch.inputs().orElse(current.inputs()), config, now);

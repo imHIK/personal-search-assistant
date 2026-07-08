@@ -117,7 +117,11 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                                 .append("enabled", cfg.scheduleSettings().enabled()))
                         .append("webhookSettings", new Document("enabled", cfg.webhookSettings().enabled())
                                 .append("secret", cfg.webhookSettings().secret()))
-                        .append("backfill", new Document("enabled", cfg.backfill().enabled())))
+                        .append("backfill", new Document("enabled", cfg.backfill().enabled()))
+                        .append("chunking", new Document("strategy", cfg.chunking().strategy())
+                                .append("maxSize", cfg.chunking().maxSize())
+                                .append("overlap", cfg.chunking().overlap())
+                                .append("separators", cfg.chunking().separators())))
                 .append("anchor", BsonSupport.date(k.anchor()))
                 .append("nextSyncDueAt", BsonSupport.date(k.nextSyncDueAt()))
                 .append("status", BsonSupport.enumName(k.status()))
@@ -136,6 +140,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         Document sched = BsonSupport.sub(cfg, "scheduleSettings");
         Document hook = BsonSupport.sub(cfg, "webhookSettings");
         Document back = BsonSupport.sub(cfg, "backfill");
+        Document chunk = BsonSupport.sub(cfg, "chunking");
         Document stats = BsonSupport.sub(d, "stats");
         return new Knowledge(
                 d.getString("_id"),
@@ -153,7 +158,13 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                         new Knowledge.WebhookSettings(
                                 hook != null && Boolean.TRUE.equals(hook.getBoolean("enabled")),
                                 hook == null ? null : hook.getString("secret")),
-                        new Knowledge.Backfill(back != null && Boolean.TRUE.equals(back.getBoolean("enabled")))),
+                        new Knowledge.Backfill(back != null && Boolean.TRUE.equals(back.getBoolean("enabled"))),
+                        chunk == null ? Knowledge.ChunkingSettings.inherit()
+                                : new Knowledge.ChunkingSettings(
+                                        chunk.getString("strategy"),
+                                        intOrNull(chunk.get("maxSize")),
+                                        intOrNull(chunk.get("overlap")),
+                                        stringList(chunk.get("separators")))),
                 BsonSupport.instant(d.get("anchor")),
                 BsonSupport.instant(d.get("nextSyncDueAt")),
                 BsonSupport.enumOf(KnowledgeStatus.class, d.get("status")),
@@ -169,5 +180,23 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
 
     private static long longValue(Object o) {
         return o instanceof Number n ? n.longValue() : 0L;
+    }
+
+    /** Read a nullable stored int (chunking size/overlap), tolerating either int32 or int64 storage. */
+    private static Integer intOrNull(Object o) {
+        return o instanceof Number n ? n.intValue() : null;
+    }
+
+    /** Read a stored string array (chunking separators), or an empty list if absent. */
+    @SuppressWarnings("unchecked")
+    private static java.util.List<String> stringList(Object o) {
+        if (o instanceof java.util.List<?> list) {
+            java.util.List<String> out = new java.util.ArrayList<>(list.size());
+            for (Object item : list) {
+                out.add(String.valueOf(item));
+            }
+            return out;
+        }
+        return java.util.List.of();
     }
 }

@@ -9,10 +9,14 @@ import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 
 /**
- * General-purpose extractor backed by Apache Tika: handles PDF, DOCX, HTML, RTF, ODF and many
- * more by sniffing the bytes. Registered as the fallback (high {@link #priority()}) so the
- * cheaper {@link PlainTextParser} wins for plain-text types. An OCR variant for scanned documents
- * can be added later as a separate, higher-priority parser without touching callers.
+ * General-purpose extractor backed by Apache Tika, kept as the <strong>long-tail fallback</strong>
+ * (highest {@link #priority()}) for content types no dedicated parser claims — RTF, EPUB, e-mail
+ * containers, odd/unknown binaries — by sniffing the bytes. The common document families each have a
+ * dedicated, better-tuned parser now ({@link PdfContentParser}, {@link WordDocumentParser},
+ * {@link PresentationParser}, {@link SpreadsheetContentParser}, {@link HtmlContentParser},
+ * {@link PlainTextParser}); this catches everything else so extraction never hard-fails on an
+ * unexpected type. An OCR variant for scanned documents can slot in later as a higher-priority parser
+ * without touching callers.
  */
 @ApplicationScoped
 public class TikaContentParser implements ContentParser {

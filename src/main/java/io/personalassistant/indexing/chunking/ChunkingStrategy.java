@@ -6,8 +6,10 @@ import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
 
 /**
- * Splits an entity's extracted text into chunks. Pluggable so we can evolve from naive
- * fixed-size+overlap to sentence/heading-aware strategies without touching callers.
+ * Splits an entity's extracted text into chunks. Multiple named strategies coexist (fixed-size,
+ * character, recursive, token…) and are selected per knowledge through the
+ * {@link ChunkingStrategyRegistry}; the {@link ChunkingSpec} carries the per-knowledge tunables
+ * (size, overlap, separators) so the same bean serves every knowledge.
  *
  * <p>Text is supplied separately from the entity because, for files, it is extracted at indexing
  * time (the entity only holds a {@code fileRef}). Returned chunks have stable ids derived from
@@ -16,7 +18,9 @@ import java.util.List;
  */
 public interface ChunkingStrategy {
 
+    /** Stable identifier used to select this strategy from the registry (e.g. {@code "recursive"}). */
     String name();
 
-    List<Chunk> chunk(Entity entity, SourceType sourceType, String text);
+    /** Split {@code text} into ordered chunks according to {@code spec}. */
+    List<Chunk> chunk(Entity entity, SourceType sourceType, String text, ChunkingSpec spec);
 }

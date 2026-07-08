@@ -4,6 +4,7 @@ import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.enums.SourceType;
+import io.personalassistant.indexing.chunking.ChunkingSpec;
 import io.personalassistant.indexing.chunking.ChunkingStrategy;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +18,7 @@ public class WholeTextChunkingStrategy implements ChunkingStrategy {
     }
 
     @Override
-    public List<Chunk> chunk(Entity entity, SourceType sourceType, String text) {
+    public List<Chunk> chunk(Entity entity, SourceType sourceType, String text, ChunkingSpec spec) {
         if (text == null || text.isBlank()) {
             return List.of();
         }

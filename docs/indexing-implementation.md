@@ -71,8 +71,9 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §6 Mongo indexes (unique `knowledgeId+externalId`, …) | `storage.mongo.MongoIndexInitializer` |
 | §7 Scopes (global / connector / knowledge), TTL leases | `common.concurrency.ScopeLimit`, `InMemoryPermitService` |
 | §8 Indexing loop (claim → transform → chunk → embed → index → mark) | `indexing.job.IndexingRunner.indexEntity` + `IndexingJob.tick` |
-| §8 File path: `fileRef` → Tika extract | `IndexingRunner.extractText` + `indexing.parser.TikaContentParser` / `PlainTextParser` |
+| §8 File path: `fileRef` → per-type extract | `IndexingRunner.extractText` + `indexing.parser.*` (PDF/Word/PPT/Excel/HTML/PlainText, Tika fallback) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | §8 Text path | `IndexingRunner.extractText` (inline) |
+| §8 Chunking (pluggable, per-knowledge) | `indexing.chunking.*` — `ChunkingStrategyRegistry` + `ChunkingSpecResolver`; strategy chosen from `Knowledge.config.chunking` per pass (direct update, no re-chunk) |
 | §8 Chunks live only in OpenSearch | `storage.search.opensearch.OpenSearchSearchIndex`; no chunk Mongo repository exists |
 | §8 Re-index without re-fetch | `EntityRepository.flagNeedsReindex` → claim re-runs `IndexingRunner` |
 | §8 Embeddings batched | `IndexingRunner.embed` (`app.indexing.embed-batch`) |
@@ -204,7 +205,10 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.indexing.lease-seconds` | `120` | Entity indexing lease duration |
 | `app.indexing.retry-limit` | `5` | Indexing failures before `FAILED` |
 | `app.indexing.backoff-seconds` | `30` | Delay before a failed entity is re-claimable |
-| `app.chunking.size` / `.overlap` | `1000` / `150` | Fixed-size chunk window + overlap |
+| `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
+| `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
+| `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
 | `app.embedding.model` / `.dimension` | `local-hashing-v1` / `384` | Embedding identity; **must** match the OpenSearch `knn_vector` mapping |
 
 ---
@@ -214,8 +218,8 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | To add… | Implement… | Register via |
 |---|---|---|
 | A new data source (Slack, Drive, Gmail) | `ingestion.connector.SourceConnector` | CDI bean; auto-discovered by `CdiConnectorRegistry` keyed on `SourceType` |
-| A new file type / extractor (OCR, etc.) | `indexing.parser.ContentParser` (set `priority()`) | CDI bean; selected by `CdiParserRegistry` |
-| A different chunking strategy | `indexing.chunking.ChunkingStrategy` | replace the `@ApplicationScoped` bean |
+| A new file type / extractor (OCR, etc.) | `indexing.parser.ContentParser` (set `priority()`; delegate to `TikaSupport`) | CDI bean; selected by `CdiParserRegistry`. Per-family parsers already exist (PDF/Word/PPT/Excel/HTML) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| A new chunking strategy | `indexing.chunking.ChunkingStrategy` (unique `name()`) | CDI bean; discovered by `CdiChunkingStrategyRegistry`, selected per knowledge via `config.chunking` |
 | A real embedding model (ONNX / hosted) | `indexing.embedding.EmbeddingProvider` | replace the bean; update `app.embedding.*`, then re-index |
 | A different vector store / search engine | `storage.search.SearchIndex` | new adapter package |
 | A multi-node permit limiter | `common.concurrency.PermitService` (Redis) | replace `InMemoryPermitService` |

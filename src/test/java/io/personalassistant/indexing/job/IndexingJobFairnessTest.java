@@ -13,6 +13,8 @@ import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
 import io.personalassistant.testsupport.PlainTextParserRegistry;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.TestData;
+import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
+import io.personalassistant.testsupport.SingleChunkingRegistry;
 import io.personalassistant.testsupport.WholeTextChunkingStrategy;
 import java.time.Instant;
 import java.util.Set;
@@ -46,7 +48,8 @@ class IndexingJobFairnessTest {
         seed("kn_c", 2);
 
         IndexingRunner runner = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
-                new WholeTextChunkingStrategy(), new FakeEmbeddingProvider(8), index);
+                new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
+                new FakeEmbeddingProvider(8), index);
         runner.embedBatch = 64;
         runner.retryLimit = 2;
         runner.backoffSeconds = 30;

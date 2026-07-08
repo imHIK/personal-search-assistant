@@ -2,6 +2,7 @@ package io.personalassistant.api.dto;
 
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgePatch;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -16,7 +17,12 @@ import java.util.Map;
  * {@link KnowledgePatch} models present-vs-absent precisely; a future typed-null wire format could
  * expose the clear semantics if needed.
  *
- * @param type present only so an attempt to change the immutable connector type can be rejected (400)
+ * @param type              present only so an attempt to change the immutable connector type can be rejected (400)
+ * @param chunkingStrategy  chunking strategy to use for this knowledge (e.g. {@code "recursive"},
+ *                          {@code "character"}, {@code "fixed-size"}, {@code "token"}); null = unchanged
+ * @param chunkingMaxSize   target chunk size (characters, or tokens for {@code token}); null = unchanged
+ * @param chunkingOverlap   overlap between adjacent chunks in the same unit; null = unchanged
+ * @param chunkingSeparators ordered separators for {@code recursive}/{@code character}; null = unchanged
  */
 public record KnowledgePatchDto(
         String name,
@@ -28,7 +34,11 @@ public record KnowledgePatchDto(
         Boolean scheduleEnabled,
         Boolean backfillEnabled,
         Boolean webhookEnabled,
-        String webhookSecret) {
+        String webhookSecret,
+        String chunkingStrategy,
+        Integer chunkingMaxSize,
+        Integer chunkingOverlap,
+        List<String> chunkingSeparators) {
 
     public KnowledgePatch toPatch() {
         return KnowledgePatch.builder()
@@ -42,6 +52,10 @@ public record KnowledgePatchDto(
                 .backfillEnabled(backfillEnabled)
                 .webhookEnabled(webhookEnabled)
                 .webhookSecret(webhookSecret)
+                .chunkingStrategy(chunkingStrategy)
+                .chunkingMaxSize(chunkingMaxSize)
+                .chunkingOverlap(chunkingOverlap)
+                .chunkingSeparators(chunkingSeparators)
                 .build();
     }
 }

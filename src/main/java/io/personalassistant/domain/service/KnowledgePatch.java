@@ -2,6 +2,7 @@ package io.personalassistant.domain.service;
 
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.SourceType;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -34,10 +35,11 @@ public record KnowledgePatch(
         Optional<Map<String, Object>> auth,
         // what to index
         Optional<Map<String, Object>> inputs,
-        // operational config — mirrors Knowledge.Config (schedule, webhook, backfill)
+        // operational config — mirrors Knowledge.Config (schedule, webhook, backfill, chunking)
         SchedulePatch schedule,
         WebhookPatch webhook,
-        Optional<Boolean> backfillEnabled) {
+        Optional<Boolean> backfillEnabled,
+        ChunkingPatch chunking) {
 
     /** Normalize any {@code null} to its empty form so callers can pass either. */
     public KnowledgePatch {
@@ -48,6 +50,7 @@ public record KnowledgePatch(
         schedule = schedule == null ? SchedulePatch.empty() : schedule;
         webhook = webhook == null ? WebhookPatch.empty() : webhook;
         backfillEnabled = orEmpty(backfillEnabled);
+        chunking = chunking == null ? ChunkingPatch.empty() : chunking;
     }
 
     /** Leaf-optional patch over {@link Knowledge.ScheduleSettings}. */
@@ -75,6 +78,30 @@ public record KnowledgePatch(
         }
     }
 
+    /**
+     * Leaf-optional patch over {@link Knowledge.ChunkingSettings}. A chunking change is a pure
+     * config-class edit — applied in place, taking effect on entities indexed afterwards, with no
+     * re-chunk of existing chunks (see {@code knowledge-edit-design.md}).
+     */
+    public record ChunkingPatch(Optional<String> strategy, Optional<Integer> maxSize,
+                                Optional<Integer> overlap, Optional<List<String>> separators) {
+        public ChunkingPatch {
+            strategy = orEmpty(strategy);
+            maxSize = orEmpty(maxSize);
+            overlap = orEmpty(overlap);
+            separators = orEmpty(separators);
+        }
+
+        public static ChunkingPatch empty() {
+            return new ChunkingPatch(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+        }
+
+        /** True when this patch carries no chunking change (nothing to apply). */
+        public boolean isEmpty() {
+            return strategy.isEmpty() && maxSize.isEmpty() && overlap.isEmpty() && separators.isEmpty();
+        }
+    }
+
     private static <T> Optional<T> orEmpty(Optional<T> value) {
         return value == null ? Optional.empty() : value;
     }
@@ -99,6 +126,10 @@ public record KnowledgePatch(
         private Optional<Boolean> webhookEnabled = Optional.empty();
         private Optional<String> webhookSecret = Optional.empty();
         private Optional<Boolean> backfillEnabled = Optional.empty();
+        private Optional<String> chunkingStrategy = Optional.empty();
+        private Optional<Integer> chunkingMaxSize = Optional.empty();
+        private Optional<Integer> chunkingOverlap = Optional.empty();
+        private Optional<List<String>> chunkingSeparators = Optional.empty();
 
         public Builder name(String v) {
             this.name = Optional.ofNullable(v);
@@ -150,11 +181,32 @@ public record KnowledgePatch(
             return this;
         }
 
+        public Builder chunkingStrategy(String v) {
+            this.chunkingStrategy = Optional.ofNullable(v);
+            return this;
+        }
+
+        public Builder chunkingMaxSize(Integer v) {
+            this.chunkingMaxSize = Optional.ofNullable(v);
+            return this;
+        }
+
+        public Builder chunkingOverlap(Integer v) {
+            this.chunkingOverlap = Optional.ofNullable(v);
+            return this;
+        }
+
+        public Builder chunkingSeparators(List<String> v) {
+            this.chunkingSeparators = Optional.ofNullable(v);
+            return this;
+        }
+
         public KnowledgePatch build() {
             return new KnowledgePatch(name, type, auth, inputs,
                     new SchedulePatch(cron, interval, scheduleEnabled),
                     new WebhookPatch(webhookEnabled, webhookSecret),
-                    backfillEnabled);
+                    backfillEnabled,
+                    new ChunkingPatch(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators));
         }
     }
 }

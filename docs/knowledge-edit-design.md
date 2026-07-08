@@ -30,7 +30,7 @@ different blast radius:
 
 | Class | Fields | What it costs |
 |---|---|---|
-| **Config-class** | `name`, `config.scheduleSettings`, `config.webhookSettings`, `config.backfill` (true→false) | A single in-place write. No source calls, no cursor/entity/index disruption. |
+| **Config-class** | `name`, `config.scheduleSettings`, `config.webhookSettings`, `config.backfill` (true→false), `config.chunking` | A single in-place write. No source calls, no cursor/entity/index disruption. |
 | **Provisioning-class** | `connectorDetails.auth`, `inputs`, `config.backfill` (false→true) | Re-verify + re-discover + reconcile. Can change *what* is fetched and *which* items belong, so derived state may need to move. |
 
 Two hard rules independent of class:
@@ -55,6 +55,7 @@ None of these change what is fetched or how an item is identified, so they are a
 | `scheduleSettings.enabled` false→true | Write the field and `triggerSync` (re-arm forward cursors) so sync resumes promptly. |
 | `scheduleSettings.enabled` true→false | Write the field. The scheduler simply stops arming; in-flight cursors finish naturally. |
 | `backfill.enabled` true→false | Write the field. Stops *future* backward work; already-fetched history is left untouched. |
+| `chunking.*` (strategy / size / overlap / separators) | Write the field. A **direct update**: entities indexed afterwards use the new chunking; chunks already in the index are left untouched (no re-chunk). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) §2.3. |
 
 > `backfill.enabled` **false→true** is *not* in this table — turning backfill on means "go walk
 > history now", which requires creating backward cursors for the existing iterables. That is a

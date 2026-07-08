@@ -115,17 +115,29 @@ public record Knowledge(
         }
     }
 
-    /** Operational configuration controlling how the knowledge is kept in sync. */
+    /** Operational configuration controlling how the knowledge is kept in sync — and how it is chunked. */
     public record Config(
             ScheduleSettings scheduleSettings,
             WebhookSettings webhookSettings,
-            Backfill backfill) {
+            Backfill backfill,
+            ChunkingSettings chunking) {
+
+        public Config {
+            // Older callers/records may omit chunking → treat as "inherit the global default".
+            chunking = chunking == null ? ChunkingSettings.inherit() : chunking;
+        }
+
+        /** Convenience for callers that don't set chunking: inherit the global chunking default. */
+        public Config(ScheduleSettings scheduleSettings, WebhookSettings webhookSettings, Backfill backfill) {
+            this(scheduleSettings, webhookSettings, backfill, ChunkingSettings.inherit());
+        }
 
         public static Config defaults() {
             return new Config(
                     new ScheduleSettings(null, null, false),
                     new WebhookSettings(false, null),
-                    new Backfill(true));
+                    new Backfill(true),
+                    ChunkingSettings.inherit());
         }
     }
 
@@ -165,6 +177,35 @@ public record Knowledge(
 
     /** Whether to walk history backward from the anchor on first activation. */
     public record Backfill(boolean enabled) {}
+
+    /**
+     * Per-knowledge chunking choice — which {@code ChunkingStrategy} to use and its tunables. Every
+     * field is <em>nullable/empty = inherit the global default</em> ({@code app.chunking.*}), so a
+     * knowledge only overrides what it cares about. Changing this is a pure in-place config edit:
+     * entities indexed afterwards are chunked the new way, while chunks already in the index are left
+     * exactly as they were (no re-chunk) — see {@code knowledge-edit-design.md}.
+     *
+     * @param strategy   strategy name (e.g. {@code "recursive"}, {@code "character"}, {@code "fixed-size"},
+     *                   {@code "token"}); null to inherit the global default strategy
+     * @param maxSize    target chunk size in the strategy's unit (characters, or tokens for {@code token});
+     *                   null to inherit
+     * @param overlap    overlap between adjacent chunks, same unit; null to inherit
+     * @param separators ordered split separators for {@code recursive}/{@code character}; empty to inherit
+     */
+    public record ChunkingSettings(String strategy, Integer maxSize, Integer overlap, java.util.List<String> separators) {
+
+        public ChunkingSettings {
+            if (strategy != null && strategy.isBlank()) {
+                strategy = null;
+            }
+            separators = separators == null ? java.util.List.of() : java.util.List.copyOf(separators);
+        }
+
+        /** All-inherit: no strategy, no sizes, no separators — fall through to {@code app.chunking.*}. */
+        public static ChunkingSettings inherit() {
+            return new ChunkingSettings(null, null, null, java.util.List.of());
+        }
+    }
 
     /** Rollup counters surfaced for observability. */
     public record Stats(long entities, long indexed, long failed) {

@@ -3,6 +3,7 @@ package io.personalassistant.api.dto;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgeService;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -20,6 +21,11 @@ import java.util.Map;
  *                        inherit; ignored when {@code cron} is also set (cron wins)
  * @param scheduleEnabled whether forward scheduling is on (default true)
  * @param backfillEnabled whether to walk history backward on activation (default true)
+ * @param chunkingStrategy chunking strategy for this knowledge (e.g. {@code "recursive"}, {@code "character"},
+ *                        {@code "fixed-size"}, {@code "token"}); null to inherit the global default
+ * @param chunkingMaxSize  target chunk size (characters, or tokens for {@code token}); null to inherit
+ * @param chunkingOverlap  overlap between adjacent chunks in the same unit; null to inherit
+ * @param chunkingSeparators ordered separators for {@code recursive}/{@code character}; null/empty to inherit
  */
 public record KnowledgeDto(
         String name,
@@ -30,7 +36,11 @@ public record KnowledgeDto(
         String cron,
         String interval,
         Boolean scheduleEnabled,
-        Boolean backfillEnabled) {
+        Boolean backfillEnabled,
+        String chunkingStrategy,
+        Integer chunkingMaxSize,
+        Integer chunkingOverlap,
+        List<String> chunkingSeparators) {
 
     public KnowledgeService.NewKnowledge toRequest() {
         Knowledge.Config defaults = Knowledge.Config.defaults();
@@ -42,7 +52,9 @@ public record KnowledgeDto(
                         interval,
                         scheduleEnabled != null ? scheduleEnabled : defaults.scheduleSettings().enabled()),
                 defaults.webhookSettings(),
-                new Knowledge.Backfill(backfillEnabled != null ? backfillEnabled : defaults.backfill().enabled()));
+                new Knowledge.Backfill(backfillEnabled != null ? backfillEnabled : defaults.backfill().enabled()),
+                // Any chunking field left null/empty means "inherit the global default at index time".
+                new Knowledge.ChunkingSettings(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators));
         return new KnowledgeService.NewKnowledge(name, SourceType.valueOf(type), connectionId, auth, inputs, config);
     }
 }

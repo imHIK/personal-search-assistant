@@ -133,6 +133,55 @@ class DefaultKnowledgeServiceEditTest {
                 "enabling the schedule triggers a forward re-arm (IDLE → AVAILABLE)");
     }
 
+    // ---- chunking config edits (direct update: future chunks change, past chunks stay) ----------
+
+    @Test
+    void chunkingEditIsAppliedInPlaceWithNoSourceCalls() {
+        Knowledge kn = add(Map.of());
+        int verifyBefore = connector.verifyCalls;
+        int discoverBefore = connector.discoverCalls;
+
+        Knowledge updated = service.update(kn.id(), KnowledgePatch.builder()
+                .chunkingStrategy("character").chunkingMaxSize(500).chunkingOverlap(50).build());
+
+        Knowledge.ChunkingSettings chunk = updated.config().chunking();
+        assertEquals("character", chunk.strategy());
+        assertEquals(500, chunk.maxSize().intValue());
+        assertEquals(50, chunk.overlap().intValue());
+        assertEquals(KnowledgeStatus.ACTIVE, updated.status());
+        assertEquals(verifyBefore, connector.verifyCalls, "chunking is a config edit — re-verifies nothing");
+        assertEquals(discoverBefore, connector.discoverCalls, "chunking is a config edit — re-discovers nothing");
+        assertEquals(2, cursors.findByKnowledge(kn.id()).size(), "cursors untouched");
+    }
+
+    @Test
+    void chunkingEditDoesNotReindexExistingEntities() {
+        Knowledge kn = add(Map.of());
+        // An already-indexed entity: its chunks are "in the past" and must be left exactly as-is.
+        entities.upsert(TestData.ingestedText("ent_x", kn.id(), "doc", "hello world"));
+        entities.markIndexed("ent_x", 3, "model", Instant.now());
+
+        service.update(kn.id(), KnowledgePatch.builder().chunkingStrategy("fixed-size").build());
+
+        var stored = entities.findById("ent_x").orElseThrow();
+        assertEquals(EntityStatus.INDEXED, stored.status(), "existing entity stays indexed");
+        assertFalse(stored.needsReindex(), "a chunking change must NOT flag a re-chunk of past entities");
+    }
+
+    @Test
+    void chunkingEditOverlaysOnlyProvidedLeaves() {
+        Knowledge kn = add(Map.of());
+        service.update(kn.id(), KnowledgePatch.builder()
+                .chunkingStrategy("recursive").chunkingMaxSize(800).build());
+        // A later patch changes only overlap; strategy and size must be retained.
+        Knowledge updated = service.update(kn.id(), KnowledgePatch.builder().chunkingOverlap(120).build());
+
+        Knowledge.ChunkingSettings chunk = updated.config().chunking();
+        assertEquals("recursive", chunk.strategy(), "strategy retained");
+        assertEquals(800, chunk.maxSize().intValue(), "size retained");
+        assertEquals(120, chunk.overlap().intValue(), "overlap updated");
+    }
+
     // ---- §8.2 provisioning edit (inputs): park-don't-purge on shrink -------------------------
 
     @Test

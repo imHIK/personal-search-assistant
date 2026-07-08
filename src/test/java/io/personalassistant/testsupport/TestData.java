@@ -47,6 +47,19 @@ public final class TestData {
                 ConnectionStatus.ACTIVE, null, now, now);
     }
 
+    /** A knowledge whose config carries explicit {@link Knowledge.ChunkingSettings}. */
+    public static Knowledge knowledgeWithChunking(String id, SourceType type,
+                                                  Knowledge.ChunkingSettings chunking) {
+        Instant now = Instant.now();
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(
+                defaults.scheduleSettings(), defaults.webhookSettings(), defaults.backfill(), chunking);
+        return new Knowledge(id, "test-" + id,
+                Knowledge.ConnectorDetails.of(type, Map.of()), Map.of(),
+                config, now, null, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Stats.zero(), now, now, 0L);
+    }
+
     /** A knowledge whose config carries an explicit custom {@link Knowledge.ScheduleSettings}. */
     public static Knowledge knowledgeWithSchedule(String id, SourceType type,
                                                   Knowledge.ScheduleSettings schedule) {

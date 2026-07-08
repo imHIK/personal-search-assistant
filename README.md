@@ -55,6 +55,13 @@ All endpoints consume/produce `application/json`. Base URL: `http://localhost:80
 `type` is one of `LOCAL_FS`, `GMAIL`, `SLACK`, `GOOGLE_DRIVE`, `NOTION`. `cron`,
 `scheduleEnabled` and `backfillEnabled` are optional — server-side defaults are applied.
 
+Chunking is optional and customisable per knowledge (on this `POST`, or later via `PATCH
+/api/knowledge/{id}` as a direct update — new chunks use the new strategy, existing chunks are kept):
+`chunkingStrategy` (`recursive`/`character`/`fixed-size`/`token`), `chunkingMaxSize`,
+`chunkingOverlap`, `chunkingSeparators`. Any omitted field inherits the global default. Files are
+extracted per type (PDF, Word, PowerPoint, Excel, HTML, text) for cleaner text. See
+[`docs/parsing-and-chunking.md`](docs/parsing-and-chunking.md).
+
 ### Search (`/api/search`)
 | Method | Path | Purpose |
 |---|---|---|
