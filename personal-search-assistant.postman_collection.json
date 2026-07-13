@@ -1,13 +1,19 @@
 {
   "info": {
     "name": "Personal Search Assistant",
-    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.",
+    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.\n\nThe **Google Auth** and **Connector Responses (raw Google API)** folders call Google's Drive/Gmail REST APIs directly (not the app) so you can inspect the raw responses the connectors parse. Run *Google Auth > Refresh access token* first to populate `googleAccessToken`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "knowledgeId", "value": "kn_123" },
-    { "key": "entityId", "value": "ent_123" }
+    { "key": "entityId", "value": "ent_123" },
+    { "key": "connectionId", "value": "con_123" },
+    { "key": "googleClientId", "value": "" },
+    { "key": "googleClientSecret", "value": "" },
+    { "key": "googleRefreshToken", "value": "" },
+    { "key": "googleAccessToken", "value": "" },
+    { "key": "gmailMessageId", "value": "" }
   ],
   "item": [
     {
@@ -45,7 +51,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true\n}",
+              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"chunkingStrategy\": \"recursive\",\n  \"chunkingMaxSize\": 1200,\n  \"chunkingOverlap\": 150,\n  \"chunkingSeparators\": [\"\\n\\n\", \"\\n\", \" \", \"\"]\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -53,7 +59,26 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION. cron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day) then the global default; set one to override (cron wins if both are set)."
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time."
+          }
+        },
+        {
+          "name": "Update knowledge (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Documents (renamed)\",\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": \"30m\",\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"webhookEnabled\": false,\n  \"webhookSecret\": null,\n  \"chunkingStrategy\": \"token\",\n  \"chunkingMaxSize\": 512,\n  \"chunkingOverlap\": 64,\n  \"chunkingSeparators\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint."
           }
         },
         {
@@ -98,6 +123,106 @@
       ]
     },
     {
+      "name": "Connections",
+      "description": "Reusable, per-account connections holding the credentials a knowledge authenticates through. Register several accounts of the same connector (e.g. two Gmail logins) and bind different knowledges to whichever they want; one connection per type is the default used when a knowledge names none.",
+      "item": [
+        {
+          "name": "List connections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections"],
+              "query": [
+                { "key": "type", "value": "GMAIL", "disabled": true }
+              ]
+            },
+            "description": "Lists all connections. Enable the optional ?type= query param to filter by connector type (GMAIL, GOOGLE_DRIVE, SLACK, NOTION, LOCAL_FS). An unknown type value is a 400."
+          }
+        },
+        {
+          "name": "Get connection by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Create connection",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Work Gmail\",\n  \"type\": \"GMAIL\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\",\n    \"accessToken\": \"{{googleAccessToken}}\"\n  },\n  \"config\": {\n    \"clientId\": \"{{googleClientId}}\",\n    \"clientSecret\": \"{{googleClientSecret}}\"\n  },\n  \"makeDefault\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections"]
+            },
+            "description": "Verifies the credentials, then persists and assigns the type default. type is one of GMAIL, GOOGLE_DRIVE, SLACK, NOTION; a no-connection connector like LOCAL_FS (or bad creds) is a 400.\n\nauth is opaque per-connector credentials (e.g. refreshToken/accessToken); config is opaque connector-level settings (e.g. an OAuth client), or null. The first connection of a type becomes its default; makeDefault forces it."
+          }
+        },
+        {
+          "name": "Update connection (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Work Gmail (renamed)\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\"\n  },\n  \"config\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Partial edit with patch semantics: an absent (or null) field is left unchanged; type is immutable and not editable here. Changing auth triggers re-verification of the credentials (400 on failure). An unknown id is a 404."
+          }
+        },
+        {
+          "name": "Set connection as default",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id/default",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id", "default"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Make this connection the default for its type. An unknown id is a 404."
+          }
+        },
+        {
+          "name": "Delete connection",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "An unknown id is a 404; a connection still bound to one or more knowledges is a 409."
+          }
+        }
+      ]
+    },
+    {
       "name": "Search",
       "item": [
         {
@@ -115,7 +240,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID)."
+            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer."
           }
         }
       ]
@@ -178,6 +303,132 @@
               "host": ["{{baseUrl}}"],
               "path": ["q", "health"]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Google Auth",
+      "description": "Helper to mint a short-lived Google access token from a refresh token, used by the raw Drive/Gmail requests below. These call Google directly, not the Personal Search Assistant app.",
+      "item": [
+        {
+          "name": "Refresh access token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "    pm.collectionVariables.set('googleAccessToken', json.access_token);",
+                  "    console.log('Saved googleAccessToken (expires in ' + json.expires_in + 's)');",
+                  "} else {",
+                  "    console.log('No access_token in response: ' + JSON.stringify(json));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "client_id", "value": "{{googleClientId}}" },
+                { "key": "client_secret", "value": "{{googleClientSecret}}" },
+                { "key": "refresh_token", "value": "{{googleRefreshToken}}" },
+                { "key": "grant_type", "value": "refresh_token" }
+              ]
+            },
+            "url": {
+              "raw": "https://oauth2.googleapis.com/token",
+              "protocol": "https",
+              "host": ["oauth2", "googleapis", "com"],
+              "path": ["token"]
+            },
+            "description": "Exchanges a long-lived refresh token for a short-lived access token. Set googleClientId, googleClientSecret and googleRefreshToken first (the OAuth client must include the Drive/Gmail read scopes). The test script stores access_token into the googleAccessToken collection variable, which the raw Drive/Gmail requests use as their Bearer token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Connector Responses (raw Google API)",
+      "description": "Direct calls to Google's Drive & Gmail REST APIs that mirror exactly what the connectors send — same field subset, params and query shape — so you can inspect the raw responses the connectors parse and map. Run 'Google Auth > Refresh access token' first to populate {{googleAccessToken}}; every request in this folder inherits it as a Bearer token.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          { "key": "token", "value": "{{googleAccessToken}}", "type": "string" }
+        ]
+      },
+      "item": [
+        {
+          "name": "Google Drive - files.list",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.googleapis.com/drive/v3/files?q=trashed%3Dfalse&fields=nextPageToken%2Cfiles(id%2Cname%2CmimeType%2CmodifiedTime%2Csize%2Cversion%2Cmd5Checksum%2CwebViewLink%2Ctrashed)&pageSize=25&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives&spaces=drive&orderBy=modifiedTime%2Cname",
+              "protocol": "https",
+              "host": ["www", "googleapis", "com"],
+              "path": ["drive", "v3", "files"],
+              "query": [
+                { "key": "q", "value": "trashed=false" },
+                { "key": "fields", "value": "nextPageToken,files(id,name,mimeType,modifiedTime,size,version,md5Checksum,webViewLink,trashed)" },
+                { "key": "pageSize", "value": "25" },
+                { "key": "supportsAllDrives", "value": "true" },
+                { "key": "includeItemsFromAllDrives", "value": "true" },
+                { "key": "corpora", "value": "allDrives" },
+                { "key": "spaces", "value": "drive" },
+                { "key": "orderBy", "value": "modifiedTime,name" },
+                { "key": "pageToken", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Mirrors HttpDriveApi.listFiles: the exact field subset and shared-drive params the connector requests. Returns { files: [ { id, name, mimeType, modifiedTime, size, version, md5Checksum, webViewLink, trashed } ], nextPageToken }.\n\nAdjust q to scope like the connector does, e.g. \"'root' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'\". Enable pageToken to fetch the next page."
+          }
+        },
+        {
+          "name": "Gmail - messages.list",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&labelIds=INBOX",
+              "protocol": "https",
+              "host": ["gmail", "googleapis", "com"],
+              "path": ["gmail", "v1", "users", "me", "messages"],
+              "query": [
+                { "key": "maxResults", "value": "10" },
+                { "key": "labelIds", "value": "INBOX" },
+                { "key": "q", "value": "after:1704067200", "disabled": true },
+                { "key": "pageToken", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Mirrors HttpGmailApi.listMessages against users/me. Returns the lightweight { messages: [ { id, threadId } ], nextPageToken, resultSizeEstimate } — the id/threadId refs the connector then fetches individually. Repeat labelIds for multiple labels; enable q for a Gmail search predicate (the connector passes after:/before: here); enable pageToken to page. Copy an id into gmailMessageId for 'messages.get'."
+          }
+        },
+        {
+          "name": "Gmail - messages.get",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://gmail.googleapis.com/gmail/v1/users/me/messages/:id?format=full",
+              "protocol": "https",
+              "host": ["gmail", "googleapis", "com"],
+              "path": ["gmail", "v1", "users", "me", "messages", ":id"],
+              "query": [
+                { "key": "format", "value": "full" }
+              ],
+              "variable": [{ "key": "id", "value": "{{gmailMessageId}}" }]
+            },
+            "description": "Mirrors HttpGmailApi.getMessage (format=full). Returns the full message — id, threadId, labelIds, snippet, internalDate, historyId and the payload MIME tree with headers and base64url body parts — exactly what GmailConnector walks to build the searchable text. Set gmailMessageId from a messages.list result."
           }
         }
       ]
