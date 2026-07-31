@@ -6,85 +6,88 @@ A prioritized backlog, ordered by priority × usefulness. Effort is a rough esti
 
 ## Where the project is today
 
-The ingestion + indexing engine is mature and well-tested (~6.4k LOC main, ~3k test):
+The ingestion + indexing engine is mature and well-tested (~10.5k LOC main, ~4.9k test):
 cursor scheduling, leasing/fencing, concurrency permits, fairness, forward + backfill
 sync, hybrid retrieval with RRF fusion, Mongo ↔ OpenSearch, and knowledge-edit Phase 1
 are all real.
 
-The pieces that make it a *search assistant* rather than a keyword indexer are still
-stubs or baselines:
+**The original Tier 1 is done.** The three items that made this a search assistant rather than
+a keyword indexer have shipped:
 
-- **Grounded answers throw.** `StubLlmProvider.complete` raises `UnsupportedOperationException`,
-  so `answer: true` fails. The agent's grounded-prompt-with-citations wiring already exists.
-- **"Semantic" search isn't semantic.** `LocalHashingEmbeddingProvider` is a hashing trick,
-  not a real model, so SEMANTIC / HYBRID modes don't retrieve on meaning.
-- **One connector.** Only `LOCAL_FS` exists; `GMAIL`, `SLACK`, `GOOGLE_DRIVE`, `NOTION` are
-  enum values with no adapter.
-- **No reranker, no auth, no evaluation harness.**
+- **Real semantic embeddings.** `OnnxEmbeddingProvider` runs `bge-base-en-v1.5` locally in-JVM via
+  DJL + ONNX Runtime, with `OpenAiCompatibleEmbeddingProvider` as the hosted alternative and
+  `LocalHashingEmbeddingProvider` kept as the offline dev/test baseline. The active one is chosen by
+  `app.embedding.provider`; the `knn_vector` mapping is pinned at **768** dimensions.
+- **Real LLM provider.** `OpenAiCompatibleLlmProvider` speaks to Groq / Gemini / Ollama, so
+  `answer: true` returns a grounded, cited answer. `StubLlmProvider` survives only as the explicit
+  `app.llm.provider=none` opt-out.
+- **Credentialed connectors.** `GmailConnector` and `GoogleDriveConnector` ship alongside
+  `LocalFsConnector`, proving the `SourceConnector` SPI beyond the no-auth case. Credentials live on
+  a reusable `Connection` with OAuth refresh. `SLACK` and `NOTION` remain enum values with no adapter.
 
-## Tier 1 — Make the core promise real (do now)
+Also since: six per-format content parsers with a Tika fallback, four chunking strategies selectable
+per knowledge, and knowledge editing (`PATCH /api/knowledge/{id}`).
 
-1. **Real semantic embeddings** (M). Swap `LocalHashingEmbeddingProvider` for an ONNX
-   `all-MiniLM-L6-v2` (local, private) or a hosted embedding API. Config is already pinned
-   to 384-dim for the OpenSearch `knn_vector` mapping, so this is a clean `EmbeddingProvider`
-   bean swap plus a re-index. Without it, SEMANTIC / HYBRID modes don't retrieve on meaning.
+Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
 
-2. **Real LLM provider** (S–M). Implement `LlmProvider` against Ollama (local) or a hosted
-   REST endpoint. Today `answer: true` throws. `DefaultSearchAgent` already builds the
-   grounded, cited prompt — it just needs a live provider.
+## Tier 1 — Quality of results (do now)
 
-These two are the whole reason to build this over `grep` + OpenSearch. Everything below
-only matters once they are real.
+1. **Evaluation harness** (M). Recall / relevance measurement. Now the most valuable item on the
+   list: embedding model, chunking strategy, and the reranker below are all tunable knobs, and none
+   of them can be shown to help without measurement. Listed as a concern in `DESCRIPTION.md`;
+   nothing exists yet, so quality is currently unmeasured.
 
-## Tier 2 — Breadth & quality
+2. **Cross-encoder reranker** (M). Replace `NoopReranker`. The biggest precision win now that
+   embeddings are real, and it swaps in behind the existing `Reranker` port with no caller changes.
+   Do it after (1) so the gain is measurable.
 
-3. **A second connector — Gmail or Google Drive** (L). Most personal data lives in the cloud,
-   not the local filesystem. Also proves the pluggable `SourceConnector` interface beyond the
-   easy no-auth case.
+## Tier 2 — Breadth & correctness
 
-4. **Cross-encoder reranker** (M). Replace `NoopReranker`. Biggest precision win once
-   embeddings are real, and it swaps in behind the existing `Reranker` port with no caller
-   changes.
+3. **Knowledge-edit Phase 2 purge** (M). Tracked gap L2: after a scope shrink, stale entities /
+   chunks stay searchable. The staleness marks (`syncGeneration` / `lastSeenGeneration`) are already
+   written, so this is the deliberate completion-gated cleanup path.
 
-5. **Evaluation harness** (M). Recall / relevance measurement so items 1, 3, and 4 can be
-   proven to help. Listed as a concern in `DESCRIPTION.md` but nothing exists yet — quality is
-   currently unmeasured.
+4. **OCR for images and scanned PDFs** (S–M). Tracked gap L3: image-only content extracts to nearly
+   nothing today. Wire Tesseract into Tika as a higher-priority `ContentParser` — the CDI registry
+   picks it up with no caller changes.
 
-## Tier 3 — Correctness & productionization
+5. **A third connector — Slack or Notion** (M). Cheaper than the first credentialed connector was:
+   `Connection`, OAuth refresh, and the `TokenWindowGrabber` base class already exist.
 
-6. **Knowledge-edit Phase 2 purge** (M). Tracked gap L2: after a scope shrink, stale
-   entities / chunks stay searchable. The staleness marks (`syncGeneration` /
-   `lastSeenGeneration`) are already written, so this is the deliberate completion-gated
-   cleanup path.
+6. **Auth & access control** (M–L). None today; `DESCRIPTION.md` calls it "critical for private
+   personal data."
 
-7. **Auth & access control** (M–L). None today; `DESCRIPTION.md` calls it "critical for
-   private personal data."
+## Tier 3 — Productionization
 
-8. **Observability** (S–M). Micrometer metrics + OpenTelemetry tracing across the
+7. **Observability** (S–M). Micrometer metrics + OpenTelemetry tracing across the
    ingest / index / search paths.
 
-9. **Conversation memory / multi-turn** (M). The agent is single-shot; the design calls for
-   multi-turn context.
+8. **HTTP-layer tests** (S). `rest-assured` is a declared dependency with zero usages and
+   `api.resource.*` has no coverage at all — including the exception → status mapping.
 
-10. **OCR for images** (S). Wire Tesseract into Tika so scanned PDFs and images are parseable
-    (added as a higher-priority `ContentParser`, no caller changes).
+9. **CI** (S). No pipeline exists; running `./gradlew build` (which covers `spotlessCheck` + tests)
+   on every push is the whole ask.
+
+10. **Conversation memory / multi-turn** (M). The agent is single-shot; the design calls for
+    multi-turn context.
+
+11. **Large-file handling** (M). Tracked gap L4: whole-file-in-memory parsing, and oversized files
+    are silently skipped with no signal surfaced to the user.
 
 ## Tier 4 — Scale & infra (later)
 
-11. **Async pipeline via Kafka / RabbitMQ** (L), replacing Mongo polling. The stage boundary
+12. **Redis-backed `PermitService`** (M). `InMemoryPermitService` is single-node only, so this is
+    the prerequisite for running more than one instance.
+13. **Async pipeline via Kafka / RabbitMQ** (L), replacing Mongo polling. The stage boundary
     and ports don't change.
-12. **Redis KV cache** (S) for hot lookups, once hot paths are identified.
-13. **L1 reconcile sweep** (S) for the pause/resume park-vs-rearm race. Self-healing today,
+14. **Redis KV cache** (S) for hot lookups, once hot paths are identified.
+15. **Schedule-driven discovery** (S). Tracked gap L5: `IterableDiscoveryScheduler` runs on a flat
+    60-minute interval regardless of a knowledge's configured schedule.
+16. **L1 reconcile sweep** (S) for the pause/resume park-vs-rearm race. Self-healing today,
     so low urgency.
-14. **Rate limiting / API gateway, k8s manifests, a thin query UI**, plus the remaining
-    connectors (Slack, Notion).
-
-## Suggested (not in existing docs)
-
-The evaluation harness (5), conversation memory (9), the reconcile sweep (13), and a minimal
-query UI.
+17. **Rate limiting / API gateway, k8s manifests, a thin query UI.**
 
 ## Recommended next step
 
-Do **#1 (real embeddings)** and **#2 (real LLM)** first — smallest surface, and together they
-flip the product from "indexes text" to "answers questions about your data."
+Do **#1 (evaluation harness)** first. Every remaining quality item — the reranker, chunking-strategy
+choice, embedding-model choice — is a guess until there is a number to move.

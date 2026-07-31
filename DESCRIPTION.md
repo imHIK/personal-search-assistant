@@ -1,5 +1,10 @@
 # Personal Search Assistant
 
+> **This is the original vision document** — the target shape, not the as-built state. It is kept as
+> written. For what actually exists today see [`README.md`](README.md) and
+> [`ARCHITECTURE.md`](ARCHITECTURE.md); for what's left, [`ROADMAP.md`](ROADMAP.md) and
+> [`docs/limitations.md`](docs/limitations.md).
+
 ## Overview
 A personal search system that indexes data from local and cloud sources, then runs
 intelligent (agentic) search across all of it to return the best possible answer.
@@ -97,3 +102,16 @@ Finds the most relevant chunks for a query.
    could collapse this — evaluate before committing.
 3. **First connector**: which single source to build end-to-end first (recommend local
    filesystem — no auth/API complexity) to prove the full pipeline.
+
+### How they were decided
+
+1. **Both, selectable at runtime.** Embeddings default to a local in-JVM ONNX model
+   (`bge-base-en-v1.5`) with a hosted OpenAI-compatible provider as an alternative; the LLM is any
+   OpenAI-compatible endpoint, so a local Ollama is a config change rather than a code change.
+   Providers sit behind `EmbeddingProvider` / `LlmProvider` and are chosen by `app.embedding.provider`
+   / `app.llm.provider`.
+2. **Mongo + OpenSearch, no KV.** Two stores, not three: Mongo owns truth and lifecycle, OpenSearch
+   serves both BM25 and k-NN from one index — which is the whole reason to prefer it over pgvector
+   here. Redis stays on the roadmap for hot lookups and for a multi-node `PermitService`.
+3. **Local filesystem first**, as recommended — then Gmail and Google Drive, which forced the
+   reusable `Connection` credential model out of the design.

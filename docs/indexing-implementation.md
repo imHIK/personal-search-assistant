@@ -33,7 +33,7 @@ All packages below are under `io.personalassistant`.
    ── STAGE 2: INDEXING ─────────▼──────────────────────────        │
    IndexingJob (claim INGESTED / needsReindex / DELETED)            │
      → IndexingRunner.indexEntity                                   │
-         → ParserRegistry (Tika / plain-text)  extract text         │
+         → ParserRegistry (per-format, Tika fallback)  extract     │
          → ChunkingStrategy  split                                  │
          → EmbeddingProvider.embedAll  vectors                      │
          → SearchIndex.indexChunks  (OpenSearch, idempotent)        │
@@ -55,7 +55,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §2/§4 **Cursor** (first-class) | `domain.model.Cursor` + `enums.CursorStatus`, `enums.CursorDirection` |
 | §4 **Cursor position** (source-defined) | `domain.model.CursorPosition` — free-form, multi-field pagination state the connector owns |
 | §2 **Iterable** | `ingestion.connector.SourceIterable` |
-| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabRequest`, `GrabPage` |
+| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabContext`, `GrabResult`, and the `TokenWindowGrabber` / `TimeWindowGrabber` bases |
 | §2/§7 **PermitService** | `common.concurrency.PermitService` + `InMemoryPermitService`, `Permit`, `ScopeLimit` |
 | §3 Knowledge object + lifecycle | `app.DefaultKnowledgeService` (`add`: verify → anchor=now → discover → cursors → ACTIVE) |
 | §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / SUSPENDED / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
@@ -134,6 +134,10 @@ docker compose up -d        # MongoDB :27017, OpenSearch :9200
 On startup `MongoIndexInitializer` ensures the Mongo indexes and `OpenSearchIndexInitializer`
 creates `chunks_v1` + the `chunks` alias (it logs a warning and continues if OpenSearch is down).
 
+The default embedding provider (`onnx-bge`) needs an exported model directory and ships with
+`app.embedding.onnx.model-path` empty, so it throws on the first embed until you set it. For local
+dev without the model, set `app.embedding.provider=local-hashing`. See [`providers.md`](./providers.md).
+
 ### Run the tests
 ```bash
 ./gradlew test
@@ -151,12 +155,20 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 |---|---|
 | `POST /api/knowledge` | Register a knowledge (validates, discovers, creates cursors, activates) |
 | `GET /api/knowledge` / `GET /api/knowledge/{id}` | List / fetch knowledge |
+| `PATCH /api/knowledge/{id}` | Edit a knowledge — see [`knowledge-edit-design.md`](./knowledge-edit-design.md) |
 | `POST /api/knowledge/{id}/pause` / `.../resume` | Pause or resume scheduling |
 | `DELETE /api/knowledge/{id}` | Soft-delete + tear down chunks, entities, cursors |
+| `GET /api/connections` / `GET /api/connections/{id}` | List / fetch reusable credentials |
+| `POST /api/connections` | Create a connection (verified against the source) |
+| `PATCH /api/connections/{id}` / `DELETE /api/connections/{id}` | Edit / remove a connection |
+| `POST /api/connections/{id}/default` | Make it the default connection for its `SourceType` |
 | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (incremental trigger) |
-| `POST /api/index/entities/{id}/reindex` | Flag one entity for re-index (no re-fetch) |
+| `POST /api/index/entities/{id}/reindex` | Flag one entity for re-index (no re-fetch) — the opt-in path after a chunking change |
 | `DELETE /api/index/entities/{id}` | Tombstone an entity (chunks removed by the indexing stage) |
 | `POST /api/search` | Hybrid / lexical / semantic search |
+| `GET /q/health` | SmallRye health / readiness |
+
+`personal-search-assistant.postman_collection.json` at the repo root exercises all of these.
 
 ### Example: add a local-filesystem knowledge
 ```bash
@@ -190,7 +202,7 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.ingestion.lease-seconds` | `900` | Cursor lease duration; must exceed the worst-case single-page fetch time (the per-page renew covers multi-page leases; writes are lease-fenced) |
 | `app.ingestion.retry-limit` | `5` | Cursor failures before `FAILED` |
 | `app.ingestion.permits.global` / `.connector` / `.knowledge` | `8` / `4` / `2` | Scoped ingestion concurrency ceilings |
-| `app.ingestion.permits.ttl-seconds` | `900` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
+| `app.ingestion.permits.ttl-seconds` | `14400` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
 | `app.scheduler.forward-interval` | `1m` | Scheduler **tick** granularity — how often it checks which knowledges are due. Bounds the finest schedule, not how often any one source syncs |
 | `app.scheduler.default-interval` | `1d` | Global-default forward-sync interval (last resort: used when a knowledge has no custom schedule and its connector declares no `defaultSchedule()`) |
 | `app.scheduler.default-cron` | _(empty)_ | Optional global-default cron; if set, wins over `default-interval`. Cron beats interval at every tier |
@@ -200,16 +212,24 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.indexing.per-knowledge` | `5` | Per-knowledge claim quota per tick (round-robin fairness) |
 | `app.indexing.max-knowledges` | `200` | Cap on distinct knowledges scanned per indexing tick |
 | `app.indexing.concurrency` | `4` | Global indexing concurrency ceiling |
-| `app.indexing.permits.ttl-seconds` | `300` | Indexing permit TTL; held for a whole tick (not renewed mid-tick), so size above the worst-case tick time |
+| `app.indexing.permits.ttl-seconds` | `1200` | Indexing permit TTL; held for a whole tick (not renewed mid-tick), so size above the worst-case tick time |
 | `app.indexing.embed-batch` | `64` | Chunks per embedding call |
-| `app.indexing.lease-seconds` | `120` | Entity indexing lease duration |
+| `app.indexing.lease-seconds` | `900` | Entity indexing lease duration |
 | `app.indexing.retry-limit` | `5` | Indexing failures before `FAILED` |
-| `app.indexing.backoff-seconds` | `30` | Delay before a failed entity is re-claimable |
+| `app.indexing.backoff-seconds` | `300` | Delay before a failed entity is re-claimable |
 | `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
 | `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
-| `app.embedding.model` / `.dimension` | `local-hashing-v1` / `384` | Embedding identity; **must** match the OpenSearch `knn_vector` mapping |
+| `app.embedding.provider` | `onnx-bge` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `onnx-bge` (local in-JVM ONNX) / `openai-embed` (hosted) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
+| `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v1` is created — changing to a different-width model needs a new physical index + alias flip + full re-index |
+| `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
+| `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
+| `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `text-embedding-004` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Also 768-dim, so interchangeable with the ONNX default without a re-index |
+| `app.llm.provider` | `openai-compat` | `openai-compat` (hosted Groq/Gemini or local Ollama) or `none` (`StubLlmProvider`, disables `answer: true`) |
+| `app.llm.base-url` / `.model` / `.api-key` | Groq / `llama-3.3-70b-versatile` / `${GROQ_API_KEY:}` | Grounded-answer LLM. Point `base-url` at `http://localhost:11434/v1` for Ollama — no code change |
+| `app.ingestion.google.client-id` / `.client-secret` | `${GOOGLE_OAUTH_CLIENT_ID:}` / `${GOOGLE_OAUTH_CLIENT_SECRET:}` | App-level OAuth fallback used to mint Gmail/Drive access tokens from a refresh token when the connection's auth blob carries no client of its own |
+| `app.ingestion.google-drive.max-file-bytes` / `.max-folders` | `26214400` / `500` | Drive download size cap (oversized files are silently skipped — see [`limitations.md`](./limitations.md) L4) and the discovery folder-walk bound |
 
 ---
 
@@ -232,18 +252,28 @@ can work the way its source does:
   (`DefaultKnowledgeService`) only creates the cursors it declares — no backfill cursor is made.
 - **`discover()`** — return whatever iterables make sense: many sub-streams (channels, folders,
   labels) or a single one if the source has no natural partitioning.
-- **`grab(GrabRequest)`** — paginate however the source works. The connector **owns its pagination
-  state** via `CursorPosition`: a free-form, multi-field bag (`{"pageToken": …}`, `{"offset": …}`,
-  `{"sinceMillis": …, "lastId": …}`, a change-id, an mbox byte offset, …). The core never
-  interprets it — it just persists the `nextPosition` you return and hands it back on the next page.
-  Build positions with `CursorPosition.builder().put(…).build()` and read them with the typed
-  accessors (`getString`/`getLong`/`getInt`). `GrabRequest` is an object (not a parameter list) so
-  new optional inputs can be added later without breaking existing connectors.
+- **`grab(GrabContext) → GrabResult`** — paginate however the source works. The connector **owns its
+  pagination state** via `CursorPosition`: a free-form, multi-field bag (`{"pageToken": …}`,
+  `{"offset": …}`, `{"sinceMillis": …, "lastId": …}`, a change-id, an mbox byte offset, …). The core
+  never interprets it — it just persists the `nextPosition` you return and hands it back on the next
+  page. Build positions with `CursorPosition.builder().put(…).build()` and read them with the typed
+  accessors (`getString`/`getLong`/`getInt`). `GrabContext` is an object (not a parameter list) so
+  new optional inputs can be added later without breaking existing connectors. **`grab` must be
+  stateless and idempotent** — the same page may be replayed after a crash, and files are passed as
+  a `fileRef` path rather than bytes (Mongo's 16 MB document cap).
+- **`requiresConnection()` / `verifyConnection(Connection)`** — credentialed sources return `true`
+  and get their credentials from a reusable `Connection` rather than from the knowledge. See
+  [`connectors.md`](./connectors.md).
+
+Rather than implement `grab` by hand, most sources extend a ready-made base: **`TokenWindowGrabber`**
+for token-paged APIs (Gmail, Drive) or **`TimeWindowGrabber`** for keyset APIs that resume by
+`(timestamp, id)` with no page token.
 
 Implement those plus `type()` and `verify()`, annotate `@ApplicationScoped`, and add the enum
 constant to `SourceType`. Nothing else changes — the ingestion loop, cursors, permits, indexing and
-search are all source-agnostic. `LocalFsConnector` is a worked example: it defines its position as
-`{"lastModifiedMillis": <long>, "path": <string>}`.
+search are all source-agnostic. `LocalFsConnector` is the simplest worked example (no auth, position
+`{"lastModifiedMillis": <long>, "path": <string>}`); `GmailConnector` and `GoogleDriveConnector` are
+the credentialed, token-paged ones.
 
 ---
 
@@ -258,5 +288,6 @@ seams already in place:
   `IndexingRunner.extractText` before extraction.
 - **Metrics endpoints** beyond the current counters/logging (e.g. Micrometer gauges for lag and
   queue depth, surfaced through the existing health/metrics infrastructure).
-- **Redis-backed `PermitService`** for multi-node deployments.
-- **A real semantic embedding model** in place of the offline hashing baseline.
+- **Redis-backed `PermitService`** for multi-node deployments. The in-memory implementation is
+  single-node only.
+- **A cross-encoder `Reranker`** in place of `NoopReranker`.

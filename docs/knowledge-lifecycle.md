@@ -134,15 +134,16 @@ Resolve the `SourceIterable` for the cursor, then loop up to `batchesPerLease` p
 ```
 position = cursor.position            (CursorPosition.start() on the very first run)
 repeat up to batchesPerLease times:
-    page = connector.grab(GrabRequest(knowledge, iterable, direction, position, maxItems))  ◄── SOURCE SIDE
-    for each RawItem in page.items:    persist as an Entity (upsert by knowledgeId+externalId)
-    position = page.nextPosition        (source-defined)
+    page = connector.grab(GrabContext(knowledge, iterableId, attributes, position,
+                                      seedWindow, maxItems))                      ◄── SOURCE SIDE
+    for each RawItem in page.items():  persist as an Entity (upsert by knowledgeId+externalId)
+    position = page.cursor()            (source-defined)
     owned = cursors.advancePosition(id, worker, position, …, newExpiry)
                                         ◄── ONE fenced write: persist position + bump stats + renew
                                             lease — but only if I still own the lease
     if not owned:  STOP (don't release)  ◄── lost the lease; the new owner continues
     permit heartbeat
-    if not page.hasMore:  set resting status and stop
+    if not page.hasMore():  set resting status and stop
 ```
 
 > **Why the lease is renewed each page — and *fenced*.** When a worker claims a cursor it gets a
@@ -310,8 +311,13 @@ code you write for a new integration is a `SourceConnector` (plus a `SourceType`
 | **Whether iterables grow over time** | **Source** — `hasDynamicIterables` (framework reconciles them) |
 | **Per-source rate limiting / 429 backoff** | **Source** — inside `grab` (a connector-level concern) |
 | **Detecting deletes (tombstones)** | **Source** — emit `RawItem.tombstone(externalId)` |
+| **Credentials for authenticated sources** | **Framework** — `Connection` + `ConnectionResolver`; the source declares `requiresConnection()` and validates via `verifyConnection` |
 
 ### The connector contract (what you implement)
+
+Written out in full below to show the whole surface. In practice most sources don't implement `grab`
+by hand: extend **`TokenWindowGrabber`** for token-paged APIs (as Gmail and Drive do) or
+**`TimeWindowGrabber`** for keyset APIs that resume by `(timestamp, id)` with no page token.
 
 ```java
 @ApplicationScoped
@@ -333,18 +339,21 @@ public class MySourceConnector implements SourceConnector {
         return List.of(new SourceIterable("all", "All items", Map.of()));
     }
 
-    @Override public GrabPage grab(GrabRequest request) {
-        CursorPosition pos = request.position();                  // resume point (start() first time)
+    @Override public GrabResult grab(GrabContext context) {
+        CursorPosition pos = context.cursor();                    // resume point (start() first time)
         String token = pos.getString("pageToken");                // YOUR cursor shape
 
-        // 1. call the source API for one page, honoring request.maxItems and the anchor boundary:
+        // 1. call the source API for one page, honoring context.maxItems() and the anchor boundary
+        //    seeded by context.seedWindow():
         //      forward  → items at/after knowledge.anchor()
         //      backward → items before knowledge.anchor()
         // 2. map each source record → RawItem (see below)
         // 3. return items + next position + whether more remain
+        //
+        // Must be stateless and idempotent — this page may be replayed after a crash.
 
         CursorPosition next = CursorPosition.builder().put("pageToken", nextToken).build();
-        return new GrabPage(items, next, moreRemain);
+        return new GrabResult(items, next, moreRemain);
     }
 }
 ```

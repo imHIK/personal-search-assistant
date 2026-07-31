@@ -1,6 +1,23 @@
 plugins {
     id 'java'
     id 'io.quarkus'
+    id 'com.diffplug.spotless' version '7.2.1'
+}
+
+// Formatting hygiene. Deliberately NOT a full reformatter: the hand-maintained layout and dense
+// Javadoc here are the house style, and both palantir-java-format and google-java-format currently
+// blow up on this JDK (NoSuchMethodError on com.sun.tools.javac Log internals). These four steps are
+// the non-destructive subset — they enforce the import convention already used everywhere (static
+// first, then one alphabetical block) and kill trailing whitespace. `./gradlew spotlessApply` fixes,
+// `spotlessCheck` verifies and is wired into `check` / `build` by the plugin.
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+        removeUnusedImports()
+        importOrder('\\#', '')
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
 }
 
 repositories {

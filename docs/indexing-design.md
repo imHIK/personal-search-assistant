@@ -34,7 +34,9 @@ aligns vocabulary with the existing codebase. Open decisions are marked **[DECID
 | **Chunk** | Indexable unit derived from an entity at indexing time | existing `domain.model.Chunk` |
 | **PermitService** | Reusable concurrency limiter with leases | new (`common`) |
 
-> Renaming `Source`→`Knowledge` and `Document`→`Entity` is fine; the model is still stubs.
+> The "existing code" column records what this design replaced. The rename has since landed —
+> `Source` and `Document` no longer exist anywhere in the codebase, and `Knowledge`, `Iterable`,
+> `Cursor`, and `Entity` are the live vocabulary.
 
 ---
 

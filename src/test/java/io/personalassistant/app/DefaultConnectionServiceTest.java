@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService.ConnectionEdit;
 import io.personalassistant.domain.service.ConnectionService.NewConnection;

@@ -73,27 +73,41 @@ can't mass-delete), and (b) removes parked (`RETIRED`) iterables' kept data.
 
 ---
 
-## L3 — No format-specific parsers (everything funnels through Tika)
+## L3 — No OCR, and no structure-aware extraction below the per-format layer
+
+> **Superseded in part.** The original form of this limitation ("only `PlainTextParser` and a single
+> general-purpose `TikaContentParser` exist") no longer holds — the per-format parser layer described
+> as the candidate fix has since been built. What remains is the narrower gap below.
 
 **Area:** Indexing · content parsing (`indexing/parser/*` — `ContentParser`, `CdiParserRegistry`,
-`TikaContentParser`, `PlainTextParser`)
+`TikaSupport`, `TikaContentParser`)
 
-**What:** Only two parsers exist: `PlainTextParser` and a single general-purpose `TikaContentParser`
-that handles PDF/DOCX/HTML/spreadsheets/… all through Apache Tika's generic extraction path. There is
-no dedicated parser per file type. The registry is already built for this — `ContentParser` beans are
-discovered via CDI and selected by MIME type, with `priority()` letting a specific parser win over the
-general fallback — so the extension points exist; they're just not populated yet.
+**What:** Six parsers now ship and are selected by MIME type through `CdiParserRegistry`, lowest
+`priority()` first: `PlainTextParser` (0), then `PdfContentParser` / `WordDocumentParser` /
+`SpreadsheetContentParser` / `PresentationParser` / `HtmlContentParser` (all 10), with
+`TikaContentParser` (100) as the catch-all fallback for types nothing else claims — RTF, EPUB,
+e-mail, and the long tail. See [`parsing-and-chunking.md`](./parsing-and-chunking.md).
 
-**Impact:** Low–Medium. The pipeline is correct, but extraction *quality* is whatever Tika's generic
-path yields. Format structure (tables, headings, slide/page boundaries, spreadsheet cells) can be
-flattened or dropped, which degrades chunking and search relevance for those formats. No data loss.
+Two gaps remain:
 
-**Why we left it:** Tika covers the long tail of formats cheaply with one implementation. Per-format
-parsers are worth adding only where quality demands it, so we deferred pending the review.
+1. **No OCR.** Scanned PDFs and images extract to little or nothing — Tesseract is not wired into
+   Tika, so image-only content is effectively unsearchable.
+2. **Structure is still flattened.** The per-format parsers improve extraction over the generic path
+   but still emit plain text. Tables, headings, slide/page boundaries, and spreadsheet cell topology
+   are not carried through to chunking as structure, so a chunk boundary can land mid-table.
 
-**Candidate approaches (for later):** add format-specific `ContentParser` beans (e.g. dedicated
-PDF / DOCX / spreadsheet parsers) with a lower `priority()` than Tika for their MIME types. The CDI
-registry auto-discovers them and prefers them over the fallback — no wiring changes required.
+**Impact:** Low–Medium. Scanned documents are silently near-empty rather than failing loudly.
+Structure loss degrades chunk coherence and therefore retrieval precision on tabular and slide
+content. No data loss in either case.
+
+**Why we left it:** OCR adds a heavyweight native dependency for a format that is uncommon in typical
+personal corpora, and structure-preserving chunking is a larger design question (it changes the
+`ParsedContent` contract, not just a parser).
+
+**Candidate approaches (for later):** wire Tesseract in as a higher-priority image/PDF
+`ContentParser` — the CDI registry auto-discovers it and prefers it over the fallback with no wiring
+changes; and extend `ParsedContent` to carry structural markers that a structure-aware
+`ChunkingStrategy` can split on, rather than splitting a flat string.
 
 ---
 
