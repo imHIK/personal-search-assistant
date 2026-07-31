@@ -34,7 +34,9 @@ aligns vocabulary with the existing codebase. Open decisions are marked **[DECID
 | **Chunk** | Indexable unit derived from an entity at indexing time | existing `domain.model.Chunk` |
 | **PermitService** | Reusable concurrency limiter with leases | new (`common`) |
 
-> Renaming `Source`→`Knowledge` and `Document`→`Entity` is fine; the model is still stubs.
+> The "existing code" column records what this design replaced. The rename has since landed —
+> `Source` and `Document` no longer exist anywhere in the codebase, and `Knowledge`, `Iterable`,
+> `Cursor`, and `Entity` are the live vocabulary.
 
 ---
 
@@ -77,7 +79,7 @@ A cursor is **position + lease + status**, not just a position. One cursor per
   "iterableId": "channel_C123",        // identifies the sub-stream
   "direction": "BACKWARD | FORWARD",
   "position": "<opaque source token>", // page token / timestamp / change id
-  "status": "AVAILABLE | IN_PROGRESS | IDLE | EXHAUSTED | FAILED",
+  "status": "AVAILABLE | IN_PROGRESS | IDLE | SUSPENDED | EXHAUSTED | FAILED",
   "lease":  { "owner": "worker-7", "expiresAt": "..." },  // null when free
   "retry":  { "count": 0 },
   "stats":  { "lastRunAt": "...", "fetched": 0 },

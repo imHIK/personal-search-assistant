@@ -27,6 +27,20 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
 
+  # Web UI for OpenSearch (the Compass equivalent). Browse at http://localhost:5601.
+  # Version pinned to match the OpenSearch container — mismatched versions refuse to connect.
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    container_name: psa-opensearch-dashboards
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
+      # Dev only: security plugin is disabled on the OpenSearch node, so disable it here too.
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    depends_on:
+      - opensearch
+
 volumes:
   mongo-data:
   opensearch-data:

@@ -1,26 +1,46 @@
 package io.personalassistant.domain.model;
 
+import io.personalassistant.domain.model.enums.SourceType;
 import java.util.Map;
 
 /**
- * A unit of text derived from a {@code Document}: the thing that gets embedded,
- * indexed, retrieved, and ranked.
+ * An indexable unit derived from an {@link Entity} at indexing time: the thing that gets
+ * embedded, indexed, retrieved and ranked. Chunks are a <em>derived</em> artifact and live
+ * <strong>only in OpenSearch</strong> — never persisted to Mongo (the entity is the source of
+ * truth and chunks can always be regenerated). This record therefore carries everything the
+ * search index needs (denormalized title/uri/sourceType) so the adapter stays thin.
  *
- * @param id         derived id "{documentId}_{ordinal}" for idempotent re-indexing
- * @param documentId owning document
- * @param sourceId   denormalized for fast filtering and cascade deletes
- * @param ordinal    position within the document
- * @param text       the chunk text
+ * @param id         derived id {@code "{entityId}_{ordinal}"} for idempotent re-indexing
+ * @param entityId   owning entity
+ * @param knowledgeId owning knowledge (for filtering / cascade deletes / scope)
+ * @param iterableId owning sub-stream, denormalized so chunks can be bulk-deleted by iterable
+ *                   when it is removed at the source (mirrors {@code Entity.iterableId})
+ * @param sourceType connector type, denormalized for filtering
+ * @param ordinal    position within the entity
+ * @param text       the chunk text (BM25 field)
  * @param tokenCount approximate token length
  * @param embedding  vector representation (nullable until embedded)
- * @param metadata   chunk-level facets (page, heading…)
+ * @param title      entity title, denormalized for display
+ * @param uri        citation locator, denormalized for display
+ * @param metadata   chunk-level facets (page, heading…) plus carried entity facets
  */
 public record Chunk(
         String id,
-        String documentId,
-        String sourceId,
+        String entityId,
+        String knowledgeId,
+        String iterableId,
+        SourceType sourceType,
         int ordinal,
         String text,
         int tokenCount,
         Embedding embedding,
-        Map<String, Object> metadata) {}
+        String title,
+        String uri,
+        Map<String, Object> metadata) {
+
+    /** Returns a copy of this chunk with the given embedding attached. */
+    public Chunk withEmbedding(Embedding embedding) {
+        return new Chunk(id, entityId, knowledgeId, iterableId, sourceType, ordinal, text,
+                tokenCount, embedding, title, uri, metadata);
+    }
+}

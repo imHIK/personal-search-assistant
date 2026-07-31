@@ -9,6 +9,13 @@ import java.util.List;
  */
 public interface LlmProvider {
 
+    /**
+     * Stable id used to select this provider at runtime via {@code app.llm.provider}
+     * (e.g. {@code "openai-compat"}, {@code "none"}). Distinct from {@link #model()}, which is
+     * the specific model name sent to the endpoint.
+     */
+    String providerId();
+
     String model();
 
     /**

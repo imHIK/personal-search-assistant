@@ -1,33 +1,24 @@
 package io.personalassistant.domain.service;
 
 /**
- * Orchestrates the write path: pull from a source, parse, persist, chunk, embed, index.
- * <p>This is a use-case port. The initial implementation runs synchronously; a later
- * implementation can push work onto a queue (Kafka/RabbitMQ) without changing this
- * contract.
+ * Use-case port for manual indexing operations. The bulk of indexing now runs continuously via
+ * the ingestion/indexing jobs (Mongo-polling); this port exposes the on-demand actions a user or
+ * operator triggers: kick a forward sync, force a re-index, or remove an item.
  */
 public interface IndexingService {
 
-    /**
-     * Run an incremental sync for a single source: fetch new/changed items since the
-     * last cursor and index them.
-     *
-     * @param sourceId the source to sync
-     * @return a summary of the run
-     */
-    IndexRunResult sync(String sourceId);
+    /** Re-arm a knowledge's forward cursors to pull new/changed items now. */
+    SyncTrigger triggerSync(String knowledgeId);
 
-    /** Re-index a single document from its source of truth (e.g. after a parser change). */
-    void reindexDocument(String documentId);
+    /** Flag a single entity for re-indexing (e.g. after a chunking/embedding change). No re-fetch. */
+    void reindexEntity(String entityId);
 
-    /** Remove a document and all its chunks from Mongo and the search index. */
-    void deleteDocument(String documentId);
+    /** Tombstone an entity so the indexing stage removes its chunks from the search index. */
+    void deleteEntity(String entityId);
 
     /**
-     * @param sourceId   the source synced
-     * @param processed  items successfully indexed
-     * @param skipped    items unchanged (checksum match)
-     * @param failed     items that errored
+     * @param knowledgeId the knowledge whose forward cursors were re-armed
+     * @param cursorsArmed how many forward cursors flipped IDLE → AVAILABLE
      */
-    record IndexRunResult(String sourceId, long processed, long skipped, long failed) {}
+    record SyncTrigger(String knowledgeId, int cursorsArmed) {}
 }

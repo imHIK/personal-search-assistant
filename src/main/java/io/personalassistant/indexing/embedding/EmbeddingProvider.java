@@ -10,6 +10,13 @@ import java.util.List;
  */
 public interface EmbeddingProvider {
 
+    /**
+     * Stable id used to select this provider at runtime via {@code app.embedding.provider}
+     * (e.g. {@code "onnx-bge"}, {@code "openai-embed"}, {@code "local-hashing"}). Distinct from
+     * {@link #model()}, which is the specific model label recorded with each vector.
+     */
+    String providerId();
+
     /** Model identifier, recorded alongside every vector for compatibility checks. */
     String model();
 

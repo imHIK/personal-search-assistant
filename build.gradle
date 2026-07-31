@@ -1,6 +1,23 @@
 plugins {
     id 'java'
     id 'io.quarkus'
+    id 'com.diffplug.spotless' version '7.2.1'
+}
+
+// Formatting hygiene. Deliberately NOT a full reformatter: the hand-maintained layout and dense
+// Javadoc here are the house style, and both palantir-java-format and google-java-format currently
+// blow up on this JDK (NoSuchMethodError on com.sun.tools.javac Log internals). These four steps are
+// the non-destructive subset — they enforce the import convention already used everywhere (static
+// first, then one alphabetical block) and kill trailing whitespace. `./gradlew spotlessApply` fixes,
+// `spotlessCheck` verifies and is wired into `check` / `build` by the plugin.
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+        removeUnusedImports()
+        importOrder('\\#', '')
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
 }
 
 repositories {
@@ -22,8 +39,32 @@ dependencies {
     // Health / readiness probes (used by k8s later).
     implementation 'io.quarkus:quarkus-smallrye-health'
 
-    // OpenSearch Java client (query engine). No official Quarkus extension; plain client.
+    // Scheduler — drives the ingestion/indexing poll loops and forward re-arming.
+    implementation 'io.quarkus:quarkus-scheduler'
+
+    // cron-utils — compute the next fire time for a knowledge's custom/connector/global cron
+    // schedule (the forward scheduler obeys per-source cadence). Version is managed by the Quarkus
+    // BOM (quarkus-scheduler already depends on it), so it stays aligned with the platform.
+    implementation 'com.cronutils:cron-utils'
+
+    // OpenSearch clients (query engine). The typed client plus the stable low-level REST client
+    // the SearchIndex adapter speaks the query DSL through.
     implementation 'org.opensearch.client:opensearch-java:2.13.0'
+    implementation 'org.opensearch.client:opensearch-rest-client:2.13.0'
+
+    // Apache Tika — file text extraction (PDF/DOCX/HTML/…) at indexing time.
+    implementation 'org.apache.tika:tika-core:2.9.2'
+    implementation 'org.apache.tika:tika-parsers-standard-package:2.9.2'
+
+    // DJL — local, in-JVM embeddings via ONNX Runtime (OnnxEmbeddingProvider). The BOM aligns
+    // the api / tokenizers / engine versions. tokenizers brings the HuggingFace tokenizer plus the
+    // TextEmbeddingTranslatorFactory (tokenize → model → mean-pool → L2-normalize). onnxruntime-engine
+    // is the runtime that actually executes the sentence-transformer .onnx graph; it is only needed at
+    // run time, so it is a runtimeOnly dependency. Only exercised when app.embedding.provider=onnx-bge.
+    implementation platform('ai.djl:bom:0.28.0')
+    implementation 'ai.djl:api'
+    implementation 'ai.djl.huggingface:tokenizers'
+    runtimeOnly 'ai.djl.onnxruntime:onnxruntime-engine'
 
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.rest-assured:rest-assured'

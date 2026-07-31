@@ -11,9 +11,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Default retriever. For HYBRID mode it runs lexical and vector retrieval independently
- * and merges them with Reciprocal Rank Fusion (RRF) — which avoids having to reconcile
- * BM25 and cosine score scales. LEXICAL/SEMANTIC delegate to a single primitive.
+ * Default retriever. For HYBRID mode it runs lexical and vector retrieval independently and
+ * merges them with Reciprocal Rank Fusion (RRF) — which avoids reconciling BM25 and cosine
+ * score scales. LEXICAL/SEMANTIC delegate to a single primitive.
  */
 @ApplicationScoped
 public class HybridRetriever implements Retriever {
@@ -47,7 +47,7 @@ public class HybridRetriever implements Retriever {
         return scores.entrySet().stream()
                 .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
                 .limit(limit)
-                .map(e -> withScore(byId.get(e.getKey()), e.getValue()))
+                .map(e -> byId.get(e.getKey()).withScore(e.getValue()))
                 .toList();
     }
 
@@ -57,10 +57,5 @@ public class HybridRetriever implements Retriever {
             byId.putIfAbsent(h.chunkId(), h);
             scores.merge(h.chunkId(), 1.0 / (RRF_K + rank + 1), Double::sum);
         }
-    }
-
-    private SearchHit withScore(SearchHit h, double score) {
-        return new SearchHit(h.chunkId(), h.documentId(), h.sourceId(), h.title(),
-                h.snippet(), h.uri(), score, h.metadata());
     }
 }

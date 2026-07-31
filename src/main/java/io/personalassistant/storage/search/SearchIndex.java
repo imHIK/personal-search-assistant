@@ -6,9 +6,12 @@ import io.personalassistant.domain.model.search.SearchQuery;
 import java.util.List;
 
 /**
- * Port over the retrieval engine (OpenSearch today). Separates lexical and vector
- * primitives so a {@link io.personalassistant.retrieval.Retriever} can fuse them however
- * it likes. Swapping to Elasticsearch or a dedicated vector DB means one new adapter.
+ * Port over the retrieval engine (OpenSearch today). Separates lexical and vector primitives
+ * so a {@link io.personalassistant.retrieval.Retriever} can fuse them however it likes.
+ * Swapping to Elasticsearch or a dedicated vector DB means one new adapter.
+ *
+ * <p>Chunks live <em>only</em> here (never in Mongo); the doc id is the {@link Chunk#id()} so
+ * re-indexing the same chunk overwrites idempotently.
  */
 public interface SearchIndex {
 
@@ -21,7 +24,16 @@ public interface SearchIndex {
     /** Semantic k-NN retrieval over the embedding vector. */
     List<SearchHit> vectorSearch(SearchQuery query, float[] vector, int limit);
 
-    void deleteByDocument(String documentId);
+    /** Remove all chunks belonging to one entity (mirrors a Mongo delete/tombstone). */
+    void deleteByEntity(String entityId);
 
-    void deleteBySource(String sourceId);
+    /** Remove all chunks belonging to one knowledge (cascade on knowledge delete). */
+    void deleteByKnowledge(String knowledgeId);
+
+    /**
+     * Remove all chunks belonging to one iterable within a knowledge (cascade when an iterable is
+     * deleted at the source). A single bulk delete-by-query; matches on both ids so iterable ids
+     * are only ever scoped to their knowledge.
+     */
+    void deleteByIterable(String knowledgeId, String iterableId);
 }
