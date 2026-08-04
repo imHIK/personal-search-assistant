@@ -4,6 +4,7 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
 import com.cronutils.parser.CronParser;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.Durations;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.Optional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -44,8 +46,9 @@ public class ScheduleResolver {
     @ConfigProperty(name = "app.scheduler.default-interval", defaultValue = "1d")
     String defaultInterval;
 
-    @ConfigProperty(name = "app.scheduler.default-cron", defaultValue = "")
-    String defaultCron;
+    /** Optional: blank/unset means "no global cron", so interval wins. See {@link ConfigText}. */
+    @ConfigProperty(name = "app.scheduler.default-cron")
+    Optional<String> defaultCron;
 
     @Inject
     public ScheduleResolver(ConnectorRegistry connectors) {
@@ -56,7 +59,7 @@ public class ScheduleResolver {
     public ScheduleResolver(ConnectorRegistry connectors, String defaultInterval, String defaultCron) {
         this.connectors = connectors;
         this.defaultInterval = defaultInterval;
-        this.defaultCron = defaultCron;
+        this.defaultCron = Optional.ofNullable(defaultCron);
     }
 
     /** The effective schedule for a knowledge, applying custom &rarr; connector &rarr; global. */
@@ -76,8 +79,9 @@ public class ScheduleResolver {
 
     /** The global-default tier, read from config. Cron wins over interval if both are configured. */
     public SyncSchedule globalDefault() {
-        if (defaultCron != null && !defaultCron.isBlank()) {
-            return SyncSchedule.ofCron(defaultCron);
+        String cron = ConfigText.orNull(defaultCron);
+        if (cron != null) {
+            return SyncSchedule.ofCron(cron);
         }
         Duration interval = Durations.parse(defaultInterval);
         return SyncSchedule.ofInterval(interval == null ? Duration.ofDays(1) : interval);

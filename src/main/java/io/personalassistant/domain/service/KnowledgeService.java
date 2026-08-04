@@ -1,6 +1,9 @@
 package io.personalassistant.domain.service;
 
+import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,38 @@ public interface KnowledgeService {
      * @return the number of new cursors created
      */
     int reconcileCursors(String id);
+
+    /**
+     * Page this knowledge's entities newest-first, for the console's entity browser.
+     *
+     * <p>{@code limit} is clamped to {@code 1..200} ({@code <= 0} means the default of 50) so a
+     * caller cannot ask for an unbounded page.
+     *
+     * @param status optional status filter; {@code null} means all statuses
+     * @throws java.util.NoSuchElementException if no knowledge with {@code id} exists
+     * @throws IllegalArgumentException          if {@code offset} is negative
+     */
+    EntityPage listEntities(String id, EntityStatus status, int limit, int offset);
+
+    /**
+     * This knowledge's cursors — one per {@code (iterableId, direction)} — ordered by
+     * {@code (iterableId, direction)} so the console renders them stably. This is the only view of
+     * real sync progress: the knowledge's {@code stats} say how many entities exist, but only the
+     * cursors say whether the backward walk has finished.
+     *
+     * @throws java.util.NoSuchElementException if no knowledge with {@code id} exists
+     */
+    List<Cursor> listCursors(String id);
+
+    /**
+     * One page of a knowledge's entities.
+     *
+     * @param items  the page, newest-first
+     * @param total  how many entities match the filter, so the caller can render page controls
+     * @param limit  the clamped page size actually applied
+     * @param offset the offset actually applied
+     */
+    record EntityPage(List<EntitySummary> items, long total, int limit, int offset) {}
 
     /**
      * The inputs needed to register a knowledge.

@@ -85,7 +85,11 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
     60-minute interval regardless of a knowledge's configured schedule.
 16. **L1 reconcile sweep** (S) for the pause/resume park-vs-rearm race. Self-healing today,
     so low urgency.
-17. **Rate limiting / API gateway, k8s manifests, a thin query UI.**
+17. **Rate limiting / API gateway, k8s manifests.** ~~A thin query UI~~ — **done**: the React
+    console in `frontend/` covers search, source lifecycle, indexing progress, an item browser and
+    account management. See the *Web console* section in `README.md`. Still open on top of it: the
+    Google OAuth redirect flow (accounts currently take a pasted refresh token), and surfacing
+    webhook settings once an endpoint exists to receive them.
 
 ## Recommended next step
 

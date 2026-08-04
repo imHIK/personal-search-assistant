@@ -1,19 +1,24 @@
 package io.personalassistant.api.resource;
 
+import io.personalassistant.api.dto.CursorDto;
+import io.personalassistant.api.dto.EntityPageDto;
 import io.personalassistant.api.dto.KnowledgeDto;
 import io.personalassistant.api.dto.KnowledgePatchDto;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.service.KnowledgeService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -65,6 +70,38 @@ public class KnowledgeResource {
             throw new BadRequestException(e.getMessage());
         } catch (IllegalStateException e) {             // knowledge is DELETED
             throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+        }
+    }
+
+    /**
+     * Page this knowledge's entities, newest-first. {@code status} filters by {@code EntityStatus}
+     * name (blank/absent = all); {@code limit} is clamped to {@code 1..200} by the service. An
+     * unknown status name or a negative offset is a {@code 400}; an unknown id is a {@code 404}.
+     */
+    @GET
+    @Path("/{id}/entities")
+    public EntityPageDto entities(@PathParam("id") String id,
+                                  @QueryParam("status") String status,
+                                  @QueryParam("limit") @DefaultValue("50") int limit,
+                                  @QueryParam("offset") @DefaultValue("0") int offset) {
+        try {
+            EntityStatus filter = status == null || status.isBlank() ? null : EntityStatus.valueOf(status);
+            return EntityPageDto.from(knowledgeService.listEntities(id, filter, limit, offset));
+        } catch (NoSuchElementException e) {
+            throw new NotFoundException(e.getMessage());
+        } catch (IllegalArgumentException e) {          // unknown status name / negative offset
+            throw new BadRequestException(e.getMessage());
+        }
+    }
+
+    /** This knowledge's ingestion cursors — the real sync-progress view. {@code 404} on unknown id. */
+    @GET
+    @Path("/{id}/cursors")
+    public List<CursorDto> cursors(@PathParam("id") String id) {
+        try {
+            return knowledgeService.listCursors(id).stream().map(CursorDto::from).toList();
+        } catch (NoSuchElementException e) {
+            throw new NotFoundException(e.getMessage());
         }
     }
 

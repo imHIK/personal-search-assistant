@@ -8,6 +8,7 @@
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "knowledgeId", "value": "kn_123" },
     { "key": "entityId", "value": "ent_123" },
+    { "key": "entityStatus", "value": "INDEXED" },
     { "key": "connectionId", "value": "con_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
@@ -42,6 +43,39 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             }
+          }
+        },
+        {
+          "name": "List knowledge entities",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/entities?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "entities"],
+              "query": [
+                { "key": "status", "value": "{{entityStatus}}", "disabled": true },
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Pages this knowledge's ingested entities, newest-first (updatedAt descending, id as tiebreak). Enable the optional ?status= query param to filter by EntityStatus (INGESTED, INDEXING, INDEXED, FAILED, DELETED); omit it for all. `limit` defaults to 50 and is clamped to 1..200; `offset` defaults to 0. The response is `{ items, total, limit, offset }` where `total` counts every match, not the page. Rows are projections — the raw source payload and the extracted body are never sent. An unknown status name or a negative offset is a 400; an unknown id is a 404."
+          }
+        },
+        {
+          "name": "List knowledge cursors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/cursors",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "cursors"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
           }
         },
         {
@@ -240,7 +274,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer."
+            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer, which cites hits as [n] (1-based into hits). Each hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage) and knowledgeId (which source the hit came from) alongside entityId, title, snippet, uri, score and metadata."
           }
         }
       ]

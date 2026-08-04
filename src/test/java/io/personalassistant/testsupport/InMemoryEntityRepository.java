@@ -1,11 +1,13 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.storage.repository.EntityRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,6 +133,26 @@ public class InMemoryEntityRepository implements EntityRepository {
     @Override
     public List<Entity> findByStatus(EntityStatus status, int limit) {
         return store.values().stream().filter(e -> e.status() == status).limit(limit).toList();
+    }
+
+    @Override
+    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset) {
+        // Mirrors the Mongo adapter's ordering exactly: updatedAt descending, id ascending as tiebreak.
+        return store.values().stream()
+                .filter(e -> e.knowledgeId().equals(knowledgeId) && (status == null || e.status() == status))
+                .sorted(Comparator.comparing(Entity::updatedAt).reversed().thenComparing(Entity::id))
+                .skip(offset)
+                .limit(limit)
+                .map(InMemoryEntityRepository::toSummary)
+                .toList();
+    }
+
+    private static EntitySummary toSummary(Entity e) {
+        return new EntitySummary(e.id(), e.knowledgeId(), e.externalId(), e.entityType(), e.status(),
+                e.title(), e.uri(), e.checksum(),
+                e.index() == null ? Entity.IndexInfo.empty() : e.index(),
+                e.retry() == null ? 0 : e.retry().count(),
+                e.needsReindex(), e.updatedAt());
     }
 
     @Override

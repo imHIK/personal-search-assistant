@@ -7,9 +7,13 @@ keyword + vector query engine).
 See **ARCHITECTURE.md** for the design, and `docs/` for the MongoDB schema and OpenSearch
 index mapping.
 
+A React web console ships with it — search, source management, indexing progress and per-item
+controls — served by the same Quarkus process on :8080. See **Web console** below.
+
 ## Prerequisites
 - JDK 21+
 - Docker (for MongoDB + OpenSearch)
+- Node 20+ and npm (for the web console; `./gradlew build` invokes them)
 
 ## Run locally
 
@@ -21,7 +25,39 @@ docker compose up -d
 ./gradlew quarkusDev
 ```
 
-App: http://localhost:8080 · Health: http://localhost:8080/q/health
+App + console: http://localhost:8080 · Health: http://localhost:8080/q/health
+
+> `quarkusDev` serves whatever version of the console was last built into
+> `src/main/resources/META-INF/resources`. When working on the frontend, run the Vite dev server
+> alongside it (`./gradlew frontendDev`) and use **http://localhost:5173** instead — it hot-reloads
+> and proxies `/api` and `/q` to :8080, so it is still a single origin and needs no CORS config.
+
+## Web console
+
+| Screen | What it covers |
+|---|---|
+| Search (`/`) | Query, match style, scope, grounded answers with clickable `[n]` citations |
+| Sources (`/knowledge`) | Add / pause / resume / remove, check now, live indexing progress |
+| Source detail | Overview · Items (paged, per-item reprocess/remove) · Sync activity · Settings |
+| Accounts (`/connections`) | Google credentials, default per type, masked secrets |
+
+Two things worth knowing about how it presents the system:
+
+- **It speaks user language, not domain language.** The five status enums, cursor directions and
+  positions are collapsed into a small vocabulary ("Up to date", "Importing older items",
+  "Searchable", "Couldn't process"). The **Technical details** toggle in the top bar reveals every
+  raw id, enum name, checksum, cursor position and score in place — off by default, persisted.
+- **Connectors are data, not code.** `frontend/src/config/connectors.ts` holds one descriptor per
+  `SourceType` (label, icon, whether it needs an account, its input/auth/config fields). The wizard,
+  forms, filters and badges all render from it, so adding a connector to the UI is appending an
+  object and flipping `implemented: true` — no component changes. The same pattern covers status
+  presentation (`presentation.ts`), copy (`labels.ts`), error translation (`errors.ts`) and
+  not-yet-built capabilities (`features.ts`).
+
+```bash
+./gradlew frontendDev     # Vite dev server on :5173 with hot reload
+./gradlew frontendBuild   # build the console into META-INF/resources (runs as part of `build`)
+```
 
 > **Embeddings.** The default provider (`app.embedding.provider=onnx-bge`) runs a local ONNX model
 > and needs `app.embedding.onnx.model-path` pointed at an exported model directory — it ships empty,
@@ -29,7 +65,8 @@ App: http://localhost:8080 · Health: http://localhost:8080/q/health
 > `app.embedding.provider=local-hashing`. See [`docs/providers.md`](docs/providers.md).
 >
 > **Optional env vars.** `GROQ_API_KEY` (grounded answers), `GEMINI_API_KEY` (hosted embeddings),
-> `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (Gmail/Drive token refresh).
+> `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (Gmail/Drive token refresh). All genuinely
+> optional — the app starts without any of them; the corresponding feature just stays off.
 
 ## REST API
 
@@ -41,6 +78,8 @@ All endpoints consume/produce `application/json`. Base URL: `http://localhost:80
 |---|---|---|
 | GET | `/api/knowledge` | List all knowledge sources |
 | GET | `/api/knowledge/{id}` | Get a single knowledge source |
+| GET | `/api/knowledge/{id}/entities` | Page its entities, newest-first (`status`, `limit`, `offset`) |
+| GET | `/api/knowledge/{id}/cursors` | Its ingestion cursors — the real sync-progress view |
 | POST | `/api/knowledge` | Register, validate and activate a knowledge source |
 | PATCH | `/api/knowledge/{id}` | Edit name, schedule, inputs, auth, backfill or chunking |
 | POST | `/api/knowledge/{id}/pause` | Pause forward scheduling/ingestion |
@@ -72,6 +111,27 @@ extracted per type (PDF, Word, PowerPoint, Excel, HTML, text) for cleaner text. 
 `connectorDetails.type` is immutable after creation, and a deleted knowledge cannot be edited. See
 [`docs/knowledge-edit-design.md`](docs/knowledge-edit-design.md) for which edits trigger a
 re-verify/re-discover cycle versus a plain in-place write.
+
+`GET /api/knowledge/{id}/entities` pages the ingested items newest-first (`updatedAt` descending).
+`status` filters by `EntityStatus` (`INGESTED`/`INDEXING`/`INDEXED`/`FAILED`/`DELETED`, omit for
+all), `limit` defaults to 50 and is clamped to 200, `offset` defaults to 0. `total` counts every
+match, not the page. Rows are projections — `raw` and the extracted body are never sent.
+```json
+{ "items": [ { "id": "ent_…", "externalId": "", "entityType": "FILE", "status": "INDEXED",
+               "title": "", "uri": "", "checksum": "", "chunkCount": 0, "embeddingModel": "",
+               "indexedAt": null, "error": null, "retryCount": 0, "needsReindex": false,
+               "updatedAt": "…" } ],
+  "total": 0, "limit": 50, "offset": 0 }
+```
+
+`GET /api/knowledge/{id}/cursors` returns one entry per `(iterableId, direction)` — the only honest
+answer to "has this finished importing?". A `BACKWARD` cursor at `EXHAUSTED` means the backfill is
+complete; a `FORWARD` cursor at `IDLE` is waiting for its next scheduled run. The connector-internal
+`attributes` and the worker `lease` are deliberately not exposed.
+```json
+[ { "id": "cur_…", "iterableId": "", "direction": "BACKWARD", "status": "EXHAUSTED",
+    "retryCount": 0, "lastError": null, "lastRunAt": "…", "fetched": 1240, "position": {} } ]
+```
 
 ### Connections — reusable credentials (`/api/connections`)
 | Method | Path | Purpose |
@@ -106,9 +166,13 @@ Request body (only `query` is required):
 ```
 `mode` is `LEXICAL`, `SEMANTIC` or `HYBRID` (default `HYBRID`). Response:
 ```json
-{ "hits": [ { "entityId": "", "title": "", "snippet": "", "uri": "", "score": 0.0, "metadata": {} } ],
+{ "hits": [ { "chunkId": "", "entityId": "", "knowledgeId": "", "title": "", "snippet": "",
+              "uri": "", "score": 0.0, "metadata": {} } ],
   "answer": null, "tookMs": 0 }
 ```
+`chunkId` (`<entityId>_<ordinal>`) pins the matched passage; `knowledgeId` is what lets a caller
+attribute a hit to the source it came from. When `answer` is requested, the synthesized text cites
+hits as `[n]`, 1-based into `hits`.
 
 ### Indexing (`/api/index`)
 | Method | Path | Purpose |

@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.connector.google;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -51,11 +53,16 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
             defaultValue = "https://oauth2.googleapis.com/token")
     String tokenUrl;
 
-    @ConfigProperty(name = "app.ingestion.google.client-id", defaultValue = "")
-    String defaultClientId;
+    /**
+     * App-level OAuth client, used when a connection carries no {@code clientId}/{@code clientSecret}
+     * of its own. Optional: normally supplied via {@code ${GOOGLE_OAUTH_CLIENT_ID:}}, which is blank
+     * when the env var is unset. See {@link ConfigText} for why these cannot be plain Strings.
+     */
+    @ConfigProperty(name = "app.ingestion.google.client-id")
+    Optional<String> defaultClientId;
 
-    @ConfigProperty(name = "app.ingestion.google.client-secret", defaultValue = "")
-    String defaultClientSecret;
+    @ConfigProperty(name = "app.ingestion.google.client-secret")
+    Optional<String> defaultClientSecret;
 
     private final ConnectionRepository connections;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -101,8 +108,9 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
         Map<String, Object> auth = connection.auth();
         Map<String, Object> config = connection.config();
         String refreshToken = str(auth, "refreshToken");
-        String clientId = firstNonBlank(str(config, "clientId"), defaultClientId);
-        String clientSecret = firstNonBlank(str(config, "clientSecret"), defaultClientSecret);
+        String clientId = firstNonBlank(str(config, "clientId"), ConfigText.orNull(defaultClientId));
+        String clientSecret = firstNonBlank(str(config, "clientSecret"),
+                ConfigText.orNull(defaultClientSecret));
         if (clientId == null || clientSecret == null) {
             throw new IllegalArgumentException(
                     "refreshToken present but no OAuth client-id/secret configured (set "

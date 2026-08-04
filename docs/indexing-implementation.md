@@ -155,6 +155,8 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 |---|---|
 | `POST /api/knowledge` | Register a knowledge (validates, discovers, creates cursors, activates) |
 | `GET /api/knowledge` / `GET /api/knowledge/{id}` | List / fetch knowledge |
+| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status`, `limit` ≤ 200, `offset`); returns projections, not full entities |
+| `GET /api/knowledge/{id}/cursors` | Its cursors — per-iterable walk state, the real sync-progress view |
 | `PATCH /api/knowledge/{id}` | Edit a knowledge — see [`knowledge-edit-design.md`](./knowledge-edit-design.md) |
 | `POST /api/knowledge/{id}/pause` / `.../resume` | Pause or resume scheduling |
 | `DELETE /api/knowledge/{id}` | Soft-delete + tear down chunks, entities, cursors |

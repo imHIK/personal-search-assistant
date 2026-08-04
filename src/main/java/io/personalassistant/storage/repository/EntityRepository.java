@@ -1,6 +1,7 @@
 package io.personalassistant.storage.repository;
 
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import java.time.Duration;
 import java.time.Instant;
@@ -67,6 +68,19 @@ public interface EntityRepository {
     void markDeleted(String id, Instant updatedAt);
 
     List<Entity> findByStatus(EntityStatus status, int limit);
+
+    /**
+     * Page a knowledge's entities newest-first for the console's entity browser. Returns
+     * {@link EntitySummary} projections rather than full entities — {@code raw} and
+     * {@code content.text} dominate an entity document and a listing needs neither.
+     *
+     * <p>Ordered {@code updatedAt} descending with {@code id} as the tiebreak so paging is
+     * deterministic. Note {@link #stampLastSeen} deliberately leaves {@code updatedAt} alone, so a
+     * membership re-walk does not reshuffle the listing.
+     *
+     * @param status optional status filter; {@code null} means all statuses
+     */
+    List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset);
 
     long countByKnowledgeAndStatus(String knowledgeId, EntityStatus status);
 

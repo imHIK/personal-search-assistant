@@ -27,6 +27,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -359,6 +360,40 @@ public class DefaultKnowledgeService implements KnowledgeService {
     @Override
     public List<Knowledge> list() {
         return knowledge.findAll().stream().map(this::withFreshStats).toList();
+    }
+
+    /** Page size applied when the caller asks for none, and the ceiling any request is clamped to. */
+    private static final int DEFAULT_PAGE = 50;
+    private static final int MAX_PAGE = 200;
+
+    @Override
+    public EntityPage listEntities(String id, EntityStatus status, int limit, int offset) {
+        requireExists(id);
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative: " + offset);
+        }
+        int size = limit <= 0 ? DEFAULT_PAGE : Math.min(limit, MAX_PAGE);
+        long total = status == null
+                ? entities.countByKnowledge(id)
+                : entities.countByKnowledgeAndStatus(id, status);
+        return new EntityPage(entities.findByKnowledge(id, status, size, offset), total, size, offset);
+    }
+
+    @Override
+    public List<Cursor> listCursors(String id) {
+        requireExists(id);
+        // Sorted here rather than in the repository: findByKnowledge is on the reconcile/retire path,
+        // and a read-only console view shouldn't add an ordering guarantee to that contract.
+        return cursors.findByKnowledge(id).stream()
+                .sorted(Comparator.comparing(Cursor::iterableId, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(Cursor::direction, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+    }
+
+    private void requireExists(String id) {
+        if (knowledge.findById(id).isEmpty()) {
+            throw new NoSuchElementException("No knowledge with id " + id);
+        }
     }
 
     /**

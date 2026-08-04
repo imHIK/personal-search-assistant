@@ -287,6 +287,8 @@ Every query filters on `knowledgeId`, so results are scoped to the sources the u
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
 | Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs (no re-fetch) |
 | Delete one entity | `DELETE /api/index/entities/{id}` | `markDeleted` → Stage 2 removes its chunks |
+| Browse entities | `GET /api/knowledge/{id}/entities` | Read-only. Pages the ingested items newest-first with an optional `EntityStatus` filter, returning `EntitySummary` projections. This is how a caller finds the `FAILED` items worth re-indexing, and the only way to enumerate entities at all. |
+| Inspect sync progress | `GET /api/knowledge/{id}/cursors` | Read-only. Per-iterable walk state. `stats` on the knowledge says how many entities exist; only the cursors say whether the *backward* walk is finished (`EXHAUSTED`) or the forward one is merely waiting (`IDLE`). |
 
 ---
 

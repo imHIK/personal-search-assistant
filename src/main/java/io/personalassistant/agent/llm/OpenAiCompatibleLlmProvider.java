@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
@@ -12,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -34,8 +36,9 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
     @ConfigProperty(name = "app.llm.model", defaultValue = "llama-3.3-70b-versatile")
     String modelName;
 
-    @ConfigProperty(name = "app.llm.api-key", defaultValue = "")
-    String apiKey;
+    /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
+    @ConfigProperty(name = "app.llm.api-key")
+    Optional<String> apiKey;
 
     @ConfigProperty(name = "app.llm.temperature", defaultValue = "0.2")
     double temperature;
@@ -77,8 +80,9 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
                     .timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            if (apiKey != null && !apiKey.isBlank()) {
-                request.header("Authorization", "Bearer " + apiKey);
+            String key = ConfigText.orNull(apiKey);
+            if (key != null) {
+                request.header("Authorization", "Bearer " + key);
             }
 
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());

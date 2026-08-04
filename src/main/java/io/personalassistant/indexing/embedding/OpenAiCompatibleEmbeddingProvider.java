@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
 import io.personalassistant.domain.model.Embedding;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -14,6 +15,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -39,8 +41,9 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.openai.model", defaultValue = "text-embedding-004")
     String modelName;
 
-    @ConfigProperty(name = "app.embedding.openai.api-key", defaultValue = "")
-    String apiKey;
+    /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
+    @ConfigProperty(name = "app.embedding.openai.api-key")
+    Optional<String> apiKey;
 
     @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
     int dimension;
@@ -88,8 +91,9 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                     .timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            if (apiKey != null && !apiKey.isBlank()) {
-                request.header("Authorization", "Bearer " + apiKey);
+            String key = ConfigText.orNull(apiKey);
+            if (key != null) {
+                request.header("Authorization", "Bearer " + key);
             }
 
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());

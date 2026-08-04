@@ -70,6 +70,58 @@ dependencies {
     testImplementation 'io.rest-assured:rest-assured'
 }
 
+// ---- Web console -------------------------------------------------------------------------------
+// The React console in `frontend/` builds into src/main/resources/META-INF/resources, which Quarkus
+// serves as static content — so the packaged app hands out API and UI from the same origin on :8080
+// and no CORS configuration is needed anywhere. Deep links are handled by SpaRoutingConfigurator.
+//
+// For development, run the Vite dev server instead (`./gradlew frontendDev`, or `npm run dev` in
+// frontend/) and use :5173 — it proxies /api and /q to :8080, so that is also a single origin, with
+// hot reload. `./gradlew quarkusDev` keeps serving whatever was last built into META-INF/resources.
+//
+// Deliberately NOT using the Quinoa extension: 2.8.3 fails to register its build-time config root
+// against Quarkus 3.33.2 (`quarkus.quinoa.enabled` is reported as an unrecognized key and no npm
+// build runs). These few lines do the same job with no version coupling.
+
+def frontendDir = file('frontend')
+def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+def npm = isWindows ? 'npm.cmd' : 'npm'
+
+tasks.register('frontendInstall', Exec) {
+    description = 'Installs the web console dependencies from the lockfile.'
+    group = 'frontend'
+    workingDir = frontendDir
+    // `npm ci` is the reproducible install, but it requires the lockfile; fall back for a first run.
+    commandLine npm, file('frontend/package-lock.json').exists() ? 'ci' : 'install'
+
+    inputs.file('frontend/package.json')
+    inputs.file('frontend/package-lock.json').optional()
+    outputs.dir('frontend/node_modules')
+}
+
+tasks.register('frontendBuild', Exec) {
+    description = 'Builds the web console into src/main/resources/META-INF/resources.'
+    group = 'frontend'
+    dependsOn 'frontendInstall'
+    workingDir = frontendDir
+    commandLine npm, 'run', 'build'
+
+    inputs.dir('frontend/src')
+    inputs.files('frontend/package.json', 'frontend/vite.config.ts', 'frontend/index.html')
+    outputs.dir('src/main/resources/META-INF/resources')
+}
+
+tasks.register('frontendDev', Exec) {
+    description = 'Runs the Vite dev server on :5173 with hot reload (proxies the API to :8080).'
+    group = 'frontend'
+    dependsOn 'frontendInstall'
+    workingDir = frontendDir
+    commandLine npm, 'run', 'dev'
+}
+
+// The UI must be on disk before Quarkus collects resources into the artifact.
+processResources.dependsOn 'frontendBuild'
+
 group = 'io.personalassistant'
 version = '0.1.0'
 
