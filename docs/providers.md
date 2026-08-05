@@ -24,7 +24,7 @@ finds the matching adapter, and produces it as the `@Default` bean that `Default
 | `app.embedding.provider` | Adapter | Notes |
 |---|---|---|
 | `onnx-bge` (default) | `OnnxEmbeddingProvider` | Local, private, in-JVM ONNX (`bge-base-en-v1.5`, 768-dim) |
-| `openai-embed` | `OpenAiCompatibleEmbeddingProvider` | Hosted `/embeddings` (Gemini default, 768-dim) |
+| `openai-embed` | `OpenAiCompatibleEmbeddingProvider` | Hosted `/embeddings` (Gemini default, 3072-dim model requested at 768) |
 | `local-hashing` | `LocalHashingEmbeddingProvider` | Offline non-semantic baseline for dev/tests |
 
 The vector width `app.embedding.dimension` (768) is **baked into the OpenSearch `knn_vector`
@@ -56,11 +56,40 @@ app boots fine even when this provider isn't active.
 app.embedding.provider=openai-embed
 # Gemini (default). For another provider, change base-url + model.
 app.embedding.openai.base-url=https://generativelanguage.googleapis.com/v1beta/openai
-app.embedding.openai.model=text-embedding-004
+app.embedding.openai.model=models/gemini-embedding-001
 app.embedding.openai.api-key=${GEMINI_API_KEY:}
+app.embedding.openai.dimensions=768
 ```
 
 Get a free key from Google AI Studio and export it as `GEMINI_API_KEY`.
+
+Note the `models/` prefix: Gemini's compatibility layer wants the full resource name. A bare
+`gemini-embedding-001` returns **404 "Requested entity was not found"** — the same message a retired
+model gives, so check what the key can actually see before concluding the model is gone:
+
+```bash
+curl -s $BASE/models -H "Authorization: Bearer $GEMINI_API_KEY" | jq -r '.data[].id' | grep embed
+```
+
+`gemini-embedding-001` is natively **3072**-dim, which does not fit the 768 `knn_vector` mapping.
+`app.embedding.openai.dimensions` is sent as the OpenAI `dimensions` parameter to request a 768-wide
+vector instead; the model is Matryoshka-trained, so that prefix is a genuine embedding rather than a
+truncation artefact, and the index's `cosinesimil` space re-normalises internally so no extra
+normalization step is needed. Set it to `0` to omit the parameter and take the model's native width —
+which then has to equal `app.embedding.dimension`.
+
+If the API ignores the parameter (some OpenAI-compatible servers do), the provider fails on the first
+batch with a message naming both widths rather than writing vectors the index cannot hold. Verify a
+new model with one call before switching:
+
+```bash
+curl -s $BASE/embeddings -H "Authorization: Bearer $GEMINI_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"gemini-embedding-001","input":["hello"],"dimensions":768}' | jq '.data[0].embedding | length'
+```
+
+> Changing the embedding model invalidates every vector already indexed, **even at identical width** —
+> two models embed into different spaces, so old document vectors and new query vectors are not
+> comparable. A model swap always means re-indexing the corpus, not just re-mapping the index.
 
 ## LLM provider
 
