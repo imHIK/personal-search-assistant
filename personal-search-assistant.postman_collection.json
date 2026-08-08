@@ -1,19 +1,31 @@
 {
   "info": {
     "name": "Personal Search Assistant",
-    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.\n\nThe **Google Auth** and **Connector Responses (raw Google API)** folders call Google's Drive/Gmail REST APIs directly (not the app) so you can inspect the raw responses the connectors parse. Run *Google Auth > Refresh access token* first to populate `googleAccessToken`.",
+    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.\n\n**App API** — Knowledge, Connections, Search, Indexing and Health cover every endpoint the app exposes (`api.resource.*` plus the SmallRye Health probes under `/q`).\n\n**Outbound APIs the app calls** — the remaining folders are not the app; they are the third-party and infrastructure APIs it talks to, mirrored request-for-request so you can test each leg in isolation when something upstream breaks:\n- *Google Auth* + *Connector Responses (raw Google API)* — Drive/Gmail ingestion. Run *Google Auth > Refresh access token* first to populate `googleAccessToken`.\n- *Embedding Provider (raw)* — the hosted embedding call the indexing stage makes (`app.embedding.provider=openai-embed`).\n- *LLM Provider (raw)* — the chat-completion call behind `answer: true` (`app.llm.provider=openai-compat`).\n- *OpenSearch (chunk index)* — the queries `OpenSearchSearchIndex` issues against the `chunks` alias.\n\nProvider base URLs, models and index names are collection variables defaulting to the values in `application.properties`; the api-key variables are blank on purpose — fill them from your `GEMINI_API_KEY` / `GROQ_API_KEY` and do not commit them.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "knowledgeId", "value": "kn_123" },
     { "key": "entityId", "value": "ent_123" },
+    { "key": "entityStatus", "value": "INDEXED" },
     { "key": "connectionId", "value": "con_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
     { "key": "googleRefreshToken", "value": "" },
     { "key": "googleAccessToken", "value": "" },
-    { "key": "gmailMessageId", "value": "" }
+    { "key": "gmailMessageId", "value": "" },
+    { "key": "driveFileId", "value": "" },
+    { "key": "driveExportMimeType", "value": "text/plain" },
+    { "key": "embeddingBaseUrl", "value": "https://generativelanguage.googleapis.com/v1beta/openai" },
+    { "key": "embeddingModel", "value": "models/gemini-embedding-001" },
+    { "key": "embeddingApiKey", "value": "" },
+    { "key": "embeddingDimension", "value": "768" },
+    { "key": "llmBaseUrl", "value": "https://api.groq.com/openai/v1" },
+    { "key": "llmModel", "value": "llama-3.3-70b-versatile" },
+    { "key": "llmApiKey", "value": "" },
+    { "key": "opensearchUrl", "value": "http://localhost:9200" },
+    { "key": "chunksIndex", "value": "chunks" }
   ],
   "item": [
     {
@@ -42,6 +54,39 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             }
+          }
+        },
+        {
+          "name": "List knowledge entities",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/entities?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "entities"],
+              "query": [
+                { "key": "status", "value": "{{entityStatus}}", "disabled": true },
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Pages this knowledge's ingested entities, newest-first (updatedAt descending, id as tiebreak). Enable the optional ?status= query param to filter by EntityStatus (INGESTED, INDEXING, INDEXED, FAILED, DELETED); omit it for all. `limit` defaults to 50 and is clamped to 1..200; `offset` defaults to 0. The response is `{ items, total, limit, offset }` where `total` counts every match, not the page. Rows are projections — the raw source payload and the extracted body are never sent. An unknown status name or a negative offset is a 400; an unknown id is a 404."
+          }
+        },
+        {
+          "name": "List knowledge cursors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/:id/cursors",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge", ":id", "cursors"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
           }
         },
         {
@@ -240,7 +285,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer."
+            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer, which cites hits as [n] (1-based into hits). Each hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage) and knowledgeId (which source the hit came from) alongside entityId, title, snippet, uri, score and metadata."
           }
         }
       ]
@@ -292,6 +337,7 @@
     },
     {
       "name": "Health",
+      "description": "SmallRye Health endpoints exposed by Quarkus under the /q management root (quarkus-smallrye-health is a declared dependency). No app code registers these — they are extension-provided.",
       "item": [
         {
           "name": "Health check",
@@ -302,7 +348,47 @@
               "raw": "{{baseUrl}}/q/health",
               "host": ["{{baseUrl}}"],
               "path": ["q", "health"]
-            }
+            },
+            "description": "Aggregate of the started, live and ready groups. Returns { status: UP|DOWN, checks: [...] } — 200 when UP, 503 when DOWN. The MongoDB client extension contributes a readiness check here; OpenSearch is talked to over a plain REST client and is not health-checked."
+          }
+        },
+        {
+          "name": "Liveness probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health/live",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health", "live"]
+            },
+            "description": "Liveness group only — is the JVM up and not deadlocked. Does not touch Mongo or OpenSearch."
+          }
+        },
+        {
+          "name": "Readiness probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health", "ready"]
+            },
+            "description": "Readiness group — includes the MongoDB connection check. DOWN here usually means `docker compose up -d` was not run."
+          }
+        },
+        {
+          "name": "Startup probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health/started",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health", "started"]
+            },
+            "description": "Startup group — whether startup observers (MongoIndexInitializer, OpenSearchIndexInitializer) have completed."
           }
         }
       ]
@@ -388,7 +474,64 @@
                 { "key": "pageToken", "value": "", "disabled": true }
               ]
             },
-            "description": "Mirrors HttpDriveApi.listFiles: the exact field subset and shared-drive params the connector requests. Returns { files: [ { id, name, mimeType, modifiedTime, size, version, md5Checksum, webViewLink, trashed } ], nextPageToken }.\n\nAdjust q to scope like the connector does, e.g. \"'root' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'\". Enable pageToken to fetch the next page."
+            "description": "Mirrors HttpDriveApi.listFiles: the exact field subset and shared-drive params the connector requests. Returns { files: [ { id, name, mimeType, modifiedTime, size, version, md5Checksum, webViewLink, trashed } ], nextPageToken }.\n\nAdjust q to scope like the connector does, e.g. \"'root' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'\". Enable pageToken to fetch the next page. Copy an id into driveFileId for files.get / files.export."
+          }
+        },
+        {
+          "name": "Google Drive - files.get (download)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.googleapis.com/drive/v3/files/:fileId?alt=media&supportsAllDrives=true",
+              "protocol": "https",
+              "host": ["www", "googleapis", "com"],
+              "path": ["drive", "v3", "files", ":fileId"],
+              "query": [
+                { "key": "alt", "value": "media" },
+                { "key": "supportsAllDrives", "value": "true" }
+              ],
+              "variable": [{ "key": "fileId", "value": "{{driveFileId}}" }]
+            },
+            "description": "Mirrors HttpDriveApi.download — raw bytes of a binary/blob file, which GoogleDriveConnector writes to app.ingestion.google-drive.download-dir and passes on as a fileRef (never as bytes, per the 16 MB Mongo cap). Fails for Google-native docs (Docs/Sheets/Slides); use files.export for those. Files larger than app.ingestion.google-drive.max-file-bytes (25 MB) are skipped by the connector."
+          }
+        },
+        {
+          "name": "Google Drive - files.export",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.googleapis.com/drive/v3/files/:fileId/export?mimeType=text%2Fplain",
+              "protocol": "https",
+              "host": ["www", "googleapis", "com"],
+              "path": ["drive", "v3", "files", ":fileId", "export"],
+              "query": [
+                { "key": "mimeType", "value": "{{driveExportMimeType}}" }
+              ],
+              "variable": [{ "key": "fileId", "value": "{{driveFileId}}" }]
+            },
+            "description": "Mirrors HttpDriveApi.export — converts a Google-native doc to an exportable type before ingestion. Set driveExportMimeType to the target: text/plain for Docs, text/csv for Sheets, application/pdf for Slides. Errors with 403 on a non-native (binary) file — those go through files.get?alt=media instead."
+          }
+        },
+        {
+          "name": "Google Drive - about.get",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.googleapis.com/drive/v3/about?fields=user",
+              "protocol": "https",
+              "host": ["www", "googleapis", "com"],
+              "path": ["drive", "v3", "about"],
+              "query": [
+                { "key": "fields", "value": "user" }
+              ]
+            },
+            "description": "Mirrors HttpDriveApi.about — the credential-verification probe run by POST /api/connections for a GOOGLE_DRIVE connection. A 2xx here is exactly what makes connection creation succeed; a 401/403 is what surfaces as the 400 from that endpoint."
           }
         },
         {
@@ -429,6 +572,225 @@
               "variable": [{ "key": "id", "value": "{{gmailMessageId}}" }]
             },
             "description": "Mirrors HttpGmailApi.getMessage (format=full). Returns the full message — id, threadId, labelIds, snippet, internalDate, historyId and the payload MIME tree with headers and base64url body parts — exactly what GmailConnector walks to build the searchable text. Set gmailMessageId from a messages.list result."
+          }
+        },
+        {
+          "name": "Gmail - labels.list",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://gmail.googleapis.com/gmail/v1/users/me/labels",
+              "protocol": "https",
+              "host": ["gmail", "googleapis", "com"],
+              "path": ["gmail", "v1", "users", "me", "labels"]
+            },
+            "description": "Mirrors HttpGmailApi.listLabels — the label catalogue the GMAIL connector turns into iterables (one cursor pair per label). Returns { labels: [ { id, name, type } ] }. Use the ids here as labelIds in messages.list and in the knowledge inputs."
+          }
+        },
+        {
+          "name": "Gmail - profile.get",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{googleAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+              "protocol": "https",
+              "host": ["gmail", "googleapis", "com"],
+              "path": ["gmail", "v1", "users", "me", "profile"]
+            },
+            "description": "Mirrors HttpGmailApi.getProfile — the credential-verification probe run by POST /api/connections for a GMAIL connection, and the source of the historyId that feeds the gmail:<id>;hist:<historyId> checksum. Returns { emailAddress, messagesTotal, threadsTotal, historyId }."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Embedding Provider (raw)",
+      "description": "The hosted embedding API the indexing stage calls directly, over the OpenAI-compatible schema (OpenAiCompatibleEmbeddingProvider, app.embedding.provider=openai-embed). Defaults match application.properties: Gemini's OpenAI-compat endpoint with text-embedding-004. Set embeddingApiKey to your GEMINI_API_KEY. Point embeddingBaseUrl at http://localhost:11434/v1 to test an Ollama model instead — the app switches the same way, config only.",
+      "item": [
+        {
+          "name": "Create embeddings",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "const vec = json.data && json.data[0] && json.data[0].embedding;",
+                  "if (vec) {",
+                  "    console.log('Vector width: ' + vec.length + ' (app.embedding.dimension = ' + pm.collectionVariables.get('embeddingDimension') + ')');",
+                  "    pm.test('width matches app.embedding.dimension', function () {",
+                  "        pm.expect(vec.length).to.eql(Number(pm.collectionVariables.get('embeddingDimension')));",
+                  "    });",
+                  "} else {",
+                  "    console.log('No embedding in response: ' + JSON.stringify(json));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{embeddingApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{embeddingModel}}\",\n  \"dimensions\": {{embeddingDimension}},\n  \"input\": [\n    \"quarterly revenue summary\",\n    \"second chunk of text\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{embeddingBaseUrl}}/embeddings",
+              "host": ["{{embeddingBaseUrl}}"],
+              "path": ["embeddings"]
+            },
+            "description": "Mirrors OpenAiCompatibleEmbeddingProvider.embedAll — one batched call per app.indexing.embed-batch (64) chunks. Returns { data: [ { index, embedding: [...] } ] }; the provider re-orders by `index`, so ordering from the API does not matter, but a data length != input length throws.\n\n`dimensions` is app.embedding.openai.dimensions: gemini-embedding-001 is natively 3072, and this asks for the 768 prefix that fits the knn mapping. Delete the line to see the model's native width (that is what dimensions=0 does in the app).\n\nThe test script asserts the returned width equals embeddingDimension (768). A mismatch is the failure mode invariant 5 warns about: the width is baked into the OpenSearch knn_vector mapping at index creation, so a width you cannot request needs chunks_v2 + an alias flip, not just a config edit.\n\nA 404 'Requested entity was not found' here means the model id no longer resolves — usually a retired model, not a bad key (a bad key is 400/403)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "LLM Provider (raw)",
+      "description": "The chat-completion API the search agent calls directly when a search is run with answer=true (OpenAiCompatibleLlmProvider, app.llm.provider=openai-compat). Defaults match application.properties: Groq with llama-3.3-70b-versatile. Set llmApiKey to your GROQ_API_KEY. If this folder fails, POST /api/search with answer=true 500s and loses its hits — the known async trap the console works around by retrying without the flag.",
+      "item": [
+        {
+          "name": "Chat completion",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{llmApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{llmModel}}\",\n  \"temperature\": 0.2,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Answer the question using only the numbered sources. Cite them as [n].\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Question: what was quarterly revenue?\\n\\n[1] Revenue for Q3 was 4.2M.\\n[2] Headcount grew to 58.\"\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{llmBaseUrl}}/chat/completions",
+              "host": ["{{llmBaseUrl}}"],
+              "path": ["chat", "completions"]
+            },
+            "description": "Mirrors OpenAiCompatibleLlmProvider.complete — the system prompt plus the numbered-hit user message DefaultSearchAgent builds, at app.llm.temperature (0.2). The provider reads choices[0].message.content and throws on an empty choices array, so this is the request to run when answers come back blank or the endpoint 500s."
+          }
+        },
+        {
+          "name": "List models (connectivity check)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{llmApiKey}}" }
+            ],
+            "url": {
+              "raw": "{{llmBaseUrl}}/models",
+              "host": ["{{llmBaseUrl}}"],
+              "path": ["models"]
+            },
+            "description": "Not called by the app — a cheap way to verify llmApiKey and llmBaseUrl and to confirm the exact model id to put in app.llm.model before a chat completion. Available on Groq, OpenAI and Ollama; a provider that lacks it is not a problem for the app."
+          }
+        }
+      ]
+    },
+    {
+      "name": "OpenSearch (chunk index)",
+      "description": "Direct calls to the OpenSearch instance from docker-compose (:9200) that mirror what OpenSearchSearchIndex and OpenSearchIndexInitializer send. Not the app's API — this is for inspecting what the indexing stage actually wrote. Code only ever talks to the `chunks` alias (physical index chunks_v1).",
+      "item": [
+        {
+          "name": "Cluster health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{opensearchUrl}}/_cluster/health",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["_cluster", "health"]
+            },
+            "description": "Single-node dev cluster reports status yellow (no replicas) — that is expected, not a fault."
+          }
+        },
+        {
+          "name": "Get chunks index mapping",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{opensearchUrl}}/chunks_v1",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["chunks_v1"]
+            },
+            "description": "The mapping OpenSearchIndexInitializer PUT at startup, including the `chunks` alias and the knn_vector `embedding` field. The `dimension` in that mapping is app.embedding.dimension frozen at index-creation time — check it here before switching embedding models (invariant 5)."
+          }
+        },
+        {
+          "name": "Count chunks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{opensearchUrl}}/{{chunksIndex}}/_count",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["{{chunksIndex}}", "_count"]
+            },
+            "description": "How many chunks exist across all knowledges. The quickest check that stage 2 (Mongo -> OpenSearch) is actually running after a sync."
+          }
+        },
+        {
+          "name": "Search chunks (lexical, mirrors app)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"size\": 10,\n  \"query\": {\n    \"bool\": {\n      \"must\": [\n        {\n          \"multi_match\": {\n            \"query\": \"quarterly revenue\",\n            \"fields\": [\"text\", \"title\"]\n          }\n        }\n      ],\n      \"filter\": [\n        { \"terms\": { \"knowledgeId\": [\"{{knowledgeId}}\"] } }\n      ]\n    }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{opensearchUrl}}/{{chunksIndex}}/_search",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["{{chunksIndex}}", "_search"]
+            },
+            "description": "The exact body OpenSearchSearchIndex.lexicalSearch builds — multi_match over text+title, knowledgeIds as a terms filter, extra filters appended as term clauses on any indexed field. Use it to see raw _score and _source when a POST /api/search result looks wrong; the app's HYBRID mode fuses this with the knn variant via RRF, so scores here will not match the API's.\n\nSwap the must clause for { \"knn\": { \"embedding\": { \"vector\": [...], \"k\": 10 } } } to reproduce vectorSearch — you need a real vector from the Embedding Provider folder."
+          }
+        },
+        {
+          "name": "Browse chunks of one entity",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"size\": 50,\n  \"sort\": [{ \"ordinal\": \"asc\" }],\n  \"query\": {\n    \"term\": { \"entityId\": \"{{entityId}}\" }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{opensearchUrl}}/{{chunksIndex}}/_search",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["{{chunksIndex}}", "_search"]
+            },
+            "description": "Every chunk written for one entity, in ordinal order — the way to verify a chunking-config change after POST /api/index/entities/{id}/reindex. Chunk ids are <entityId>_<ordinal>; indexing is an idempotent delete-then-replace, so ordinals are always contiguous from 0."
+          }
+        },
+        {
+          "name": "Delete chunks by entity (destructive)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"term\": { \"entityId\": \"{{entityId}}\" }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{opensearchUrl}}/{{chunksIndex}}/_delete_by_query?conflicts=proceed",
+              "host": ["{{opensearchUrl}}"],
+              "path": ["{{chunksIndex}}", "_delete_by_query"],
+              "query": [{ "key": "conflicts", "value": "proceed" }]
+            },
+            "description": "Mirrors OpenSearchSearchIndex.deleteByEntity (conflicts=proceed), the first half of the idempotent replace. Prefer DELETE /api/index/entities/{id} — that keeps Mongo and the index in step, whereas this leaves the entity INDEXED in Mongo with no chunks behind it. Swap the term field to knowledgeId to reproduce deleteByKnowledge. OpenSearch is fully regenerable: a reindex rebuilds anything removed here."
           }
         }
       ]

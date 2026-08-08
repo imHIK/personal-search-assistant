@@ -97,6 +97,18 @@ Indexes:
 - `{ status: 1 }` and `{ knowledgeId: 1, status: 1 }` — find work to (re)process, with fairness.
 - `{ needsReindex: 1 }` — the explicit re-index queue.
 - `{ "retry.nextAttemptAt": 1 }` — backoff-gated re-claim.
+- `{ knowledgeId: 1, updatedAt: -1, _id: 1 }` and `{ knowledgeId: 1, status: 1, updatedAt: -1, _id: 1 }`
+  — the sorted listing behind `GET /api/knowledge/{id}/entities`, unfiltered and status-filtered.
+  `_id` is the paging tiebreak so two entities touched in the same millisecond can't swap places
+  between pages. Note `{ knowledgeId: 1, status: 1 }` is now a strict prefix of the second one and
+  therefore redundant; `MongoIndexInitializer` only ever creates indexes (no drop path, no migration
+  framework), so it is deliberately left in place rather than removed.
+
+> **Listing reads a projection.** `EntityRepository.findByKnowledge` returns `EntitySummary`, not
+> `Entity` — `raw` and `content.text` are the bulk of the document and a table view needs neither.
+> The sort key is `updatedAt`, and `stampLastSeen` deliberately does *not* bump it, so a membership
+> re-walk doesn't reshuffle the browser. Offset paging can still drift a page boundary if the
+> indexing job touches entities mid-scan; a refresh re-reads, which is fine for a console.
 
 > **`checksum` is the only change signal.** A connector must make it change whenever the item
 > changes (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail:

@@ -6,14 +6,19 @@ import static com.mongodb.client.model.Filters.lt;
 import static com.mongodb.client.model.Filters.lte;
 import static com.mongodb.client.model.Filters.nin;
 import static com.mongodb.client.model.Filters.or;
+import static com.mongodb.client.model.Sorts.ascending;
+import static com.mongodb.client.model.Sorts.descending;
+import static com.mongodb.client.model.Sorts.orderBy;
 
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.storage.repository.EntityRepository;
@@ -211,6 +216,26 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
+    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset) {
+        Bson filter = status == null ? eq("knowledgeId", knowledgeId)
+                : and(eq("knowledgeId", knowledgeId), eq("status", status.name()));
+        List<EntitySummary> out = new ArrayList<>();
+        collection().find(filter)
+                // Project away raw + content: they are the bulk of the document and a listing never
+                // reads them. _id comes back implicitly.
+                .projection(Projections.include("knowledgeId", "externalId", "entityType", "status",
+                        "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
+                        "needsReindex", "updatedAt"))
+                // _id is the tiebreak so two entities touched in the same millisecond can't swap
+                // places between pages. Served by the (knowledgeId, updatedAt, _id) compound index.
+                .sort(orderBy(descending("updatedAt"), ascending("_id")))
+                .skip(offset)
+                .limit(limit)
+                .forEach(d -> out.add(toSummary(d)));
+        return out;
+    }
+
+    @Override
     public long countByKnowledgeAndStatus(String knowledgeId, EntityStatus status) {
         return collection().countDocuments(and(eq("knowledgeId", knowledgeId), eq("status", status.name())));
     }
@@ -298,6 +323,32 @@ public class MongoEntityRepository implements EntityRepository {
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
                 longValue(d.get("lastSeenGeneration")));
+    }
+
+    /**
+     * Map a projected listing document. Reads {@code title}/{@code uri} out of the projected
+     * {@code metadata} sub-document rather than via {@link Entity#title()} — the projection carries
+     * only those two keys, so there is no full entity to ask.
+     */
+    private EntitySummary toSummary(Document d) {
+        Document metadata = BsonSupport.sub(d, "metadata");
+        Document idx = BsonSupport.sub(d, "index");
+        Document retry = BsonSupport.sub(d, "retry");
+        return new EntitySummary(
+                d.getString("_id"),
+                d.getString("knowledgeId"),
+                d.getString("externalId"),
+                BsonSupport.enumOf(EntityType.class, d.get("entityType")),
+                BsonSupport.enumOf(EntityStatus.class, d.get("status")),
+                metadata == null ? null : metadata.getString("title"),
+                metadata == null ? null : metadata.getString("uri"),
+                d.getString("checksum"),
+                idx == null ? Entity.IndexInfo.empty() : new Entity.IndexInfo(
+                        intValue(idx.get("chunkCount")), idx.getString("embeddingModel"),
+                        BsonSupport.instant(idx.get("indexedAt")), idx.getString("error")),
+                retry == null ? 0 : intValue(retry.get("count")),
+                Boolean.TRUE.equals(d.getBoolean("needsReindex")),
+                BsonSupport.instant(d.get("updatedAt")));
     }
 
     private static int intValue(Object o) {

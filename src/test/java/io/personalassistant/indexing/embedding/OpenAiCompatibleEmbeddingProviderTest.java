@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +60,7 @@ class OpenAiCompatibleEmbeddingProviderTest {
         OpenAiCompatibleEmbeddingProvider p = new OpenAiCompatibleEmbeddingProvider();
         p.baseUrl = "http://localhost:" + server.getAddress().getPort();
         p.modelName = "text-embedding-004";
-        p.apiKey = "secret-key";
+        p.apiKey = Optional.of("secret-key");
         p.dimension = dim;
         p.timeoutSeconds = 5;
         return p;

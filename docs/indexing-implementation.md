@@ -155,6 +155,8 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 |---|---|
 | `POST /api/knowledge` | Register a knowledge (validates, discovers, creates cursors, activates) |
 | `GET /api/knowledge` / `GET /api/knowledge/{id}` | List / fetch knowledge |
+| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status`, `limit` ≤ 200, `offset`); returns projections, not full entities |
+| `GET /api/knowledge/{id}/cursors` | Its cursors — per-iterable walk state, the real sync-progress view |
 | `PATCH /api/knowledge/{id}` | Edit a knowledge — see [`knowledge-edit-design.md`](./knowledge-edit-design.md) |
 | `POST /api/knowledge/{id}/pause` / `.../resume` | Pause or resume scheduling |
 | `DELETE /api/knowledge/{id}` | Soft-delete + tear down chunks, entities, cursors |
@@ -225,7 +227,8 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v1` is created — changing to a different-width model needs a new physical index + alias flip + full re-index |
 | `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
 | `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
-| `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `text-embedding-004` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Also 768-dim, so interchangeable with the ONNX default without a re-index |
+| `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `models/gemini-embedding-001` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Gemini needs the `models/` prefix; a bare id 404s |
+| `app.embedding.openai.dimensions` | `768` | Width requested via the OpenAI `dimensions` parameter; `0` omits it and takes the model's native width. `gemini-embedding-001` is natively 3072, so this is what keeps it inside the 768 knn mapping. A model that ignores the parameter fails loudly on the first batch |
 | `app.llm.provider` | `openai-compat` | `openai-compat` (hosted Groq/Gemini or local Ollama) or `none` (`StubLlmProvider`, disables `answer: true`) |
 | `app.llm.base-url` / `.model` / `.api-key` | Groq / `llama-3.3-70b-versatile` / `${GROQ_API_KEY:}` | Grounded-answer LLM. Point `base-url` at `http://localhost:11434/v1` for Ollama — no code change |
 | `app.ingestion.google.client-id` / `.client-secret` | `${GOOGLE_OAUTH_CLIENT_ID:}` / `${GOOGLE_OAUTH_CLIENT_SECRET:}` | App-level OAuth fallback used to mint Gmail/Drive access tokens from a refresh token when the connection's auth blob carries no client of its own |

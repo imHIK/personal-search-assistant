@@ -84,10 +84,30 @@ the core.
 | `storage.search` | `SearchIndex` port | core port |
 | `storage.search.opensearch` | OpenSearch adapter, client producer, `OpenSearchIndexInitializer` | adapter |
 | `agent` · `agent.llm` | `SearchAgent` orchestration + `LlmProvider` port and its providers | core/port |
+| `api` | `SpaRoutingConfigurator` — serves `index.html` for the console's client-side routes | adapter |
 | `common` · `.id` · `.concurrency` | `ProviderImpl` qualifier, `Durations`, `Errors`, `Ids`, `PermitService` | shared |
 
 There is no exception-mapper package — resources map exceptions to status codes inline
 (`NoSuchElementException` → 404, `IllegalArgumentException` → 400, `IllegalStateException` → 409).
+
+### Web console (`frontend/`)
+
+A React + TypeScript + Vite single-page app, built by the `frontendBuild` Gradle task into
+`src/main/resources/META-INF/resources` so the packaged Quarkus app serves API and UI from one
+origin — which is why there is no CORS configuration anywhere. It is a **pure REST consumer**: it
+holds no domain logic and adds no coupling in this direction, so it can be split into its own repo
+by deleting the two Gradle tasks and enabling `quarkus.http.cors`.
+
+Its own internal seam is the same "registry, not code" idea used on the Java side. Connector
+capabilities (`config/connectors.ts`), status→user-state translation (`config/presentation.ts`),
+copy (`labels.ts`), error rewriting (`errors.ts`) and unbuilt-capability flags (`features.ts`) are
+data tables; screens render from them and never branch on a `SourceType` or a status enum.
+
+The console deliberately does **not** expose the domain vocabulary. `Knowledge` reads as "Source",
+`Entity` as "Item", `Connection` as "Account", and cursors are presented as per-stream progress
+lines rather than positions and leases — with a persisted **Technical details** toggle that reveals
+every raw value in place. Code, API and docs keep the domain names (see CLAUDE.md); only the
+interface layer translates.
 
 ## Why MongoDB *and* OpenSearch (separation of concerns)
 

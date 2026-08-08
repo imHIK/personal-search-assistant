@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
@@ -12,6 +13,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -28,14 +32,17 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 @ProviderImpl
 public class OpenAiCompatibleLlmProvider implements LlmProvider {
 
+    private static final Logger LOG = Logger.getLogger(OpenAiCompatibleLlmProvider.class.getName());
+
     @ConfigProperty(name = "app.llm.base-url", defaultValue = "https://api.groq.com/openai/v1")
     String baseUrl;
 
     @ConfigProperty(name = "app.llm.model", defaultValue = "llama-3.3-70b-versatile")
     String modelName;
 
-    @ConfigProperty(name = "app.llm.api-key", defaultValue = "")
-    String apiKey;
+    /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
+    @ConfigProperty(name = "app.llm.api-key")
+    Optional<String> apiKey;
 
     @ConfigProperty(name = "app.llm.temperature", defaultValue = "0.2")
     double temperature;
@@ -47,6 +54,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
             .build();
+    private final AtomicBoolean configLogged = new AtomicBoolean();
 
     @Override
     public String providerId() {
@@ -60,6 +68,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
 
     @Override
     public String complete(String system, List<Message> messages) {
+        logConfigOnce();
         try {
             ObjectNode body = mapper.createObjectNode();
             body.put("model", modelName);
@@ -77,14 +86,18 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
                     .timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            if (apiKey != null && !apiKey.isBlank()) {
-                request.header("Authorization", "Bearer " + apiKey);
+            String key = ConfigText.orNull(apiKey);
+            if (key != null) {
+                request.header("Authorization", "Bearer " + key);
             }
 
+            LOG.fine(() -> "LLM request: " + messages.size() + " message(s) -> " + configSummary());
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
+                // See the embedding provider: a missing key is reported by vendors as anything from
+                // 400 to 404, so the resolved config belongs in the message rather than the logs only.
                 throw new IllegalStateException("LLM API " + response.statusCode() + ": "
-                        + snippet(response.body()));
+                        + snippet(response.body()) + " [" + configSummary() + "]");
             }
 
             JsonNode content = mapper.readTree(response.body())
@@ -98,6 +111,23 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         } catch (Exception e) {
             throw new IllegalStateException("LLM request failed (" + baseUrl + ")", e);
         }
+    }
+
+    /**
+     * One INFO line, on first use, naming what this provider resolved to — see the embedding
+     * provider for why a blank api-key is legitimate (local Ollama) and therefore not fatal here.
+     */
+    private void logConfigOnce() {
+        if (configLogged.compareAndSet(false, true)) {
+            LOG.info("LLM provider ready: " + configSummary());
+        }
+    }
+
+    /** Never logs the key itself — only whether one resolved. */
+    private String configSummary() {
+        return "base-url=" + baseUrl + ", model=" + modelName + ", temperature=" + temperature
+                + ", api-key=" + (ConfigText.orNull(apiKey) == null
+                        ? "ABSENT -> sending no Authorization header" : "present");
     }
 
     private static void addMessage(ArrayNode messages, String role, String content) {

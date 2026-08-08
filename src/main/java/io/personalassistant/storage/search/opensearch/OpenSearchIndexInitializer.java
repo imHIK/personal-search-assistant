@@ -22,7 +22,7 @@ import org.opensearch.client.RestClient;
 public class OpenSearchIndexInitializer {
 
     private static final Logger LOG = Logger.getLogger(OpenSearchIndexInitializer.class.getName());
-    private static final String PHYSICAL_INDEX = "chunks_v1";
+    private static final String PHYSICAL_INDEX = "chunks_v2_768";
 
     private final RestClient client;
     private final String alias;

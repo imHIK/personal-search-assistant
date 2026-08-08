@@ -65,10 +65,16 @@ PUT /chunks_v1
 ```
 
 > **`dimension` is pinned to the embedding model and baked in at index-creation time**
-> (768 = `bge-base-en-v1.5`, and also `text-embedding-004`, so those two are interchangeable with
-> no re-index). Moving to a model of a *different* width is not a config change: it needs a new
-> physical index (`chunks_v2`), a full re-index, and an alias flip. Changing
-> `app.embedding.dimension` alone against an existing index will just make writes fail.
+> (768 = `bge-base-en-v1.5` natively; `gemini-embedding-001` is natively 3072 but is asked for 768
+> via `app.embedding.openai.dimensions`, so it fits the same mapping). Moving to a model whose width
+> you cannot request is not a config change: it needs a new physical index (`chunks_v2`), a full
+> re-index, and an alias flip. Changing `app.embedding.dimension` alone against an existing index
+> will just make writes fail.
+>
+> Fitting the mapping is *not* the same as being interchangeable. Two models embed into different
+> vector spaces, so swapping one for another invalidates every vector already stored even at equal
+> width — old document vectors and new query vectors simply are not comparable, and semantic hits
+> degrade to noise rather than to lower recall. Re-index the corpus after any model change.
 >
 > `metadata` is mapped as a plain `object` with dynamic sub-fields rather than a fixed property
 > list, so connectors and parsers can attach whatever facets they have without a mapping change.

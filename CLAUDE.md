@@ -7,6 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Java 21 + Quarkus 3.33.2 (LTS), Gradle 9 (Groovy DSL), single module, root package `io.personalassistant`.
 MongoDB is the source of truth; OpenSearch holds chunks + kNN vectors and is fully regenerable.
 
+The web console lives in `frontend/` — React 19 + TypeScript + Vite, Tailwind v4, TanStack Query,
+React Router. It builds into `src/main/resources/META-INF/resources` (gitignored), so Quarkus serves
+API and UI on one origin and **no CORS config exists — don't add any**.
+
 ## Commands
 
 ```bash
@@ -17,7 +21,14 @@ docker compose up -d          # Mongo :27017, OpenSearch :9200 — required, Qua
 ./gradlew test --tests "*IndexingRunnerTest"                      # single class
 ./gradlew test --tests "*IndexingRunnerTest.indexesTextEntity*"   # single method
 ./gradlew spotlessApply       # fix import order / unused imports / trailing whitespace
+
+./gradlew frontendDev         # Vite dev server :5173, hot reload, proxies /api + /q to :8080
+./gradlew frontendBuild       # console -> src/main/resources/META-INF/resources (runs inside `build`)
+cd frontend && npm run lint   # eslint; `npx tsc -b` for a type-check without bundling
 ```
+
+Frontend work means running **both** `./gradlew quarkusDev` and `./gradlew frontendDev`, and using
+:5173. Plain `quarkusDev` on :8080 serves the last built bundle, not your edits.
 
 `quarkus.compose.devservices.enabled=false` is deliberate — infra ownership is docker-compose's, not Quarkus's.
 Config cache is on (`gradle.properties`), so `build.gradle` edits invalidate it; that's expected noise.
@@ -42,6 +53,26 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
 - Mongo indexes are created at startup in `MongoIndexInitializer` (`@Observes StartupEvent`). There is no
   migration framework — a new query pattern means a new index there. The unique `(knowledgeId, externalId)`
   index on `entities` is what makes upsert dedupe work.
+
+### Frontend rules (`frontend/`)
+
+- **The console is a pure REST consumer.** No domain logic; types in `src/api/types.ts` mirror the DTOs
+  by hand. All fetching goes through `src/api/http.ts` (it handles the 204-no-body endpoints and the
+  raw-500s the missing exception mappers produce).
+- **Never branch on a `SourceType` or a status enum in a component.** Connectors are descriptors in
+  `src/config/connectors.ts` and forms render from `FieldSpec` via `<SchemaForm>`; statuses go through
+  the lookup tables in `src/config/presentation.ts`, which have a safe fallback so a new backend enum
+  constant degrades to a neutral badge instead of crashing. Adding a connector = one object + fields.
+- **Copy lives in `src/config/labels.ts`, colours only in CSS variables** (`src/index.css`). No inline
+  user-facing strings, no hex literals in components.
+- **The UI hides the domain machinery by default.** Ids, checksums, cursor positions, raw enum names,
+  `anchor`, `syncGeneration` and RRF scores render only inside `<Technical>` / `<TechnicalPanel>`,
+  behind the persisted top-bar toggle. When adding a field, decide which side of that line it is on.
+- **Two async traps the API sets** — both already handled, don't undo them: `POST /api/knowledge`
+  returns **200 with `status: "ERROR"`** on a failed activation (check the body, not the HTTP status),
+  and `POST /api/search` with `answer: true` **500s and loses the hits** when the LLM is unavailable
+  (`useSearch` retries once without the flag).
+- Things the backend lacks are flags in `src/config/features.ts`, not deletions.
 
 ## Invariants — breaking these corrupts data
 
@@ -71,6 +102,12 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
 - Records for all DTOs and domain model, with `@param` Javadoc on components.
 - Constructor injection with `@Inject` on the constructor + `private final` fields — but `@ConfigProperty`
   fields are **package-private on purpose** so unit tests can set them directly (`runner.embedBatch = 64;`).
+- **A text config property that may legitimately be unset is `Optional<String>`, read through
+  `common/ConfigText`** — never a bare `String`, and never `defaultValue = ""`. SmallRye converts an empty
+  value to null, and a non-`Optional` injection point then fails startup with *"Failed to load config value
+  of type class java.lang.String for: &lt;key&gt;"*. This bites every `${ENV_VAR:}`-backed property the
+  moment the env var is unset. Properties that always carry a real value (e.g.
+  `app.scheduler.default-interval=1d`) stay plain `String` with a non-empty `defaultValue`.
 - Explicit single-type imports, no wildcards; static imports first, then one alphabetical block
   (Spotless enforces this). 4-space indent, ~110 col.
 - Javadoc explains *why* — rationale, trade-offs, invariants. Match that density.

@@ -64,6 +64,16 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.ascending("retry.nextAttemptAt"));
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId", "status"));
+        // Sorted listing for the console's entity browser. The mixed asc/desc key order needs
+        // compoundIndex; _id is the paging tiebreak. The (knowledgeId, status) index above is a
+        // prefix of the second one and therefore redundant, but there is no drop path here and no
+        // migration framework, so it stays — see docs/mongodb-schema.md.
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId"),
+                        Indexes.descending("updatedAt"), Indexes.ascending("_id")));
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "status"),
+                        Indexes.descending("updatedAt"), Indexes.ascending("_id")));
 
         db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId"));

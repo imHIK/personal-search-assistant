@@ -4,6 +4,7 @@ import ai.djl.huggingface.translator.TextEmbeddingTranslatorFactory;
 import ai.djl.inference.Predictor;
 import ai.djl.repository.zoo.Criteria;
 import ai.djl.repository.zoo.ZooModel;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
 import io.personalassistant.domain.model.Embedding;
 import jakarta.annotation.PreDestroy;
@@ -12,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -44,8 +46,9 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
     int dimension;
 
-    @ConfigProperty(name = "app.embedding.onnx.model-path", defaultValue = "")
-    String modelPath;
+    /** Optional: blank means no model exported yet, and embedding throws. See {@link ConfigText}. */
+    @ConfigProperty(name = "app.embedding.onnx.model-path")
+    Optional<String> modelPath;
 
     @ConfigProperty(name = "app.embedding.onnx.pooling", defaultValue = "cls")
     String pooling;
@@ -95,7 +98,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
             return out;
         } catch (Exception e) {
             throw new IllegalStateException("ONNX embedding failed (model=" + modelName
-                    + ", path=" + modelPath + ")", e);
+                    + ", path=" + ConfigText.orNull(modelPath) + ")", e);
         }
     }
 
@@ -107,12 +110,13 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
         }
         synchronized (lock) {
             if (predictor == null) {
-                if (modelPath == null || modelPath.isBlank()) {
+                String configured = ConfigText.orNull(modelPath);
+                if (configured == null) {
                     throw new IllegalStateException(
                             "app.embedding.onnx.model-path is not set. Point it at a directory that "
                             + "contains the exported model.onnx, tokenizer.json and config.json.");
                 }
-                Path dir = Path.of(modelPath);
+                Path dir = Path.of(configured);
                 if (!Files.isDirectory(dir)) {
                     throw new IllegalStateException("app.embedding.onnx.model-path is not a directory: " + dir);
                 }

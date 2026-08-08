@@ -42,7 +42,7 @@ class GoogleDriveConnectorTest {
 
     private GoogleDriveConnector connector(Path scratch) {
         GoogleDriveConnector c = new GoogleDriveConnector(api, tokens, connections);
-        c.downloadDir = scratch.toString();
+        c.downloadDir = Optional.of(scratch.toString());
         c.maxFileBytes = 26_214_400L;
         c.maxFolders = 500;
         return c;

@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.google.drive;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ConfigText;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
@@ -30,6 +31,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -75,8 +77,9 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
             "application/vnd.google-apps.spreadsheet", "text/csv",
             "application/vnd.google-apps.presentation", "text/plain");
 
-    @ConfigProperty(name = "app.ingestion.google-drive.download-dir", defaultValue = "")
-    String downloadDir;
+    /** Optional: blank falls back to {@code ${java.io.tmpdir}/psa-drive}. See {@link ConfigText}. */
+    @ConfigProperty(name = "app.ingestion.google-drive.download-dir")
+    Optional<String> downloadDir;
 
     @ConfigProperty(name = "app.ingestion.google-drive.max-file-bytes", defaultValue = "26214400")
     long maxFileBytes;
@@ -299,10 +302,8 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     }
 
     private Path scratchDir() {
-        String dir = downloadDir == null || downloadDir.isBlank()
-                ? System.getProperty("java.io.tmpdir") + "/psa-drive"
-                : downloadDir;
-        return Path.of(dir);
+        return Path.of(ConfigText.orElse(downloadDir,
+                System.getProperty("java.io.tmpdir") + "/psa-drive"));
     }
 
     private static String sanitize(String name) {

@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,7 +59,7 @@ class OpenAiCompatibleLlmProviderTest {
         OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider();
         p.baseUrl = "http://localhost:" + server.getAddress().getPort();
         p.modelName = "llama-3.3-70b-versatile";
-        p.apiKey = "secret-key";
+        p.apiKey = Optional.of("secret-key");
         p.temperature = 0.2;
         p.timeoutSeconds = 5;
         return p;
