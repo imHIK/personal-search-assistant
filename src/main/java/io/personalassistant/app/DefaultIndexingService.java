@@ -2,6 +2,7 @@ package io.personalassistant.app;
 
 import io.personalassistant.domain.service.IndexingService;
 import io.personalassistant.ingestion.job.ForwardCursorScheduler;
+import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.EntityRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -17,11 +18,14 @@ public class DefaultIndexingService implements IndexingService {
 
     private final ForwardCursorScheduler scheduler;
     private final EntityRepository entities;
+    private final CursorRepository cursors;
 
     @Inject
-    public DefaultIndexingService(ForwardCursorScheduler scheduler, EntityRepository entities) {
+    public DefaultIndexingService(ForwardCursorScheduler scheduler, EntityRepository entities,
+                                  CursorRepository cursors) {
         this.scheduler = scheduler;
         this.entities = entities;
+        this.cursors = cursors;
     }
 
     @Override
@@ -37,5 +41,15 @@ public class DefaultIndexingService implements IndexingService {
     @Override
     public void deleteEntity(String entityId) {
         entities.markDeleted(entityId, Instant.now());
+    }
+
+    @Override
+    public RetryTrigger retryFailed(String knowledgeId) {
+        // Both halves, because both stages dead-letter independently: a cursor can exhaust its
+        // retries fetching while entities fail to index, and a user asking to "retry what failed"
+        // means all of it.
+        return new RetryTrigger(knowledgeId,
+                cursors.retryFailedByKnowledge(knowledgeId),
+                entities.retryFailedByKnowledge(knowledgeId));
     }
 }

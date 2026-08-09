@@ -53,7 +53,7 @@ public class IngestionJob {
 
     // Sized to the cursor lease: the permit is renewed per page alongside the lease, so it must
     // outlive a single page just as the lease does (keep >= app.ingestion.lease-seconds).
-    @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "900")
+    @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "14400")
     long permitTtlSeconds;
 
     @Inject

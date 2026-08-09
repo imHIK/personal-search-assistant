@@ -86,7 +86,8 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (!ownsLiveLease(c, owner)) {
             return false;
         }
-        store.put(cursorId, with(c, restingStatus, null, c.position(), c.retry(), c.stats()));
+        // A successful resting ends the consecutive-failure streak — mirrors the Mongo adapter.
+        store.put(cursorId, with(c, restingStatus, null, c.position(), Cursor.Retry.zero(), c.stats()));
         return true;
     }
 
@@ -144,6 +145,20 @@ public class InMemoryCursorRepository implements CursorRepository {
             }
         }
         return armed;
+    }
+
+    @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        int revived = 0;
+        for (Cursor c : new ArrayList<>(store.values())) {
+            if (c.knowledgeId().equals(knowledgeId) && c.status() == CursorStatus.FAILED) {
+                // Position kept: the cursor resumes where it stopped rather than re-walking.
+                store.put(c.id(), with(c, CursorStatus.AVAILABLE, null, c.position(),
+                        Cursor.Retry.zero(), c.stats()));
+                revived++;
+            }
+        }
+        return revived;
     }
 
     @Override

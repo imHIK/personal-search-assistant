@@ -43,7 +43,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.onnx.model", defaultValue = "bge-base-en-v1.5")
     String modelName;
 
-    @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
+    @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
     /** Optional: blank means no model exported yet, and embedding throws. See {@link ConfigText}. */

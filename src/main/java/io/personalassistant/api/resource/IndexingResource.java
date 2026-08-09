@@ -27,6 +27,17 @@ public class IndexingResource {
         return indexing.triggerSync(knowledgeId);
     }
 
+    /**
+     * Revive a knowledge's dead-lettered work — {@code FAILED} cursors and entities — with a fresh
+     * retry budget. Separate from {@code /sync} because that one only re-arms forward cursors and a
+     * dead-letter may be either direction; see {@link IndexingService#retryFailed}.
+     */
+    @POST
+    @Path("/knowledge/{id}/retry-failed")
+    public IndexingService.RetryTrigger retryFailed(@PathParam("id") String knowledgeId) {
+        return indexing.retryFailed(knowledgeId);
+    }
+
     @POST
     @Path("/entities/{id}/reindex")
     public void reindex(@PathParam("id") String entityId) {

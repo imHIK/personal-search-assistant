@@ -46,7 +46,7 @@ public class IndexingJob {
 
     // The permit is held for a whole tick (not renewed mid-tick), so it must exceed the worst-case
     // time to process one tick's batch — comfortably above the per-entity lease.
-    @ConfigProperty(name = "app.indexing.permits.ttl-seconds", defaultValue = "300")
+    @ConfigProperty(name = "app.indexing.permits.ttl-seconds", defaultValue = "1200")
     long permitTtlSeconds;
 
     @Inject
@@ -89,7 +89,7 @@ public class IndexingJob {
             int quota = Math.min(perKnowledge, budget);
             List<Entity> claimed = entities.claimForIndexing(knowledgeId, quota, worker, runner.leaseDuration());
             for (Entity entity : claimed) {
-                runner.indexEntity(entity);
+                runner.indexEntity(entity, worker);
             }
             budget -= claimed.size();
         }
@@ -98,7 +98,7 @@ public class IndexingJob {
     private void processDeletions() {
         List<Entity> tombstoned = entities.claimForDeletion(batch, worker, runner.leaseDuration());
         for (Entity entity : tombstoned) {
-            runner.deleteEntityChunks(entity);
+            runner.deleteEntityChunks(entity, worker);
         }
     }
 }

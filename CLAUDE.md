@@ -78,9 +78,11 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
 
 1. **Anchor.** Every knowledge gets `anchor = now` at creation and it never moves, including across edits.
    Forward grabs return items `>= anchor`, backward grabs `< anchor`. Violations create gaps or duplicates.
-2. **Cursor lease fencing.** `advancePosition` / `release` / `recordFailure` are compare-and-set on
-   `lease.owner` + not-expired. If one returns `false` the worker lost its lease and must stop touching the
-   cursor immediately.
+2. **Lease fencing, cursors *and* entities.** `advancePosition` / `release` / `recordFailure` on cursors,
+   and `markIndexed` / `markFailed` / `markDeletionComplete` on entities, are all compare-and-set on
+   `lease.owner` + not-expired. If one returns `false` the worker lost its lease and must stop touching that
+   record immediately — no compensation, the new owner redoes the work. Any new terminal write on either
+   must be fenced the same way; an unfenced one lets a stale worker mark half-finished work complete.
 3. **`checksum` is the only change signal.** A connector must make it change whenever the item changes
    (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail: `gmail:<id>;hist:<historyId>`).
    Unchanged checksum + `INDEXED` status = skipped entirely.
@@ -88,12 +90,23 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    be replayed after a crash. Files pass as `fileRef` (a path), never bytes — Mongo's 16 MB cap.
 5. **Embedding dimension is baked into the index mapping.** `app.embedding.dimension=768` is written into the
    `knn_vector` mapping by `OpenSearchIndexInitializer` at index creation. A different-width model needs a new
-   physical index (`chunks_v2`) + alias flip + full re-index. Code only ever talks to the `chunks` alias.
+   physical index (`chunks_v2_768` today) + alias flip + full re-index. Code only ever talks to the `chunks`
+   alias. This key deliberately has **no `defaultValue`** at any injection point — a guessed width builds an
+   index nothing fits, so an absent property must fail startup. `ConfigDefaultsTest` enforces both that and
+   general agreement between `@ConfigProperty` defaults and `application.properties`.
 6. **Indexing is an idempotent replace:** `deleteByEntity(id)` then `indexChunks(...)`, chunk id
    `entityId_ordinal`. Chunking config changes are direct updates — existing chunks are not re-chunked;
    opt in per entity via `POST /api/index/entities/{id}/reindex`.
 7. Permits (`InMemoryPermitService`, scopes `global` / `connector:<TYPE>` / `knowledge:<id>`) are
    **single-node only**. Permit TTL must be `>=` lease TTL, and lease TTL must exceed worst-case single-page time.
+8. **Field ownership on `entities`.** Ingestion (`upsert`) owns content, `checksum` and
+   `lastSeenGeneration`; the indexer owns `status`, `lease`, `retry` and `index.*`. Writes are field-level,
+   never whole-document — a document replace from one side clobbers the other's in-flight state. `upsert`
+   additionally drops the lease so new content fences out an indexer running on the previous revision.
+9. **Retry counts are consecutive, not cumulative.** Success resets them (`markIndexed`, cursor `release`),
+   so a retry limit means "n failures in a row". `FAILED` is a real dead-letter on both sides: nothing
+   auto-reclaims it, and the only ways back are `POST /api/index/entities/{id}/reindex` and
+   `POST /api/index/knowledge/{id}/retry-failed`.
 
 ## Style (differs from Java defaults)
 
@@ -125,8 +138,9 @@ adding `@QuarkusTest` + rest-assured tests for resources; the untested-adapter g
 
 ## Local dev
 
-`app.embedding.provider=onnx-bge` is the shipped default but `app.embedding.onnx.model-path` is empty, so
-embedding throws until a model is exported. For local dev set `app.embedding.provider=local-hashing`.
+`app.embedding.provider=openai-embed` is the shipped default and reads `GEMINI_API_KEY`. The local
+alternative `onnx-bge` has an empty `app.embedding.onnx.model-path`, so selecting it throws until a
+model is exported. For local dev with neither set `app.embedding.provider=local-hashing`.
 Optional env vars: `GROQ_API_KEY` (answers), `GEMINI_API_KEY` (hosted embeddings),
 `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh). No `.env` file — bare env vars.
 

@@ -160,14 +160,18 @@ public class IngestionRunner {
         Instant now = Instant.now();
         String id = existing.map(Entity::id).orElse(Ids.entity());
         Instant createdAt = existing.map(Entity::createdAt).orElse(now);
-        Entity.IndexInfo index = existing.map(Entity::index).orElse(Entity.IndexInfo.empty());
         Entity.Content content = item.fileRef() != null
                 ? Entity.Content.ofFile(item.fileRef())
                 : Entity.Content.ofText(item.text());
 
+        // The status/needsReindex/index/lease/retry arguments below are what upsert() guarantees
+        // anyway — it owns the work-queue reset so that a re-ingest atomically fences out an indexer
+        // still running on the previous revision. They are restated here only because Entity is the
+        // carrier record; changing them here would not change what is stored.
         Entity entity = new Entity(id, kn.id(), cursor.iterableId(), item.entityType(),
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
-                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(), createdAt, now,
+                EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
+                createdAt, now,
                 kn.syncGeneration()); // stamp the walk generation so re-walked items aren't seen as stale
         entities.upsert(entity);
     }

@@ -14,7 +14,23 @@ import java.util.Optional;
  */
 public interface EntityRepository {
 
-    /** Insert or update by natural key {@code (knowledgeId, externalId)}; preserves id/createdAt. */
+    /**
+     * Insert or update by natural key {@code (knowledgeId, externalId)}; preserves id/createdAt.
+     *
+     * <p><b>Field ownership.</b> This writes only the fields ingestion owns — {@code iterableId},
+     * {@code entityType}, {@code raw}, {@code content}, {@code metadata}, {@code checksum},
+     * {@code lastSeenGeneration}, {@code updatedAt} — and never the indexer's
+     * {@code index.chunkCount}/{@code embeddingModel}/{@code indexedAt}, which describe what is
+     * currently in the search index and stay true until the chunks are actually replaced.
+     *
+     * <p>New content also resets the work queue ({@code status=INGESTED}, {@code needsReindex=false},
+     * retry cleared, {@code index.error} cleared) <em>and drops any lease</em>. Dropping the lease is
+     * what fences out a worker mid-index on the previous revision: its {@link #markIndexed} is
+     * lease-fenced, so it becomes a no-op instead of marking the stale text INDEXED and leaving the
+     * new content permanently unsearchable.
+     *
+     * @return the stored entity as it now exists
+     */
     Entity upsert(Entity entity);
 
     Optional<Entity> findById(String id);
@@ -45,16 +61,35 @@ public interface EntityRepository {
     /** Atomically claim up to {@code limit} tombstoned entities whose chunks still need removal. */
     List<Entity> claimForDeletion(int limit, String owner, Duration lease);
 
-    /** Mark an entity successfully indexed and record what was written. */
-    void markIndexed(String id, int chunkCount, String embeddingModel, Instant indexedAt);
+    /**
+     * Mark an entity successfully indexed and record what was written, clearing the retry streak.
+     *
+     * <p>Lease-fenced: applies only if {@code owner} still holds a live lease. Returns {@code false}
+     * if the lease was lost, in which case the caller must stop touching this entity — another
+     * worker owns it now (invariant 2).
+     */
+    boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt);
 
-    /** Mark a tombstoned entity's chunks as cleaned (idempotent terminal state). */
-    void markDeletionComplete(String id, Instant cleanedAt);
+    /**
+     * Mark a tombstoned entity's chunks as cleaned (idempotent terminal state). Lease-fenced; see
+     * {@link #markIndexed}.
+     */
+    boolean markDeletionComplete(String id, String owner, Instant cleanedAt);
 
-    /** Record an indexing failure: retry/backoff bookkeeping or terminal {@code FAILED}. */
-    void markFailed(String id, EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt);
+    /**
+     * Record an indexing failure: retry/backoff bookkeeping, or terminal {@code FAILED}. A terminal
+     * resting status also clears {@code needsReindex}, so the entity leaves the indexing queue for
+     * good — {@link #flagNeedsReindex} is the only way back. Lease-fenced; see {@link #markIndexed}.
+     */
+    boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                       int retryCount, Instant nextAttemptAt);
 
-    /** Flag entities for re-indexing without re-fetching (e.g. after a config/model bump). */
+    /**
+     * Flag an entity for re-indexing without re-fetching (e.g. after a config/model bump), and — if
+     * it was dead-lettered — revive it with a fresh retry budget. This is the documented exit from
+     * terminal {@code FAILED}. Deliberately leaves any live lease alone: an entity a worker is
+     * mid-run on stays out of the queue until that lease lapses.
+     */
     void flagNeedsReindex(String id);
 
     /**
@@ -63,6 +98,15 @@ public interface EntityRepository {
      * "seen this generation" and doesn't later look stale. Idempotent; leaves {@code updatedAt}.
      */
     void stampLastSeen(String id, long generation);
+
+    /**
+     * Return a knowledge's dead-lettered entities to the indexing queue with a fresh retry budget
+     * ({@code FAILED} → {@code INGESTED}). The bulk counterpart to {@link #flagNeedsReindex}, and the
+     * only other way out of {@code FAILED}.
+     *
+     * @return how many entities were revived
+     */
+    int retryFailedByKnowledge(String knowledgeId);
 
     /** Tombstone an entity so the indexing stage removes its chunks. */
     void markDeleted(String id, Instant updatedAt);

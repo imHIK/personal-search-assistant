@@ -98,7 +98,9 @@ Everything else simply means "don't pick me" — resting/terminal bookkeeping st
 - **`IDLE`** — a forward cursor that has caught up; sits here until its schedule flips it
   back to `AVAILABLE`.
 - **`EXHAUSTED`** — a backward cursor that has drained all history (terminal).
-- **`FAILED`** — errored past the retry limit; needs intervention (dead-letter).
+- **`FAILED`** — errored past the retry limit; needs intervention (dead-letter). The limit counts
+  *consecutive* failures — a successful run resets the streak — and nothing auto-reclaims a `FAILED`
+  cursor. `POST /api/index/knowledge/{id}/retry-failed` is the only way out.
 
 > **Backward and forward share the exact same job logic.** The only difference is what makes
 > a cursor `AVAILABLE` again: a backward cursor re-arms *itself* until `EXHAUSTED`, while a
@@ -241,7 +243,9 @@ status"). Uses PermitService for concurrency, same as ingestion.
    so re-indexing is idempotent), set `status = INDEXED`, and record `embeddingModel` +
    `chunkCount` + `indexedAt` **on the entity** (Mongo).
 4. For `status = DELETED` entities: delete their chunks from **OpenSearch**, done.
-5. On error: retry with backoff; after N → `FAILED` with captured error.
+5. On error: retry with backoff; after N *consecutive* failures → `FAILED` with captured error. That
+   is terminal — the claim filter excludes it — and is left only by an explicit reindex or
+   `POST /api/index/knowledge/{id}/retry-failed`.
 
 ### Transform paths
 - **File data**: load `fileRef` → `extractFileText` (Apache Tika; OCR variant for scanned

@@ -17,8 +17,28 @@ public interface IndexingService {
     void deleteEntity(String entityId);
 
     /**
+     * Return a knowledge's dead-lettered work to its queues: {@code FAILED} cursors become
+     * {@code AVAILABLE} and {@code FAILED} entities become {@code INGESTED}, both with a fresh retry
+     * budget. Nothing else moves either out of {@code FAILED}, so without this a transient burst of
+     * failures leaves work permanently stranded.
+     *
+     * <p>Deliberately separate from {@link #triggerSync}: that one is direction-scoped (forward
+     * cursors only) and its {@code cursorsArmed} count is documented as such, while dead-lettered
+     * cursors include backward ones. Folding recovery into a routine sync would also remove any way
+     * to sync <em>without</em> retrying.
+     */
+    RetryTrigger retryFailed(String knowledgeId);
+
+    /**
      * @param knowledgeId the knowledge whose forward cursors were re-armed
      * @param cursorsArmed how many forward cursors flipped IDLE → AVAILABLE
      */
     record SyncTrigger(String knowledgeId, int cursorsArmed) {}
+
+    /**
+     * @param knowledgeId the knowledge whose dead-lettered work was revived
+     * @param cursorsRetried how many cursors flipped FAILED → AVAILABLE
+     * @param entitiesRetried how many entities flipped FAILED → INGESTED
+     */
+    record RetryTrigger(String knowledgeId, int cursorsRetried, int entitiesRetried) {}
 }

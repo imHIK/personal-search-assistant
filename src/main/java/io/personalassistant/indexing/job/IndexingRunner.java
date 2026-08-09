@@ -62,10 +62,10 @@ public class IndexingRunner {
     @ConfigProperty(name = "app.indexing.retry-limit", defaultValue = "5")
     int retryLimit;
 
-    @ConfigProperty(name = "app.indexing.backoff-seconds", defaultValue = "30")
+    @ConfigProperty(name = "app.indexing.backoff-seconds", defaultValue = "300")
     long backoffSeconds;
 
-    @ConfigProperty(name = "app.indexing.lease-seconds", defaultValue = "120")
+    @ConfigProperty(name = "app.indexing.lease-seconds", defaultValue = "900")
     long leaseSeconds;
 
     @Inject
@@ -82,12 +82,17 @@ public class IndexingRunner {
         this.index = index;
     }
 
-    /** Index (or re-index) a single entity. Catches and records failures with retry/backoff. */
-    public void indexEntity(Entity entity) {
+    /**
+     * Index (or re-index) a single entity. Catches and records failures with retry/backoff.
+     *
+     * @param owner the worker that holds this entity's lease; every terminal write is fenced on it,
+     *              so a run whose lease lapsed mid-flight records nothing (invariant 2)
+     */
+    public void indexEntity(Entity entity, String owner) {
         try {
             Optional<Knowledge> kn = knowledge.findById(entity.knowledgeId());
             if (kn.isEmpty()) {
-                fail(entity, "Owning knowledge " + entity.knowledgeId() + " not found", true);
+                fail(entity, owner, "Owning knowledge " + entity.knowledgeId() + " not found", true);
                 return;
             }
             SourceType sourceType = kn.get().connectorDetails().type();
@@ -105,18 +110,28 @@ public class IndexingRunner {
             index.deleteByEntity(entity.id());
             index.indexChunks(embedded);
 
-            entities.markIndexed(entity.id(), embedded.size(), embeddings.model(), Instant.now());
+            // The OpenSearch write precedes this fenced Mongo write by necessity, so a lease lost in
+            // between means we wrote chunks the new owner will overwrite. That is benign — chunk ids
+            // are entityId_ordinal and the replace is idempotent — so there is nothing to compensate;
+            // just stop. Deleting what we wrote would actively corrupt the new owner's run.
+            if (!entities.markIndexed(entity.id(), owner, embedded.size(), embeddings.model(), Instant.now())) {
+                LOG.warning("Lost the indexing lease on entity " + entity.id()
+                        + " before markIndexed; leaving it to the new owner");
+            }
         } catch (RuntimeException e) {
-            fail(entity, Errors.summary(e), false);
+            fail(entity, owner, Errors.summary(e), false);
             LOG.log(Level.WARNING, "Indexing failed for entity " + entity.id(), e);
         }
     }
 
     /** Remove a tombstoned entity's chunks from the search index, then mark cleanup complete. */
-    public void deleteEntityChunks(Entity entity) {
+    public void deleteEntityChunks(Entity entity, String owner) {
         try {
             index.deleteByEntity(entity.id());
-            entities.markDeletionComplete(entity.id(), Instant.now());
+            if (!entities.markDeletionComplete(entity.id(), owner, Instant.now())) {
+                LOG.warning("Lost the deletion lease on entity " + entity.id()
+                        + " before markDeletionComplete; leaving it to the new owner");
+            }
         } catch (RuntimeException e) {
             LOG.log(Level.WARNING, "Failed to remove chunks for deleted entity " + entity.id(), e);
             // Leave needsReindex=true so the deletion is retried; the lease will lapse and re-claim.
@@ -148,19 +163,38 @@ public class IndexingRunner {
         for (int start = 0; start < chunks.size(); start += embedBatch) {
             List<Chunk> batch = chunks.subList(start, Math.min(chunks.size(), start + embedBatch));
             List<Embedding> vectors = embeddings.embedAll(batch.stream().map(Chunk::text).toList());
+            // Contract check, not paranoia. A chunk that reaches the index without a vector is
+            // written happily by OpenSearch (the mapping does not require the field), counted by
+            // markIndexed, and then invisible to semantic search forever with no error anywhere.
+            // Validating here rather than in one provider covers every provider by construction.
+            if (vectors == null || vectors.size() != batch.size()) {
+                throw new IllegalStateException("Embedding provider " + embeddings.model() + " returned "
+                        + (vectors == null ? "null" : vectors.size() + " vectors")
+                        + " for " + batch.size() + " chunks");
+            }
             for (int i = 0; i < batch.size(); i++) {
-                out.add(batch.get(i).withEmbedding(vectors.get(i)));
+                Embedding vector = vectors.get(i);
+                if (vector == null || vector.vector() == null) {
+                    throw new IllegalStateException("Embedding provider " + embeddings.model()
+                            + " returned no vector for chunk " + batch.get(i).id());
+                }
+                out.add(batch.get(i).withEmbedding(vector));
             }
         }
         return out;
     }
 
-    private void fail(Entity entity, String error, boolean terminal) {
+    private void fail(Entity entity, String owner, String error, boolean terminal) {
+        // Consecutive, not cumulative: markIndexed zeroes this on every success, so retryLimit means
+        // "five failures in a row" rather than "five failures ever".
         int retryCount = (entity.retry() == null ? 0 : entity.retry().count()) + 1;
         boolean dead = terminal || retryCount > retryLimit;
         EntityStatus resting = dead ? EntityStatus.FAILED : EntityStatus.INGESTED;
         Instant nextAttempt = dead ? null : Instant.now().plusSeconds(backoffSeconds);
-        entities.markFailed(entity.id(), resting, error, retryCount, nextAttempt);
+        if (!entities.markFailed(entity.id(), owner, resting, error, retryCount, nextAttempt)) {
+            LOG.warning("Lost the indexing lease on entity " + entity.id()
+                    + " before recording a failure; the new owner will record its own outcome");
+        }
     }
 
     private static Path resolve(String fileRef) {

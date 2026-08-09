@@ -1,11 +1,14 @@
 package io.personalassistant.ingestion.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -68,6 +71,12 @@ class IngestionRunnerTest {
         Cursor cursor = TestData.cursor("kn_1", "root", attributes, direction, SourceType.LOCAL_FS);
         cursors.insertIfAbsent(cursor);
         // Lease it to the worker first, mirroring what IngestionJob does before runLease.
+        return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
+    }
+
+    /** Re-arm (as the scheduler would) and re-claim, so a rested cursor can be run again. */
+    private Cursor reclaim(Cursor cursor) {
+        cursors.armForwardCursors("kn_1");
         return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
     }
 
@@ -139,5 +148,72 @@ class IngestionRunnerTest {
         assertEquals(1, after.retry().count());
         assertNotNull(after.retry().lastError(), "the failure is captured on the cursor for debugging");
         assertTrue(after.retry().lastError().contains("boom"), "lastError carries the exception message");
+    }
+
+    /**
+     * B3 regression. An item re-ingested while the indexer is mid-run on its previous revision must
+     * fence that indexer out. Before the fix, upsert's whole-document replace wiped the lease and
+     * status, the indexer finished on the <em>old</em> text and — its write being unfenced — marked
+     * the entity INDEXED with needsReindex=false. The new content then sat in Mongo, believed
+     * indexed, and was permanently absent from search.
+     */
+    @Test
+    void reIngestFencesAnIndexerRunningOnThePreviousRevision() {
+        // Revision 1 lands and the indexer claims it.
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
+        assertEquals(EntityStatus.INDEXING, claimed.status());
+
+        // Revision 2 of the same externalId arrives while idx1 is still working.
+        RawItem revised = new RawItem("doc", EntityType.MESSAGE, "text/plain", "doc", "uri:doc",
+                "sha256:doc-v2", Instant.now(), Map.of("k", "v"), "the new body", null,
+                Map.of("title", "doc"), false);
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(revised), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+
+        Entity stored = entities.findById(claimed.id()).orElseThrow();
+        assertEquals("the new body", stored.content().text(), "the new revision is what is stored");
+        assertEquals(EntityStatus.INGESTED, stored.status(), "and it is back in the indexing queue");
+        assertNull(stored.lease(), "the in-flight indexer's lease is dropped");
+
+        // The stale indexer now cannot record anything — this is the actual fix.
+        assertFalse(entities.markIndexed(claimed.id(), "idx1", 3, "m", Instant.now()),
+                "the fenced-out indexer must not mark stale content as indexed");
+        assertEquals(EntityStatus.INGESTED, entities.findById(claimed.id()).orElseThrow().status());
+        assertEquals(1, entities.claimForIndexing(10, "idx2", java.time.Duration.ofMinutes(5)).size(),
+                "the new revision is re-claimable, so it does reach the index");
+    }
+
+    /**
+     * B5 regression: retry.count is <em>consecutive</em> failures, so a successful run must clear it.
+     * Before the fix the counter accumulated for the cursor's whole lifetime — a source that hiccups
+     * once a week was parked FAILED after retryLimit weeks of otherwise-successful syncs, and needed
+     * direct database surgery to revive.
+     */
+    @Test
+    void successfulRunResetsTheConsecutiveFailureStreak() {
+        connector.failNext(new RuntimeException("transient"));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        assertEquals(1, cursors.store.get(cursor.id()).retry().count());
+
+        // A clean run a while later. The cursor rests IDLE when it catches up, so getting back to it
+        // goes through the scheduler's re-arm — the same path ForwardCursorScheduler drives.
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+        assertEquals(0, cursors.store.get(cursor.id()).retry().count(), "a success ends the streak");
+        assertNull(cursors.store.get(cursor.id()).retry().lastError(), "and clears the stale error");
+
+        // The next failure starts a new streak at 1, not 2 — this is what keeps retryLimit meaningful.
+        connector.failNext(new RuntimeException("another transient"));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(1, after.retry().count(), "streak restarts rather than accumulating");
+        assertEquals(CursorStatus.AVAILABLE, after.status(), "and it is nowhere near the dead-letter limit");
     }
 }

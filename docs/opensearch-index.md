@@ -13,17 +13,17 @@ OpenSearch instead of a pure vector DB.
 
 ---
 
-## Index: `chunks_v1`
+## Index: `chunks_v2_768`
 
-Versioned name (`_v1`) so we can reindex into `chunks_v2` and flip an alias with zero
-downtime. Application always talks to the alias `chunks`.
+Versioned name (the `v2_768` suffix records the baked-in vector width) so we can reindex into a new
+physical index and flip an alias with zero downtime. Application always talks to the alias `chunks`.
 
 Created at startup by `OpenSearchIndexInitializer` if the physical index is absent (it logs a
 warning and continues if OpenSearch is unreachable). `dimension` is interpolated from
 `app.embedding.dimension`.
 
 ```jsonc
-PUT /chunks_v1
+PUT /chunks_v2_768
 {
   "settings": {
     "index": {
@@ -67,7 +67,7 @@ PUT /chunks_v1
 > **`dimension` is pinned to the embedding model and baked in at index-creation time**
 > (768 = `bge-base-en-v1.5` natively; `gemini-embedding-001` is natively 3072 but is asked for 768
 > via `app.embedding.openai.dimensions`, so it fits the same mapping). Moving to a model whose width
-> you cannot request is not a config change: it needs a new physical index (`chunks_v2`), a full
+> you cannot request is not a config change: it needs a new physical index (e.g. `chunks_v3_1024`), a full
 > re-index, and an alias flip. Changing `app.embedding.dimension` alone against an existing index
 > will just make writes fail.
 >
@@ -110,6 +110,26 @@ POST /chunks/_search
 BM25 and cosine similarity. The `Retriever` port hides which approach we use, and `SearchQuery.mode`
 selects `LEXICAL` / `SEMANTIC` / `HYBRID` (the query embedding is skipped entirely for `LEXICAL`).
 
+> **Filter placement matters on the vector leg.** Note that example A above puts the scope filter in
+> the surrounding `bool.filter`, *outside* the `knn` clause. That is post-filtering: OpenSearch picks
+> the global `k` nearest neighbours first and then discards the ones that do not match, so scoping a
+> search to one knowledge in a large corpus returns far fewer hits than `k` — sometimes none, while
+> plenty of relevant chunks exist. `OpenSearchSearchIndex.vectorBody` therefore nests the filter
+> **inside** the knn clause:
+>
+> ```jsonc
+> { "knn": { "embedding": {
+>     "vector": [/* ... */],
+>     "k": 20,
+>     "filter": { "bool": { "filter": [ { "terms": { "knowledgeId": ["kn_8f3a..."] } } ] } }
+> } } }
+> ```
+>
+> Nested, the filter is honoured during HNSW graph traversal (with an automatic exact-search fallback
+> when the filtered set is small), so `k` counts *matching* documents. This requires the `lucene`
+> engine, which the mapping above already pins — no re-index is involved. The BM25 leg keeps its
+> filter in `bool.filter`, where it is applied during scoring and is already correct.
+
 After fusion the `Reranker` port can reorder the top ~20 for final precision. The shipped
 implementation is `NoopReranker` — a cross-encoder is tracked on the roadmap.
 
@@ -117,9 +137,13 @@ implementation is `NoopReranker` — a cross-encoder is tracked on the roadmap.
 
 ## Filtering & permissions
 
-Every query carries a `filter` on `knowledgeId` (and later, allowed-scope ids). Because filtering is
-a first-class clause, access control is enforced **at retrieval time** — a user can never be shown a
-chunk from a knowledge they aren't permitted to see.
+Every query carries a `filter` on `knowledgeId` (and later, allowed-scope ids).
+
+> **This is scoping, not access control.** The app has no authentication or authorization of any kind
+> today (see [`limitations.md`](./limitations.md) and `ROADMAP.md`), so the `knowledgeId` filter only
+> restricts a query to what the *caller asked for* — it does not restrict what a caller is *allowed*
+> to ask for. Retrieval-time enforcement is the intended shape once identity exists; it is not a
+> property the system has now.
 
 `SearchQuery.filters` is a free-form `field → value` map applied as `term` clauses, with the key used
 **verbatim as the field name**. That means callers can filter on any indexed field — top-level
@@ -130,10 +154,12 @@ code change.
 
 ## Operational notes
 
-- **Alias indirection**: app reads/writes `chunks`; physical index is `chunks_vN`.
-- **Reindex flow**: build `chunks_v2` from Mongo → verify → `POST _aliases` atomic swap →
-  drop `chunks_v1`.
-- **Bulk indexing**: chunks are written with the `_bulk` API during indexing runs.
+- **Alias indirection**: app reads/writes `chunks`; physical index is `chunks_v2_768`.
+- **Reindex flow**: build the new physical index from Mongo → verify → `POST _aliases` atomic swap →
+  drop the old one.
+- **Bulk indexing**: chunks are written with the `_bulk` API during indexing runs. A bulk whose
+  response carries `errors: true` raises — a partially-rejected write must not be recorded as a
+  success, or the entity claims a chunk count the index does not hold and is never retried.
 - **Deletes**: `_delete_by_query` on `entityId`, `knowledgeId`, or `(knowledgeId, iterableId)`
   mirrors the Mongo cascades.
 - **Doc id = `chunkId` = `<entityId>_<ordinal>`**, and indexing is a `deleteByEntity` +

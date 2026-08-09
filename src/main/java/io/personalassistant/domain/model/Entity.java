@@ -90,7 +90,11 @@ public record Entity(
         }
     }
 
-    /** Retry bookkeeping for transient indexing failures. */
+    /**
+     * Retry bookkeeping for transient indexing failures. {@code count} is <em>consecutive</em>
+     * failures — a successful index resets it to zero — so the retry limit means "n failures in a
+     * row", not "n failures ever".
+     */
     public record Retry(int count, Instant nextAttemptAt) {
         public static Retry zero() {
             return new Retry(0, null);

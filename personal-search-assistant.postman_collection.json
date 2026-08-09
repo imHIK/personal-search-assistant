@@ -308,6 +308,20 @@
           }
         },
         {
+          "name": "Retry failed work",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/knowledge/:id/retry-failed",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "knowledge", ":id", "retry-failed"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Revives a knowledge's dead-lettered work: FAILED cursors -> AVAILABLE and FAILED entities -> INGESTED, both with a fresh retry budget. Cursor position is kept, so a revived cursor resumes where it stopped rather than re-walking the source.\n\nDistinct from *Trigger forward sync*: that one only re-arms FORWARD cursors sitting IDLE, so it can never revive a dead-lettered backward (backfill) cursor. Nothing else moves a cursor or entity out of FAILED.\n\nReturns { knowledgeId, cursorsRetried, entitiesRetried }."
+          }
+        },
+        {
           "name": "Reindex entity",
           "request": {
             "method": "POST",
@@ -697,7 +711,7 @@
     },
     {
       "name": "OpenSearch (chunk index)",
-      "description": "Direct calls to the OpenSearch instance from docker-compose (:9200) that mirror what OpenSearchSearchIndex and OpenSearchIndexInitializer send. Not the app's API — this is for inspecting what the indexing stage actually wrote. Code only ever talks to the `chunks` alias (physical index chunks_v1).",
+      "description": "Direct calls to the OpenSearch instance from docker-compose (:9200) that mirror what OpenSearchSearchIndex and OpenSearchIndexInitializer send. Not the app's API — this is for inspecting what the indexing stage actually wrote. Code only ever talks to the `chunks` alias (physical index chunks_v2_768).",
       "item": [
         {
           "name": "Cluster health",
@@ -718,9 +732,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{opensearchUrl}}/chunks_v1",
+              "raw": "{{opensearchUrl}}/chunks_v2_768",
               "host": ["{{opensearchUrl}}"],
-              "path": ["chunks_v1"]
+              "path": ["chunks_v2_768"]
             },
             "description": "The mapping OpenSearchIndexInitializer PUT at startup, including the `chunks` alias and the knn_vector `embedding` field. The `dimension` in that mapping is app.embedding.dimension frozen at index-creation time — check it here before switching embedding models (invariant 5)."
           }

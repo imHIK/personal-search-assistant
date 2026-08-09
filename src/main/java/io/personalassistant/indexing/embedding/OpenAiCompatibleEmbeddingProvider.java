@@ -57,7 +57,7 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.openai.api-key")
     Optional<String> apiKey;
 
-    @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
+    @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
     /**
@@ -144,10 +144,33 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 throw new IllegalStateException("Embedding API returned " + data.size()
                         + " vectors for " + texts.size() + " inputs");
             }
-            // Place each vector at its reported index so order matches the input regardless of API ordering.
+            // Place each vector at its reported index so order matches the input regardless of API
+            // ordering. Every slot is then checked for null below: the size check above does not
+            // catch a payload whose indices collide, and the resulting hole used to travel all the
+            // way into the index as a chunk with no vector — reported as a success and permanently
+            // unfindable by semantic search.
             Embedding[] ordered = new Embedding[texts.size()];
+            int position = 0;
             for (JsonNode item : data) {
-                int idx = item.path("index").asInt();
+                // `index` is genuinely absent on some items. Gemini's /embeddings serializes protobuf,
+                // where 0 is the proto3 default and default-valued fields are dropped — so the *first*
+                // item comes back as {"object","embedding"} with no "index" at all, while items 1..n
+                // carry theirs. Verified against the live endpoint, not inferred.
+                //
+                // Falling back to payload position is therefore correct twice over: the OpenAI schema
+                // returns `data` in input order, so position == index, and it also covers a server
+                // that omits the field entirely. Treating absence as an error instead breaks every
+                // batch on its first element. An index that is *present* and out of range is still
+                // rejected — that is the case that silently drops a vector.
+                int idx = item.hasNonNull("index") ? item.path("index").asInt(-1) : position;
+                position++;
+                if (idx < 0 || idx >= ordered.length) {
+                    throw new IllegalStateException("Embedding API reported index " + idx
+                            + " for a request of " + texts.size() + " inputs");
+                }
+                if (ordered[idx] != null) {
+                    throw new IllegalStateException("Embedding API reported index " + idx + " twice");
+                }
                 float[] vector = toVector(item.path("embedding"));
                 if (vector.length != dimension) {
                     throw new IllegalStateException(widthMismatch(vector.length));
@@ -155,8 +178,11 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 ordered[idx] = new Embedding(modelName, dimension, vector);
             }
             List<Embedding> out = new ArrayList<>(ordered.length);
-            for (Embedding e : ordered) {
-                out.add(e);
+            for (int i = 0; i < ordered.length; i++) {
+                if (ordered[i] == null) {
+                    throw new IllegalStateException("Embedding API returned no vector for input " + i);
+                }
+                out.add(ordered[i]);
             }
             return out;
         } catch (IllegalStateException e) {

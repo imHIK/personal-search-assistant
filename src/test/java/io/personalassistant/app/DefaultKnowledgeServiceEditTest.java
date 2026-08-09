@@ -159,7 +159,7 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of());
         // An already-indexed entity: its chunks are "in the past" and must be left exactly as-is.
         entities.upsert(TestData.ingestedText("ent_x", kn.id(), "doc", "hello world"));
-        entities.markIndexed("ent_x", 3, "model", Instant.now());
+        entities.seedIndexed("ent_x", 3, "model", Instant.now());
 
         service.update(kn.id(), KnowledgePatch.builder().chunkingStrategy("fixed-size").build());
 
@@ -295,7 +295,7 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of("fileTypes", "pdf"));
         // A pre-existing, already-indexed match that the re-walk will re-see unchanged (skip path).
         entities.upsert(TestData.entityInIterable("ent_keep", kn.id(), "chan_a", "keep"));
-        entities.markIndexed("ent_keep", 1, "model", Instant.now());
+        entities.seedIndexed("ent_keep", 1, "model", Instant.now());
 
         // Widen fileTypes: pdf → pdf,txt. Signature changes → generation bumps, cursors rewind.
         service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf,txt")).build());

@@ -112,6 +112,79 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertThrows(IllegalStateException.class, () -> p.embed("x"));
     }
 
+    /**
+     * B7 regression. The response is the right <em>size</em> but its indices collide, so slot 1 is
+     * never written. That null used to travel out of the provider, through the runner, and into
+     * OpenSearch as a chunk with no vector — indexed without error, counted as a success, and
+     * invisible to semantic search from then on.
+     */
+    @Test
+    void duplicateReportedIndexIsRejectedRatherThanLeavingAHole() {
+        responseJson = "{\"data\":["
+                + "{\"index\":0,\"embedding\":[1,1]},"
+                + "{\"index\":0,\"embedding\":[2,2]}"
+                + "]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(2);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> p.embedAll(List.of("first", "second")));
+        assertTrue(ex.getMessage().contains("twice"), ex.getMessage());
+    }
+
+    /**
+     * The exact shape Gemini's {@code /embeddings} returns, captured from the live endpoint: it
+     * serializes protobuf, where 0 is the proto3 default and default-valued fields are omitted, so
+     * <b>the first item has no {@code index} at all</b> while the rest do. Treating a missing
+     * {@code index} as an error breaks every batch on its first element.
+     */
+    @Test
+    void handlesGeminiOmittingIndexOnTheFirstItem() {
+        responseJson = "{\"data\":["
+                + "{\"object\":\"embedding\",\"embedding\":[1,1]},"
+                + "{\"object\":\"embedding\",\"index\":1,\"embedding\":[2,2]},"
+                + "{\"object\":\"embedding\",\"index\":2,\"embedding\":[3,3]}"
+                + "]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(2);
+
+        List<Embedding> out = p.embedAll(List.of("first", "second", "third"));
+
+        assertEquals(3, out.size());
+        assertArrayEquals(new float[] {1f, 1f}, out.get(0).vector(), 1e-6f);
+        assertArrayEquals(new float[] {2f, 2f}, out.get(1).vector(), 1e-6f);
+        assertArrayEquals(new float[] {3f, 3f}, out.get(2).vector(), 1e-6f);
+    }
+
+    /** And a server that omits {@code index} on every item still works, via payload order. */
+    @Test
+    void missingIndexFieldFallsBackToPayloadOrder() {
+        responseJson = "{\"data\":[{\"embedding\":[1,1]},{\"embedding\":[2,2]},{\"embedding\":[3,3]}]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(2);
+
+        List<Embedding> out = p.embedAll(List.of("first", "second", "third"));
+
+        assertEquals(3, out.size());
+        assertArrayEquals(new float[] {1f, 1f}, out.get(0).vector(), 1e-6f);
+        assertArrayEquals(new float[] {3f, 3f}, out.get(2).vector(), 1e-6f);
+    }
+
+    /** A single input with no index — the shape {@code embed(String)} produces. */
+    @Test
+    void singleEmbeddingWithoutIndexFieldWorks() {
+        responseJson = "{\"data\":[{\"embedding\":[0.5,0.5]}]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(2);
+
+        assertArrayEquals(new float[] {0.5f, 0.5f}, p.embed("hello").vector(), 1e-6f);
+    }
+
+    @Test
+    void outOfRangeIndexIsRejected() {
+        responseJson = "{\"data\":[{\"index\":7,\"embedding\":[1,1]}]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(2);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> p.embedAll(List.of("only")));
+        assertTrue(ex.getMessage().contains("7"), ex.getMessage());
+    }
+
     @Test
     void nonSuccessStatusThrowsWithStatusCode() {
         status = 429;

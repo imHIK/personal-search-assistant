@@ -102,6 +102,20 @@ public interface CursorRepository {
     int resumeByKnowledge(String knowledgeId);
 
     /**
+     * Re-arm a knowledge's dead-lettered cursors: flip {@code FAILED → AVAILABLE} and clear the retry
+     * streak. This is the <em>only</em> exit from {@code FAILED} — {@link #armForwardCursors} matches
+     * only {@code IDLE}, {@link #resumeByKnowledge} only {@code SUSPENDED}, and the claim filter
+     * excludes {@code FAILED} — so without it a cursor that exhausted its retries during a transient
+     * outage is stranded until someone edits the database by hand.
+     *
+     * <p>Position and attributes are kept, so the cursor resumes exactly where it stopped rather than
+     * re-walking the source from the beginning.
+     *
+     * @return the number of cursors revived
+     */
+    int retryFailedByKnowledge(String knowledgeId);
+
+    /**
      * Retire a cursor whose iterable was deleted at the source: flip it to {@code RETIRED} and clear
      * any lease. A no-op if the cursor is currently {@code IN_PROGRESS} (a worker is mid-run; the
      * next reconcile pass catches it), which also avoids a running lease resurrecting it.

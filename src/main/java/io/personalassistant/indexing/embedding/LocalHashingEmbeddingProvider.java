@@ -27,7 +27,7 @@ public class LocalHashingEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.model", defaultValue = "local-hashing-v1")
     String model;
 
-    @ConfigProperty(name = "app.embedding.dimension", defaultValue = "384")
+    @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
     @Override

@@ -261,8 +261,8 @@ class DefaultKnowledgeServiceTest {
         entities.upsert(TestData.entityInIterable("ent_1", kn.id(), "chan_a", "x1"));
         entities.upsert(TestData.entityInIterable("ent_2", kn.id(), "chan_a", "x2"));
         entities.upsert(TestData.entityInIterable("ent_3", kn.id(), "chan_a", "x3"));
-        entities.markIndexed("ent_1", 4, "m", Instant.now());
-        entities.markFailed("ent_2", EntityStatus.FAILED, "boom", 1, null);
+        entities.seedIndexed("ent_1", 4, "m", Instant.now());
+        entities.seedFailed("ent_2", EntityStatus.FAILED, "boom", 1);
 
         Knowledge.Stats stats = service.get(kn.id()).orElseThrow().stats();
         assertEquals(3, stats.entities(), "total reflects all entities");

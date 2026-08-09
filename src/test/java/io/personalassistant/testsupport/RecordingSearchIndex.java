@@ -17,9 +17,14 @@ public class RecordingSearchIndex implements SearchIndex {
     public final List<String> deletedIterables = new ArrayList<>();
     public List<SearchHit> lexicalResult = List.of();
     public List<SearchHit> vectorResult = List.of();
+    /** When set, {@link #indexChunks} throws it — stands in for a rejected OpenSearch bulk. */
+    public RuntimeException indexChunksFailure;
 
     @Override
     public void indexChunks(List<Chunk> chunks) {
+        if (indexChunksFailure != null) {
+            throw indexChunksFailure;
+        }
         indexed.addAll(chunks);
     }
 

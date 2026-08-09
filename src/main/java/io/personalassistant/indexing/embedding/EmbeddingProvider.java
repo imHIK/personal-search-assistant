@@ -26,6 +26,13 @@ public interface EmbeddingProvider {
     /** Embed a single text (typically a query). */
     Embedding embed(String text);
 
-    /** Embed many texts in one call (batched indexing). Order matches the input. */
+    /**
+     * Embed many texts in one call (batched indexing).
+     *
+     * <p>Must return exactly {@code texts.size()} non-null embeddings, positionally aligned with the
+     * input. Implementations must fail loudly rather than return a short or hole-y list: a chunk that
+     * reaches the index without a vector is written without error and is then invisible to semantic
+     * search forever. Callers enforce this, but the burden is the implementation's.
+     */
     List<Embedding> embedAll(List<String> texts);
 }

@@ -106,13 +106,36 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
   lease and the permit heartbeat.
 - Resting status: `hasMore=false` → `EXHAUSTED` (backward) or `IDLE` (forward); batch cap hit with
   more pages → `AVAILABLE`; exception → retry (`AVAILABLE`) until the limit, then `FAILED`.
+- A re-ingest is a **field-level** upsert, not a document replace: it writes only what ingestion owns
+  (content, checksum, `lastSeenGeneration`), resets the work queue, and **drops any lease**. That last
+  part is what fences out an indexer still running on the previous revision — see below.
 
 ### One indexing pass (`IndexingRunner.indexEntity`)
 - Extract text (Tika for files via `fileRef`, inline for text) → chunk → embed (batched).
+- The embedded vectors are validated against the chunk list before anything is written: a provider
+  that returns a short list, or a hole where two payload entries claimed the same index, fails the
+  pass. A chunk indexed without a vector is accepted by OpenSearch and then invisible to semantic
+  search forever, so this is deliberately a loud failure rather than a partial success.
 - `SearchIndex.deleteByEntity` then `indexChunks` (chunk id = `entityId_ordinal`) — an idempotent
-  replace. `EntityRepository.markIndexed` records `chunkCount` + `embeddingModel` + `indexedAt`.
+  replace. A bulk that OpenSearch partly rejects throws, so `markIndexed` is never reached with a
+  chunk count the index does not actually hold.
+- `EntityRepository.markIndexed` records `chunkCount` + `embeddingModel` + `indexedAt`, and clears
+  the retry streak (`retry.count` is *consecutive* failures, not lifetime ones).
 - Failures: retry with backoff (`status=INGESTED`, `retry.nextAttemptAt`), or terminal `FAILED`.
 - Tombstones (`status=DELETED`): `deleteByEntity` + `markDeletionComplete`.
+
+### Entity lease fencing and the dead-letter state
+- `markIndexed` / `markFailed` / `markDeletionComplete` all take the claiming worker's id and are
+  **compare-and-set on `(id, lease.owner, live lease)`**, exactly like the cursor writes. They return
+  `false` when the lease was lost; the runner logs and stops, leaving the entity to its new owner. No
+  compensation is attempted — chunk ids are `entityId_ordinal`, so the new owner's replace overwrites
+  anything the fenced-out worker wrote.
+- `FAILED` is a genuine dead-letter: `markFailed` clears `needsReindex` on the terminal arm and the
+  claim filter excludes `FAILED` outright, so a dead-lettered entity leaves the work queue instead of
+  being re-claimed on every tick.
+- Two ways back in, both explicit: `POST /api/index/entities/{id}/reindex` (single entity) and
+  `POST /api/index/knowledge/{id}/retry-failed` (everything dead-lettered in a knowledge, cursors
+  included). Both restore a fresh retry budget.
 
 ---
 
@@ -132,11 +155,13 @@ docker compose up -d        # MongoDB :27017, OpenSearch :9200
 ./gradlew quarkusDev        # dev mode with live reload
 ```
 On startup `MongoIndexInitializer` ensures the Mongo indexes and `OpenSearchIndexInitializer`
-creates `chunks_v1` + the `chunks` alias (it logs a warning and continues if OpenSearch is down).
+creates `chunks_v2_768` + the `chunks` alias (it logs a warning and continues if OpenSearch is down).
 
-The default embedding provider (`onnx-bge`) needs an exported model directory and ships with
-`app.embedding.onnx.model-path` empty, so it throws on the first embed until you set it. For local
-dev without the model, set `app.embedding.provider=local-hashing`. See [`providers.md`](./providers.md).
+The shipped embedding provider is `openai-embed` (hosted, keyed off `GEMINI_API_KEY`). The
+alternative `onnx-bge` needs an exported model directory and ships with
+`app.embedding.onnx.model-path` empty, so selecting it throws on the first embed until you set it.
+For local dev with neither, set `app.embedding.provider=local-hashing`. See
+[`providers.md`](./providers.md).
 
 ### Run the tests
 ```bash
@@ -165,6 +190,7 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 | `PATCH /api/connections/{id}` / `DELETE /api/connections/{id}` | Edit / remove a connection |
 | `POST /api/connections/{id}/default` | Make it the default connection for its `SourceType` |
 | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (incremental trigger) |
+| `POST /api/index/knowledge/{id}/retry-failed` | Revive dead-lettered work: `FAILED` cursors → `AVAILABLE`, `FAILED` entities → `INGESTED`, both with a fresh retry budget. The only exit from `FAILED`; distinct from `/sync`, which re-arms forward cursors only and so can never reach a backward one |
 | `POST /api/index/entities/{id}/reindex` | Flag one entity for re-index (no re-fetch) — the opt-in path after a chunking change |
 | `DELETE /api/index/entities/{id}` | Tombstone an entity (chunks removed by the indexing stage) |
 | `POST /api/search` | Hybrid / lexical / semantic search |
@@ -202,7 +228,7 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.ingestion.batches-per-lease` | `50` | Pages fetched per cursor lease before releasing |
 | `app.ingestion.max-items-per-batch` | `100` | Soft cap on items per grabber page |
 | `app.ingestion.lease-seconds` | `900` | Cursor lease duration; must exceed the worst-case single-page fetch time (the per-page renew covers multi-page leases; writes are lease-fenced) |
-| `app.ingestion.retry-limit` | `5` | Cursor failures before `FAILED` |
+| `app.ingestion.retry-limit` | `5` | **Consecutive** cursor failures before `FAILED`; a successful run resets the streak |
 | `app.ingestion.permits.global` / `.connector` / `.knowledge` | `8` / `4` / `2` | Scoped ingestion concurrency ceilings |
 | `app.ingestion.permits.ttl-seconds` | `14400` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
 | `app.scheduler.forward-interval` | `1m` | Scheduler **tick** granularity — how often it checks which knowledges are due. Bounds the finest schedule, not how often any one source syncs |
@@ -217,14 +243,14 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.indexing.permits.ttl-seconds` | `1200` | Indexing permit TTL; held for a whole tick (not renewed mid-tick), so size above the worst-case tick time |
 | `app.indexing.embed-batch` | `64` | Chunks per embedding call |
 | `app.indexing.lease-seconds` | `900` | Entity indexing lease duration |
-| `app.indexing.retry-limit` | `5` | Indexing failures before `FAILED` |
+| `app.indexing.retry-limit` | `5` | **Consecutive** indexing failures before `FAILED`; a successful index resets the streak |
 | `app.indexing.backoff-seconds` | `300` | Delay before a failed entity is re-claimable |
 | `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
 | `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
-| `app.embedding.provider` | `onnx-bge` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `onnx-bge` (local in-JVM ONNX) / `openai-embed` (hosted) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
-| `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v1` is created — changing to a different-width model needs a new physical index + alias flip + full re-index |
+| `app.embedding.provider` | `openai-embed` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `openai-embed` (hosted) / `onnx-bge` (local in-JVM ONNX) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
+| `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v2_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
 | `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
 | `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
 | `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `models/gemini-embedding-001` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Gemini needs the `models/` prefix; a bare id 404s |

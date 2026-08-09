@@ -39,6 +39,8 @@ public class OpenSearchSearchIndex implements SearchIndex {
 
     private static final Logger LOG = Logger.getLogger(OpenSearchSearchIndex.class.getName());
     private static final int SNIPPET_CHARS = 280;
+    /** Cap on how many per-item bulk failures are named in the summary; the rest are counted. */
+    private static final int BULK_ERRORS_REPORTED = 3;
 
     private final RestClient client;
     private final String alias;
@@ -69,17 +71,45 @@ public class OpenSearchSearchIndex implements SearchIndex {
                 ContentType.create("application/x-ndjson", StandardCharsets.UTF_8)));
         JsonNode response = execute(request);
         if (response != null && response.path("errors").asBoolean(false)) {
+            // Rejected items must fail the whole call. Logging and returning success let the caller
+            // record chunkCount = chunks.size() when OpenSearch had accepted fewer — the entity then
+            // looks fully indexed while part of it is missing. Throwing routes the entity through
+            // the normal retry/backoff path, which re-runs the idempotent replace.
             LOG.warning("Bulk indexing reported item errors: " + response.path("items"));
+            throw new IllegalStateException(bulkFailureSummary(response, chunks.size()));
         }
+    }
+
+    /**
+     * Compact, actionable summary of a partially-failed bulk: how many items failed and why, naming
+     * the first few document ids. The full {@code items} array goes to the log; this is what ends up
+     * on the entity's {@code index.error} and in front of a user.
+     */
+    // Package-private so the summary can be tested against a hand-built response without a client.
+    String bulkFailureSummary(JsonNode response, int total) {
+        List<String> reasons = new ArrayList<>();
+        int failed = 0;
+        for (JsonNode item : response.path("items")) {
+            JsonNode error = item.path("index").path("error");
+            if (!error.isMissingNode() && !error.isNull()) {
+                failed++;
+                if (reasons.size() < BULK_ERRORS_REPORTED) {
+                    reasons.add(item.path("index").path("_id").asText("?") + " ("
+                            + error.path("type").asText("unknown") + ": "
+                            + error.path("reason").asText("no reason given") + ")");
+                }
+            }
+        }
+        String detail = String.join(", ", reasons);
+        if (failed > reasons.size()) {
+            detail += ", and " + (failed - reasons.size()) + " more";
+        }
+        return failed + " of " + total + " chunks rejected by OpenSearch: " + detail;
     }
 
     @Override
     public List<SearchHit> lexicalSearch(SearchQuery query, int limit) {
-        ObjectNode must = mapper.createObjectNode();
-        ObjectNode multiMatch = must.putObject("multi_match");
-        multiMatch.put("query", query.text() == null ? "" : query.text());
-        multiMatch.putArray("fields").add("text").add("title");
-        return search(query, limit, must);
+        return runSearch(lexicalBody(query, limit));
     }
 
     @Override
@@ -87,14 +117,53 @@ public class OpenSearchSearchIndex implements SearchIndex {
         if (vector == null) {
             return List.of();
         }
-        ObjectNode must = mapper.createObjectNode();
-        ObjectNode embedding = must.putObject("knn").putObject("embedding");
+        return runSearch(vectorBody(query, vector, limit));
+    }
+
+    /**
+     * BM25 over {@code text}/{@code title}, scoped by {@code bool.filter}. Filters are applied while
+     * the query runs here, so post-filtering is not a concern on this path.
+     */
+    // Package-private for query-shape tests.
+    ObjectNode lexicalBody(SearchQuery query, int limit) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("size", limit);
+        ObjectNode bool = body.putObject("query").putObject("bool");
+        ObjectNode multiMatch = bool.putArray("must").addObject().putObject("multi_match");
+        multiMatch.put("query", query.text() == null ? "" : query.text());
+        multiMatch.putArray("fields").add("text").add("title");
+        bool.set("filter", filters(query));
+        return body;
+    }
+
+    /**
+     * kNN over {@code embedding}, with the scoping clauses nested <em>inside</em> the knn query
+     * rather than in the surrounding {@code bool.filter}.
+     *
+     * <p>This placement is the whole point. A filter sitting outside the knn clause is applied after
+     * the k nearest neighbours have been chosen, so searching within one knowledge in a large corpus
+     * legitimately returns few or no hits — the global top-k simply belongs to other knowledges.
+     * Nested, the filter is honoured during HNSW graph traversal (with an automatic exact-search
+     * fallback when the filtered set is small), so k counts matching documents. This requires the
+     * lucene engine, which {@code OpenSearchIndexInitializer} already pins — no mapping change and no
+     * re-index is needed.
+     */
+    // Package-private for query-shape tests.
+    ObjectNode vectorBody(SearchQuery query, float[] vector, int limit) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("size", limit);
+        ObjectNode embedding = body.putObject("query").putObject("bool").putArray("must")
+                .addObject().putObject("knn").putObject("embedding");
         ArrayNode vec = embedding.putArray("vector");
         for (float v : vector) {
             vec.add(v);
         }
         embedding.put("k", limit);
-        return search(query, limit, must);
+        ArrayNode clauses = filters(query);
+        if (!clauses.isEmpty()) {
+            embedding.putObject("filter").putObject("bool").set("filter", clauses);
+        }
+        return body;
     }
 
     @Override
@@ -121,13 +190,7 @@ public class OpenSearchSearchIndex implements SearchIndex {
 
     // ---- internals ---------------------------------------------------------------------------
 
-    private List<SearchHit> search(SearchQuery query, int limit, ObjectNode mustClause) {
-        ObjectNode body = mapper.createObjectNode();
-        body.put("size", limit);
-        ObjectNode bool = body.putObject("query").putObject("bool");
-        bool.putArray("must").add(mustClause);
-        bool.set("filter", filters(query));
-
+    private List<SearchHit> runSearch(ObjectNode body) {
         Request request = new Request("POST", "/" + alias + "/_search");
         request.setJsonEntity(write(body));
         JsonNode response = execute(request);

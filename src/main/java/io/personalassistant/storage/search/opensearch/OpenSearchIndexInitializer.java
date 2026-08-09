@@ -13,9 +13,9 @@ import org.opensearch.client.ResponseException;
 import org.opensearch.client.RestClient;
 
 /**
- * Ensures the versioned chunks index ({@code chunks_v1}) and its alias ({@code chunks}) exist at
+ * Ensures the versioned chunks index ({@code chunks_v2_768}) and its alias ({@code chunks}) exist at
  * startup, with the hybrid mapping (BM25 {@code text} + {@code knn_vector} embedding). The app
- * always talks to the alias, so a future re-index into {@code chunks_v2} + alias flip is a
+ * always talks to the alias, so a future re-index into a new physical index + alias flip is a
  * zero-downtime operation. Creation is skipped if the physical index already exists.
  */
 @Singleton
@@ -32,8 +32,10 @@ public class OpenSearchIndexInitializer {
     public OpenSearchIndexInitializer(RestClient client,
                                       @ConfigProperty(name = "opensearch.index.chunks",
                                               defaultValue = "chunks") String alias,
-                                      @ConfigProperty(name = "app.embedding.dimension",
-                                              defaultValue = "384") int dimension) {
+                                      // No defaultValue on purpose: invariant 5 bakes this width into the
+                                      // knn_vector mapping, and a guessed default silently builds an index
+                                      // that no provider's vectors fit. Missing => loud startup failure.
+                                      @ConfigProperty(name = "app.embedding.dimension") int dimension) {
         this.client = client;
         this.alias = alias;
         this.dimension = dimension;

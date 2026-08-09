@@ -128,6 +128,14 @@ public class MongoCursorRepository implements CursorRepository {
     public boolean release(String cursorId, String owner, CursorStatus restingStatus) {
         var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
+                // Success ends the streak: retry.count is CONSECUTIVE failures, not lifetime ones.
+                // release() is the right seam because every successful resting reaches it (IDLE and
+                // EXHAUSTED when drained, AVAILABLE when the batch cap hit with pages left), while
+                // recordFailure() is the only failure path. Deliberately NOT reset in
+                // advancePosition(): that would zero the streak mid-lease, so a page-2 failure would
+                // record 1 instead of continuing the run's streak — and it would add a write to the
+                // hot per-page path.
+                Updates.set("retry", new Document("count", 0).append("lastError", null)),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
     }
@@ -178,6 +186,19 @@ public class MongoCursorRepository implements CursorRepository {
                 and(eq("knowledgeId", knowledgeId),
                         eq("status", CursorStatus.SUSPENDED.name())),
                 Updates.set("status", CursorStatus.AVAILABLE.name()));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        // No lease fence needed: recordFailure already unset the lease on its way to FAILED.
+        var result = collection().updateMany(
+                and(eq("knowledgeId", knowledgeId),
+                        eq("status", CursorStatus.FAILED.name())),
+                Updates.combine(
+                        Updates.set("status", CursorStatus.AVAILABLE.name()),
+                        Updates.set("retry", new Document("count", 0).append("lastError", null)),
+                        Updates.unset("lease")));
         return (int) result.getModifiedCount();
     }
 

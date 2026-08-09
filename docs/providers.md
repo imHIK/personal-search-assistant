@@ -23,13 +23,23 @@ finds the matching adapter, and produces it as the `@Default` bean that `Default
 
 | `app.embedding.provider` | Adapter | Notes |
 |---|---|---|
-| `onnx-bge` (default) | `OnnxEmbeddingProvider` | Local, private, in-JVM ONNX (`bge-base-en-v1.5`, 768-dim) |
-| `openai-embed` | `OpenAiCompatibleEmbeddingProvider` | Hosted `/embeddings` (Gemini default, 3072-dim model requested at 768) |
+| `openai-embed` (default) | `OpenAiCompatibleEmbeddingProvider` | Hosted `/embeddings` (Gemini default, 3072-dim model requested at 768). Needs `GEMINI_API_KEY` |
+| `onnx-bge` | `OnnxEmbeddingProvider` | Local, private, in-JVM ONNX (`bge-base-en-v1.5`, 768-dim). Needs an exported model — see below |
 | `local-hashing` | `LocalHashingEmbeddingProvider` | Offline non-semantic baseline for dev/tests |
 
 The vector width `app.embedding.dimension` (768) is **baked into the OpenSearch `knn_vector`
 mapping**. The two real providers above are both 768-dim, so you can switch between local and hosted
 with no re-index. Switching to a different-width model requires re-mapping the index and re-indexing.
+
+`app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
+is the one config key that silently corrupts the index if guessed — a missing property would
+otherwise build a `knn_vector` mapping of some arbitrary width that the configured model's vectors
+do not fit. An absent property fails startup instead, which is the outcome you want.
+
+Whatever the provider, it must return exactly one non-null vector per input text, positionally
+aligned. `IndexingRunner` enforces this before anything is written, because a chunk that reaches
+OpenSearch without a vector is accepted without error, counted as indexed, and then permanently
+invisible to semantic search.
 
 ### Local ONNX setup (`onnx-bge`)
 
