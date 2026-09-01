@@ -70,7 +70,7 @@ class DefaultKnowledgeServiceListingTest {
                 Map.of(), Entity.Content.ofText("body"),
                 Map.of("title", "Title " + id, "uri", "test://" + id),
                 "sha256:" + id, status, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), updatedAt, updatedAt, 0L);
+                Entity.Retry.zero(), updatedAt, updatedAt, null, 0L);
     }
 
     // ---- entity listing ----------------------------------------------------------------------

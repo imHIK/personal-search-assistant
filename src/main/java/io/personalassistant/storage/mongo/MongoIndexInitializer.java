@@ -75,6 +75,20 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "status"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
 
+        // Retention sweeps: source-declared expiry is a global scan, so it needs its own index;
+        // the window pass is always scoped to one knowledge.
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.ascending("expiresAt"));
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.ascending("knowledgeId", "createdAt"));
+
+        // Digests: the scheduler's due query, and a digest's run history newest-first.
+        db.getCollection(MongoDigestRepository.COLLECTION)
+                .createIndex(Indexes.ascending("enabled", "nextRunAt"));
+        db.getCollection(MongoDigestRepository.RUNS_COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("digestId"),
+                        Indexes.descending("ranAt")));
+
         db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId"));
         db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)

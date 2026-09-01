@@ -23,6 +23,9 @@ import java.util.Map;
  * @param chunkingMaxSize   target chunk size (characters, or tokens for {@code token}); null = unchanged
  * @param chunkingOverlap   overlap between adjacent chunks in the same unit; null = unchanged
  * @param chunkingSeparators ordered separators for {@code recursive}/{@code character}; null = unchanged
+ * @param retentionPeriod   how long entities are kept, e.g. {@code "14d"}; null = unchanged. Like
+ *                          {@code cron}/{@code interval} above, this cannot express "clear back to
+ *                          inherit" over the wire
  */
 public record KnowledgePatchDto(
         String name,
@@ -38,7 +41,8 @@ public record KnowledgePatchDto(
         String chunkingStrategy,
         Integer chunkingMaxSize,
         Integer chunkingOverlap,
-        List<String> chunkingSeparators) {
+        List<String> chunkingSeparators,
+        String retentionPeriod) {
 
     public KnowledgePatch toPatch() {
         return KnowledgePatch.builder()
@@ -56,6 +60,7 @@ public record KnowledgePatchDto(
                 .chunkingMaxSize(chunkingMaxSize)
                 .chunkingOverlap(chunkingOverlap)
                 .chunkingSeparators(chunkingSeparators)
+                .retentionPeriod(retentionPeriod)
                 .build();
     }
 }

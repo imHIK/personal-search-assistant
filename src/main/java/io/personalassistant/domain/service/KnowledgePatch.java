@@ -39,7 +39,8 @@ public record KnowledgePatch(
         SchedulePatch schedule,
         WebhookPatch webhook,
         Optional<Boolean> backfillEnabled,
-        ChunkingPatch chunking) {
+        ChunkingPatch chunking,
+        Optional<String> retentionPeriod) {
 
     /** Normalize any {@code null} to its empty form so callers can pass either. */
     public KnowledgePatch {
@@ -51,6 +52,7 @@ public record KnowledgePatch(
         webhook = webhook == null ? WebhookPatch.empty() : webhook;
         backfillEnabled = orEmpty(backfillEnabled);
         chunking = chunking == null ? ChunkingPatch.empty() : chunking;
+        retentionPeriod = orEmpty(retentionPeriod);
     }
 
     /** Leaf-optional patch over {@link Knowledge.ScheduleSettings}. */
@@ -130,6 +132,7 @@ public record KnowledgePatch(
         private Optional<Integer> chunkingMaxSize = Optional.empty();
         private Optional<Integer> chunkingOverlap = Optional.empty();
         private Optional<List<String>> chunkingSeparators = Optional.empty();
+        private Optional<String> retentionPeriod = Optional.empty();
 
         public Builder name(String v) {
             this.name = Optional.ofNullable(v);
@@ -201,12 +204,18 @@ public record KnowledgePatch(
             return this;
         }
 
+        public Builder retentionPeriod(String v) {
+            this.retentionPeriod = Optional.ofNullable(v);
+            return this;
+        }
+
         public KnowledgePatch build() {
             return new KnowledgePatch(name, type, auth, inputs,
                     new SchedulePatch(cron, interval, scheduleEnabled),
                     new WebhookPatch(webhookEnabled, webhookSecret),
                     backfillEnabled,
-                    new ChunkingPatch(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators));
+                    new ChunkingPatch(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators),
+                    retentionPeriod);
         }
     }
 }

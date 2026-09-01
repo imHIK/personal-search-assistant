@@ -21,7 +21,7 @@ class OpenSearchSearchIndexFiltersTest {
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
 
     private SearchQuery queryWith(List<String> knowledgeIds, Map<String, Object> filters) {
-        return new SearchQuery("anything", knowledgeIds, filters, 10, Mode.HYBRID, false);
+        return new SearchQuery("anything", knowledgeIds, filters, 10, Mode.HYBRID, false, null, false, null);
     }
 
     /** Pulls the single {field: value} pair out of a {"term": {...}} clause. */

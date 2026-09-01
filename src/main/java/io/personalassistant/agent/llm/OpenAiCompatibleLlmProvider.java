@@ -37,7 +37,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
     @ConfigProperty(name = "app.llm.base-url", defaultValue = "https://api.groq.com/openai/v1")
     String baseUrl;
 
-    @ConfigProperty(name = "app.llm.model", defaultValue = "llama-3.3-70b-versatile")
+    @ConfigProperty(name = "app.llm.model", defaultValue = "openai/gpt-oss-120b")
     String modelName;
 
     /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
@@ -68,11 +68,32 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
 
     @Override
     public String complete(String system, List<Message> messages) {
+        return complete(LlmProfile.inherit("default"), system, messages);
+    }
+
+    /**
+     * Applies only the fields the profile actually sets, so an inherit-everything profile produces
+     * exactly the request this adapter sent before profiles existed.
+     */
+    @Override
+    public String complete(LlmProfile profile, String system, List<Message> messages) {
+        return complete(profile, ResponseFormat.TEXT, system, messages);
+    }
+
+    @Override
+    public String complete(LlmProfile profile, ResponseFormat format, String system,
+                           List<Message> messages) {
         logConfigOnce();
+        String endpoint = profile.baseUrl().orElse(baseUrl);
+        String model = profile.model().orElse(modelName);
         try {
             ObjectNode body = mapper.createObjectNode();
-            body.put("model", modelName);
-            body.put("temperature", temperature);
+            body.put("model", model);
+            body.put("temperature", profile.temperature().orElse(temperature));
+            profile.maxTokens().ifPresent(max -> body.put("max_tokens", max));
+            if (format == ResponseFormat.JSON_OBJECT) {
+                body.putObject("response_format").put("type", "json_object");
+            }
             ArrayNode msgs = body.putArray("messages");
             if (system != null && !system.isBlank()) {
                 addMessage(msgs, "system", system);
@@ -82,22 +103,24 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
             }
 
             HttpRequest.Builder request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl.replaceAll("/+$", "") + "/chat/completions"))
+                    .uri(URI.create(endpoint.replaceAll("/+$", "") + "/chat/completions"))
                     .timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            String key = ConfigText.orNull(apiKey);
+            String key = resolveKey(profile);
             if (key != null) {
                 request.header("Authorization", "Bearer " + key);
             }
 
-            LOG.fine(() -> "LLM request: " + messages.size() + " message(s) -> " + configSummary());
+            LOG.fine(() -> "LLM request: " + messages.size() + " message(s) -> "
+                    + callSummary(profile, endpoint, model, key != null));
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
                 // See the embedding provider: a missing key is reported by vendors as anything from
                 // 400 to 404, so the resolved config belongs in the message rather than the logs only.
                 throw new IllegalStateException("LLM API " + response.statusCode() + ": "
-                        + snippet(response.body()) + " [" + configSummary() + "]");
+                        + snippet(response.body()) + " ["
+                        + callSummary(profile, endpoint, model, key != null) + "]");
             }
 
             JsonNode content = mapper.readTree(response.body())
@@ -109,8 +132,37 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("LLM request failed (" + baseUrl + ")", e);
+            throw new IllegalStateException("LLM request failed (" + endpoint + ")", e);
         }
+    }
+
+    /**
+     * The credential for this call, or null to send no {@code Authorization} header.
+     *
+     * <p>A profile that redirects {@code base-url} must bring its own key. Inheriting the provider's
+     * would send one vendor's secret to another vendor's host — that is a credential leak, not a
+     * convenience, so a redirected profile without a key sends none (which is exactly right for a local
+     * Ollama, the main reason to redirect).
+     */
+    // Package-private for tests.
+    String resolveKey(LlmProfile profile) {
+        Optional<String> fromProfile = profile.apiKey().filter(k -> !k.isBlank());
+        if (profile.baseUrl().isPresent()) {
+            return fromProfile.orElse(null);
+        }
+        return fromProfile.orElse(ConfigText.orNull(apiKey));
+    }
+
+    /**
+     * What this specific call resolved to, profile included — so a failure names the model that actually
+     * failed rather than the provider's default. Never logs the key itself, only whether one resolved.
+     */
+    // Package-private for tests.
+    String callSummary(LlmProfile profile, String endpoint, String model, boolean hasKey) {
+        return "profile=" + profile.name() + ", base-url=" + endpoint + ", model=" + model
+                + ", temperature=" + profile.temperature().orElse(temperature)
+                + ", max-tokens=" + profile.maxTokens().map(String::valueOf).orElse("<unset>")
+                + ", api-key=" + (hasKey ? "present" : "ABSENT -> sending no Authorization header");
     }
 
     /**
@@ -123,7 +175,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         }
     }
 
-    /** Never logs the key itself — only whether one resolved. */
+    /** The provider-level defaults every profile inherits from. Never logs the key itself. */
     private String configSummary() {
         return "base-url=" + baseUrl + ", model=" + modelName + ", temperature=" + temperature
                 + ", api-key=" + (ConfigText.orNull(apiKey) == null

@@ -17,6 +17,12 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
         SHORT
     }
 
+    /**
+     * Calls to {@link #embed}, including the ones {@link #embedAll} makes internally. Lets the read path
+     * prove it skips the query embedding for a purely lexical search instead of paying for one.
+     */
+    public int embedCalls;
+
     private final int dim;
     private Defect defect = Defect.NONE;
 
@@ -47,6 +53,7 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
 
     @Override
     public Embedding embed(String text) {
+        embedCalls++;
         float[] v = new float[dim];
         if (text != null && !text.isEmpty()) {
             v[Math.floorMod(text.hashCode(), dim)] = 1.0f;

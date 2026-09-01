@@ -18,4 +18,32 @@ public interface SearchAgent {
      * @return a synthesized answer that cites the supplied hits
      */
     String answer(SearchQuery query, List<SearchHit> hits);
+
+    /**
+     * Run any task from the prompt catalogue over a grounding set.
+     *
+     * <p>{@link #answer} is this with the configured answering task, kept as a named method because it
+     * is the one the read path calls. Everything a task varies — its prompt, model profile, context
+     * budget, whether sources are chunks or whole entities, whether the reply should be JSON — lives in
+     * {@code config/prompts.json}, so a second task is a config entry rather than a second code path.
+     *
+     * <p>The reply is returned verbatim. A task that asked for JSON returns JSON <em>text</em>; parsing
+     * belongs to the caller, which knows the shape it expects and what to do when the model does not
+     * produce it (see {@code JsonReplies}).
+     *
+     * @throws java.util.NoSuchElementException if no such task is filed in the catalogue
+     */
+    String runTask(String taskId, SearchQuery query, List<SearchHit> hits);
+
+    /**
+     * Same, supplying values for the prompt's own declared variables.
+     *
+     * <p>A prompt may need something only its caller knows — a cap, a threshold, a label. Those are
+     * declared in {@code variables} so they are reviewable, and supplied here. {@code query} and
+     * {@code sources} are always provided by the framework and need not appear.
+     *
+     * @throws IllegalStateException if the prompt uses a placeholder nothing supplies
+     */
+    String runTask(String taskId, SearchQuery query, List<SearchHit> hits,
+                   java.util.Map<String, String> variables);
 }

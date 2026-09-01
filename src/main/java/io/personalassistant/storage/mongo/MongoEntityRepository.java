@@ -5,6 +5,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.gt;
 import static com.mongodb.client.model.Filters.lt;
 import static com.mongodb.client.model.Filters.lte;
+import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.nin;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Sorts.ascending;
@@ -83,6 +84,9 @@ public class MongoEntityRepository implements EntityRepository {
                 Updates.set("content", new Document("text", c.text()).append("fileRef", c.fileRef())),
                 Updates.set("metadata", BsonSupport.toBsonMap(entity.metadata())),
                 Updates.set("checksum", entity.checksum()),
+                // Ingestion-owned like the rest of this block: only the source knows when an item
+                // stops being valid, and a re-walk that no longer reports one must clear a stale value.
+                Updates.set("expiresAt", BsonSupport.date(entity.expiresAt())),
                 Updates.set("lastSeenGeneration", entity.lastSeenGeneration()),
                 Updates.set("updatedAt", BsonSupport.date(entity.updatedAt())),
                 // --- new content invalidates whatever was in flight: reset the work queue ---
@@ -292,6 +296,51 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
+    public int flagNeedsReindexByKnowledge(String knowledgeId) {
+        Instant now = Instant.now();
+        // A live lease means a worker is mid-run; flagging it would race its terminal write. Those
+        // entities are simply left, and a second call after the lease lapses picks them up.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                ne("status", EntityStatus.DELETED.name()),
+                or(eq("lease", null), lt("lease.expiresAt", BsonSupport.date(now))));
+        var result = collection().updateMany(filter, Updates.combine(
+                Updates.set("needsReindex", true),
+                Updates.set("retry", zeroRetry()),
+                Updates.set("index.error", null),
+                Updates.set("updatedAt", BsonSupport.date(now))));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public List<Entity> findExpired(int limit, Instant now) {
+        Bson filter = and(
+                ne("expiresAt", null),
+                lte("expiresAt", BsonSupport.date(now)),
+                ne("status", EntityStatus.DELETED.name()));
+        return find(filter, limit);
+    }
+
+    @Override
+    public List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit) {
+        // Only entities without their own expiry: an explicit expiresAt is the source's own
+        // statement about validity and findExpired already owns that case, so applying the
+        // knowledge window here too would age out an item the source said is still good.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                eq("expiresAt", null),
+                lt("createdAt", BsonSupport.date(cutoff)),
+                ne("status", EntityStatus.DELETED.name()));
+        return find(filter, limit);
+    }
+
+    private List<Entity> find(Bson filter, int limit) {
+        List<Entity> out = new ArrayList<>();
+        collection().find(filter).limit(limit).forEach(d -> out.add(fromDoc(d)));
+        return out;
+    }
+
+    @Override
     public List<Entity> findByStatus(EntityStatus status, int limit) {
         List<Entity> out = new ArrayList<>();
         collection().find(eq("status", status.name())).limit(limit).forEach(d -> out.add(fromDoc(d)));
@@ -396,6 +445,7 @@ public class MongoEntityRepository implements EntityRepository {
                         intValue(retry.get("count")), BsonSupport.instant(retry.get("nextAttemptAt"))),
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
+                BsonSupport.instant(d.get("expiresAt")),
                 longValue(d.get("lastSeenGeneration")));
     }
 

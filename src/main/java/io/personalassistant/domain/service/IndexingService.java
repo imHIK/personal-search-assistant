@@ -13,6 +13,16 @@ public interface IndexingService {
     /** Flag a single entity for re-indexing (e.g. after a chunking/embedding change). No re-fetch. */
     void reindexEntity(String entityId);
 
+    /**
+     * Re-index every entity of a knowledge from what is already stored — no re-fetch from the source.
+     *
+     * <p>The reason this exists is changing the embedding model: same dimension does not mean
+     * comparable vectors, so a switch silently degrades search until the whole corpus is re-embedded.
+     *
+     * @return how many entities were queued
+     */
+    int reindexKnowledge(String knowledgeId);
+
     /** Tombstone an entity so the indexing stage removes its chunks from the search index. */
     void deleteEntity(String entityId);
 

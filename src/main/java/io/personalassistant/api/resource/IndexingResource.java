@@ -39,6 +39,15 @@ public class IndexingResource {
     }
 
     @POST
+    @Path("/knowledge/{id}/reindex")
+    public java.util.Map<String, Integer> reindexKnowledge(@PathParam("id") String knowledgeId) {
+        return java.util.Map.of("queued", indexing.reindexKnowledge(knowledgeId));
+    }
+
+    /**
+     * Re-index one entity from stored content, without re-fetching it from the source.
+     */
+    @POST
     @Path("/entities/{id}/reindex")
     public void reindex(@PathParam("id") String entityId) {
         indexing.reindexEntity(entityId);

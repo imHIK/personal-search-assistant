@@ -42,4 +42,51 @@ class CdiChunkingStrategyRegistryTest {
         assertEquals("recursive", r.defaultName());
         assertEquals("recursive", r.get(null).name());
     }
+
+    // ---- content-type-aware selection ---------------------------------------------------------
+
+    private static CdiChunkingStrategyRegistry mimeAware(String configuredDefault) {
+        return new CdiChunkingStrategyRegistry(
+                List.of(new RecursiveCharacterChunkingStrategy(), new TableAwareChunkingStrategy(),
+                        new TokenChunkingStrategy()),
+                configuredDefault);
+    }
+
+    private static final String XLSX =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    /**
+     * Selection used to be keyed purely on a per-knowledge name, so a spreadsheet living in a knowledge
+     * of mostly prose was chunked as prose — its rows split by character count, its header row confined
+     * to the first chunk.
+     */
+    @Test
+    void contentTypeBreaksTheTieWhenTheStrategyIsOnlyTheInheritedDefault() {
+        CdiChunkingStrategyRegistry registry = mimeAware(RecursiveCharacterChunkingStrategy.NAME);
+
+        assertEquals("table", registry.get(RecursiveCharacterChunkingStrategy.NAME, XLSX).name());
+        assertEquals("recursive", registry.get(RecursiveCharacterChunkingStrategy.NAME, "application/pdf").name());
+        assertEquals("recursive", registry.get(RecursiveCharacterChunkingStrategy.NAME, null).name(),
+                "no content type behaves exactly like name-only lookup");
+    }
+
+    /** A deliberate per-knowledge choice must never be second-guessed by content type. */
+    @Test
+    void anExplicitStrategyWinsOverTheContentTypePreference() {
+        assertEquals("token", mimeAware(RecursiveCharacterChunkingStrategy.NAME).get("token", XLSX).name());
+    }
+
+    @Test
+    void theFeatureCanBeTurnedOff() {
+        CdiChunkingStrategyRegistry registry = mimeAware(RecursiveCharacterChunkingStrategy.NAME);
+        registry.mimeAware = false;
+
+        assertEquals("recursive", registry.get(RecursiveCharacterChunkingStrategy.NAME, XLSX).name());
+    }
+
+    @Test
+    void aTypeNoStrategyPrefersFallsBackToTheDefault() {
+        assertEquals("recursive",
+                mimeAware(RecursiveCharacterChunkingStrategy.NAME).get(null, "text/plain").name());
+    }
 }

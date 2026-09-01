@@ -1,4 +1,4 @@
-import { Plug, Search, Sparkles, Library, Wrench } from 'lucide-react'
+import { CalendarClock, Plug, Search, Sparkles, Library, Wrench } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useTechnicalDetailsToggle } from '@/components/TechnicalDetails'
@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 const navItems = [
   { to: '/', label: labels.nav.search, icon: Search, end: true },
   { to: '/knowledge', label: labels.nav.sources, icon: Library, end: false },
+  { to: '/digests', label: labels.nav.digests, icon: CalendarClock, end: false },
   { to: '/connections', label: labels.nav.accounts, icon: Plug, end: false },
 ]
 

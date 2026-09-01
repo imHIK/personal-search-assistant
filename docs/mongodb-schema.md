@@ -6,7 +6,7 @@ rebuilt at any time by replaying Mongo. Database: `personal_assistant`.
 Design goals: easy incremental sync, full reprocessing from source of truth, and clean
 support for many heterogeneous sources without schema churn.
 
-Five collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**.
+Seven collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**.
 Chunks are deliberately *not* a Mongo collection — see below. All indexes are created at startup by
 `MongoIndexInitializer` (`@Observes StartupEvent`); there is **no migration framework**, so a new
 query pattern means adding its index there.
@@ -30,7 +30,8 @@ One document per connected, configured source instance (a folder, a mailbox, a D
     "scheduleSettings": { "cron": null, "interval": "1h", "enabled": true },
     "webhookSettings":  { "enabled": false, "secret": null },
     "backfill":         { "enabled": true },
-    "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null }
+    "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null },
+    "retention":        { "period": null }             // null = never expire (see below)
   },
   "anchor": "2026-06-20T10:00:00Z",   // the forward/backward boundary — NEVER moves
   "nextSyncDueAt": "2026-06-20T11:00:00Z",
@@ -44,6 +45,11 @@ One document per connected, configured source instance (a folder, a mailbox, a D
 ```
 
 Indexes: `{ status: 1 }`, `{ "connectorDetails.type": 1 }`, `{ "connectorDetails.connectionId": 1 }`.
+
+> **`config.retention.period` is opt-in and defaults to null.** A null window at every tier —
+> knowledge, connector `defaultRetention()`, then the global `app.retention.default-period` — means
+> *never expire*, which is what a document corpus must do. Only feed-like sources (the ATS job
+> boards) ship a connector-level default. See [`knowledge-lifecycle.md`](./knowledge-lifecycle.md).
 
 > `inputs` and `connectorDetails.auth` are intentionally free-form sub-documents. Each
 > `SourceConnector` reads its own keys; the core never inspects them. This is the seam that lets new
@@ -87,6 +93,7 @@ One document per ingested item (a file, an email, a message).
   "lease": { "owner": "worker-1", "expiresAt": "…" },   // indexing-stage claim
   "retry": { "count": 0, "nextAttemptAt": null },
   "lastSeenGeneration": 3,                          // vs knowledge.syncGeneration → staleness mark
+  "expiresAt": null,                                // source-declared end date, or null
   "createdAt": "…",
   "updatedAt": "…"
 }
@@ -97,6 +104,8 @@ Indexes:
 - `{ status: 1 }` and `{ knowledgeId: 1, status: 1 }` — find work to (re)process, with fairness.
 - `{ needsReindex: 1 }` — the explicit re-index queue.
 - `{ "retry.nextAttemptAt": 1 }` — backoff-gated re-claim.
+- `{ expiresAt: 1 }` — the retention sweeper's source-declared-expiry pass, which is a global scan.
+- `{ knowledgeId: 1, createdAt: 1 }` — its per-knowledge retention-window pass.
 - `{ knowledgeId: 1, updatedAt: -1, _id: 1 }` and `{ knowledgeId: 1, status: 1, updatedAt: -1, _id: 1 }`
   — the sorted listing behind `GET /api/knowledge/{id}/entities`, unfiltered and status-filtered.
   `_id` is the paging tiebreak so two entities touched in the same millisecond can't swap places
@@ -109,6 +118,17 @@ Indexes:
 > The sort key is `updatedAt`, and `stampLastSeen` deliberately does *not* bump it, so a membership
 > re-walk doesn't reshuffle the browser. Offset paging can still drift a page boundary if the
 > indexing job touches entities mid-scan; a refresh re-reads, which is fine for a console.
+
+> **`expiresAt` is ingestion-owned and usually null.** It is written by `upsert` only when the source
+> states a real end date (Ashby's `closedAt`; Greenhouse and Lever publish none), and it beats the
+> knowledge-level retention window when present. Ageing out is measured from **`createdAt`**, never
+> `updatedAt`: an item that has sat unchanged is exactly the case retention exists for, so a
+> change-based clock would never fire on it.
+>
+> There is deliberately **no Mongo TTL index** on this collection. `expireAfterSeconds` would drop the
+> document without routing through `deleteByEntity`, permanently orphaning its chunks in OpenSearch,
+> and would bypass lease fencing. `RetentionSweeper` tombstones instead, and the ordinary deletion
+> path removes the chunks.
 
 > **`checksum` is the only change signal.** A connector must make it change whenever the item
 > changes (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail:
@@ -216,6 +236,25 @@ Indexes: `{ knowledgeId: 1 }`, `{ direction: 1 }`, `{ lastOutcome: 1 }`.
 > read-modify-write race. A `FAILED` run leaves `iterablesFound`/`lastCounts` untouched, so a failure
 > never clobbers the last known-good snapshot. The records are torn down with their knowledge (the
 > knowledge-delete cascade calls `DiscoveryStatusRepository.deleteByKnowledge`).
+
+---
+
+## Collections: `digests` and `digestRuns`
+
+A saved search plus a schedule, and one document per execution. Documented in
+[`digests.md`](./digests.md); the schema-relevant points are:
+
+- `digests` is indexed on `(enabled, nextRunAt)` — the scheduler's due query. A **null `nextRunAt`
+  means "due now"**, so a freshly created digest runs on the next tick rather than one interval later.
+- `digestRuns` is indexed on `(digestId, ranAt desc)` and stores a **projection** of each hit — entity
+  id, chunk id, title, uri, score, snippet — never the full chunk text, which the entity already holds.
+- A run is also the newness record: an item is new when it is absent from every earlier run, keyed on
+  `items.entityId`. A chunk id changes when a document is re-chunked, so the entity is the only stable
+  key for "the user has seen this".
+- A **failed** run is still written, carrying `error` and no items. That is what makes a digest that has
+  been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
+  anything later.
+- History is unbounded — see [L8](./limitations.md).
 
 ---
 

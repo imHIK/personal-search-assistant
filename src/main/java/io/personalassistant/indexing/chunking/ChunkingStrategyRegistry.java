@@ -13,6 +13,16 @@ public interface ChunkingStrategyRegistry {
     /** The strategy for {@code name}, or the default strategy when {@code name} is null/blank/unknown. */
     ChunkingStrategy get(String name);
 
+    /**
+     * As {@link #get(String)}, but allowing a strategy that declares {@link ChunkingStrategy#prefers} for
+     * {@code contentType} to be chosen when {@code name} is merely the inherited global default. An
+     * explicit per-knowledge choice always wins; a {@code null} content type behaves like
+     * {@link #get(String)}.
+     */
+    default ChunkingStrategy get(String name, String contentType) {
+        return get(name);
+    }
+
     /** Name of the strategy used when a knowledge has not chosen one (or chose an unknown one). */
     String defaultName();
 

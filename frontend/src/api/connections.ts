@@ -28,6 +28,13 @@ export const connectionsApi = {
   patch: (id: string, body: PatchConnectionBody) =>
     http<Connection>(`/api/connections/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
 
+  /**
+   * Re-check the stored credentials. Always 200 with the refreshed connection — read `status` and
+   * `lastError` rather than catching. Bad credentials are a result to display, not a failure.
+   */
+  test: (id: string) =>
+    http<Connection>(`/api/connections/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+
   makeDefault: (id: string) =>
     http<Connection>(`/api/connections/${encodeURIComponent(id)}/default`, { method: 'POST' }),
 

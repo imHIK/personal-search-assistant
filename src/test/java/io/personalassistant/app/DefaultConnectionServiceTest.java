@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService.ConnectionEdit;
 import io.personalassistant.domain.service.ConnectionService.NewConnection;
@@ -17,6 +18,7 @@ import io.personalassistant.testsupport.TestData;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -117,5 +119,47 @@ class DefaultConnectionServiceTest {
     void updateUnknownConnectionThrows() {
         assertThrows(NoSuchElementException.class,
                 () -> service.update("conn_missing", new ConnectionEdit("x", null, null)));
+    }
+
+    // ---- test() -------------------------------------------------------------------------------
+
+    @Test
+    void testMarksAWorkingConnectionActive() {
+        Connection created = create("Work", true);
+        connections.save(created.withStatus(ConnectionStatus.ERROR, "stale failure"));
+
+        Connection checked = service.test(created.id());
+
+        Assertions.assertEquals(ConnectionStatus.ACTIVE, checked.status());
+        Assertions.assertNull(checked.lastError(), "a passing check must clear the stale reason");
+    }
+
+    @Test
+    void testRecordsBadCredentialsRatherThanThrowing() {
+        // A failed check is a result to display, not an error — and the scheduled sweep has to carry
+        // on to the next connection.
+        Connection created = create("Work", true);
+        connector.failVerifyConnectionWith(new IllegalStateException("invalid_grant"));
+
+        Connection checked = Assertions.assertDoesNotThrow(() -> service.test(created.id()));
+
+        Assertions.assertEquals(ConnectionStatus.ERROR, checked.status());
+        Assertions.assertEquals("invalid_grant", checked.lastError());
+        Assertions.assertEquals(ConnectionStatus.ERROR,
+                connections.findById(created.id()).orElseThrow().status(), "and it is persisted");
+    }
+
+    @Test
+    void testLeavesADisabledConnectionDisabled() {
+        // DISABLED is an operator decision; a passing credential check must not silently re-enable it.
+        Connection created = create("Work", true);
+        connections.save(created.withStatus(ConnectionStatus.DISABLED, null));
+
+        Assertions.assertEquals(ConnectionStatus.DISABLED, service.test(created.id()).status());
+    }
+
+    @Test
+    void testReportsAnUnknownConnection() {
+        Assertions.assertThrows(NoSuchElementException.class, () -> service.test("conn_nope"));
     }
 }

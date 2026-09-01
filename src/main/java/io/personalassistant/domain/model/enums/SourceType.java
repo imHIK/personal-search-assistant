@@ -10,5 +10,8 @@ public enum SourceType {
     GMAIL,
     SLACK,
     GOOGLE_DRIVE,
-    NOTION
+    NOTION,
+    GREENHOUSE,
+    LEVER,
+    ASHBY
 }

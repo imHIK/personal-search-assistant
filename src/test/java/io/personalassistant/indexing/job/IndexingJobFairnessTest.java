@@ -3,6 +3,7 @@ package io.personalassistant.indexing.job;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
@@ -49,7 +50,7 @@ class IndexingJobFairnessTest {
 
         IndexingRunner runner = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
-                new FakeEmbeddingProvider(8), index);
+                new FakeEmbeddingProvider(8), index, FieldSets.bundled());
         runner.embedBatch = 64;
         runner.retryLimit = 2;
         runner.backoffSeconds = 30;

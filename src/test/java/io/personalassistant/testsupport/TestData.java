@@ -47,6 +47,29 @@ public final class TestData {
                 ConnectionStatus.ACTIVE, null, now, now);
     }
 
+    /** A knowledge whose config carries an explicit retention window (null = inherit). */
+    public static Knowledge knowledgeWithRetention(String id, SourceType type, String retentionPeriod) {
+        Instant now = Instant.now();
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(defaults.scheduleSettings(),
+                defaults.webhookSettings(), defaults.backfill(), defaults.chunking(),
+                new Knowledge.Retention(retentionPeriod));
+        return new Knowledge(id, "test-" + id,
+                Knowledge.ConnectorDetails.of(type, Map.of()), Map.of(),
+                config, now, null, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Stats.zero(), now, now, 0L);
+    }
+
+    /** An INDEXED entity with an explicit {@code createdAt} and optional source-declared expiry. */
+    public static Entity agedEntity(String id, String knowledgeId, String externalId,
+                                    Instant createdAt, Instant expiresAt) {
+        return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
+                Map.of(), Entity.Content.ofText("body"),
+                Map.of("title", externalId, "uri", "test://" + externalId),
+                "sha256:" + externalId, EntityStatus.INDEXED, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), createdAt, createdAt, expiresAt, 0L);
+    }
+
     /** A knowledge whose config carries explicit {@link Knowledge.ChunkingSettings}. */
     public static Knowledge knowledgeWithChunking(String id, SourceType type,
                                                   Knowledge.ChunkingSettings chunking) {
@@ -89,7 +112,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText("body"), Map.of("title", externalId, "uri", "test://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 
     public static Entity ingestedText(String id, String knowledgeId, String externalId, String text) {
@@ -97,7 +120,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText(text), Map.of("title", externalId, "uri", "test://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 
     public static Entity ingestedFile(String id, String knowledgeId, String externalId, String fileRef, String contentType) {
@@ -106,6 +129,6 @@ public final class TestData {
                 Map.of("contentType", contentType), Entity.Content.ofFile(fileRef),
                 Map.of("title", externalId, "uri", "file://" + externalId),
                 "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 }

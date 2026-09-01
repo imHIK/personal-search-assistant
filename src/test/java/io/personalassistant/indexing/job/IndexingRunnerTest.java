@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
@@ -51,7 +52,7 @@ class IndexingRunnerTest {
     private IndexingRunner runnerWith(FakeEmbeddingProvider embeddings) {
         IndexingRunner r = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
-                embeddings, index);
+                embeddings, index, FieldSets.bundled());
         r.embedBatch = 64;
         r.retryLimit = 2;
         r.backoffSeconds = 30;

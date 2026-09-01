@@ -9,6 +9,7 @@ import io.personalassistant.ingestion.connector.GrabContext;
 import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -18,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /** Scriptable {@link SourceConnector} for ingestion tests: queue pages per direction. */
@@ -30,6 +32,7 @@ public class StubConnector implements SourceConnector {
     private RuntimeException discoverFailure;
     private boolean dynamicIterables;
     private SyncSchedule defaultSchedule = SyncSchedule.NONE;
+    private Optional<Duration> defaultRetention = Optional.empty();
     private Set<String> membershipKeys; // null = signature hashes the whole inputs map (default)
     private boolean requiresConnection;
     private RuntimeException verifyConnectionFailure;
@@ -124,6 +127,17 @@ public class StubConnector implements SourceConnector {
     @Override
     public boolean hasDynamicIterables() {
         return dynamicIterables;
+    }
+
+    /** Set the connector-level default retention reported by {@link #defaultRetention()}. */
+    public StubConnector withDefaultRetention(Duration retention) {
+        this.defaultRetention = Optional.ofNullable(retention);
+        return this;
+    }
+
+    @Override
+    public Optional<Duration> defaultRetention() {
+        return defaultRetention;
     }
 
     @Override

@@ -148,7 +148,7 @@ class TimeWindowGrabberTest {
 
         FakeKeysetSource add(String id, Instant ts) {
             store.add(new RawItem(id, EntityType.MESSAGE, "text/plain", id, "uri:" + id, "sum:" + id,
-                    ts, Map.of(), "body:" + id, null, Map.of("title", id), false));
+                    ts, Map.of(), "body:" + id, null, Map.of("title", id), null, false));
             return this;
         }
 

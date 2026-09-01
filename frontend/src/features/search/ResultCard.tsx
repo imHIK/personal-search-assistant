@@ -130,6 +130,7 @@ export const ResultCard = forwardRef<HTMLElement, {
             ['chunkId', hit.chunkId],
             ['entityId', hit.entityId],
             ['knowledgeId', hit.knowledgeId],
+            ['ordinal', String(hit.ordinal)],
             ['score', hit.score.toFixed(6)],
             ['uri', hit.uri ?? '—'],
             ['metadata', JSON.stringify(hit.metadata)],

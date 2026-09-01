@@ -71,8 +71,8 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §6 Mongo indexes (unique `knowledgeId+externalId`, …) | `storage.mongo.MongoIndexInitializer` |
 | §7 Scopes (global / connector / knowledge), TTL leases | `common.concurrency.ScopeLimit`, `InMemoryPermitService` |
 | §8 Indexing loop (claim → transform → chunk → embed → index → mark) | `indexing.job.IndexingRunner.indexEntity` + `IndexingJob.tick` |
-| §8 File path: `fileRef` → per-type extract | `IndexingRunner.extractText` + `indexing.parser.*` (PDF/Word/PPT/Excel/HTML/PlainText, Tika fallback) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
-| §8 Text path | `IndexingRunner.extractText` (inline) |
+| §8 File path: `fileRef` → per-type extract | `IndexingRunner.extract` + `indexing.parser.*` (PDF/Word/PPT/Excel/HTML/PlainText, Tika fallback) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| §8 Text path | `IndexingRunner.extract` (inline) |
 | §8 Chunking (pluggable, per-knowledge) | `indexing.chunking.*` — `ChunkingStrategyRegistry` + `ChunkingSpecResolver`; strategy chosen from `Knowledge.config.chunking` per pass (direct update, no re-chunk) |
 | §8 Chunks live only in OpenSearch | `storage.search.opensearch.OpenSearchSearchIndex`; no chunk Mongo repository exists |
 | §8 Re-index without re-fetch | `EntityRepository.flagNeedsReindex` → claim re-runs `IndexingRunner` |
@@ -155,7 +155,7 @@ docker compose up -d        # MongoDB :27017, OpenSearch :9200
 ./gradlew quarkusDev        # dev mode with live reload
 ```
 On startup `MongoIndexInitializer` ensures the Mongo indexes and `OpenSearchIndexInitializer`
-creates `chunks_v2_768` + the `chunks` alias (it logs a warning and continues if OpenSearch is down).
+creates `chunks_v3_768` + the `chunks` alias (it logs a warning and continues if OpenSearch is down).
 
 The shipped embedding provider is `openai-embed` (hosted, keyed off `GEMINI_API_KEY`). The
 alternative `onnx-bge` needs an exported model directory and ships with
@@ -245,18 +245,34 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.indexing.lease-seconds` | `900` | Entity indexing lease duration |
 | `app.indexing.retry-limit` | `5` | **Consecutive** indexing failures before `FAILED`; a successful index resets the streak |
 | `app.indexing.backoff-seconds` | `300` | Delay before a failed entity is re-claimable |
-| `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`/`table`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| `app.chunking.mime-aware` | `true` | Allow content type to pick the strategy when the knowledge has not chosen one explicitly (`ChunkingStrategy.prefers`). An explicit per-knowledge choice always wins. Off restores name-only selection |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
 | `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
 | `app.embedding.provider` | `openai-embed` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `openai-embed` (hosted) / `onnx-bge` (local in-JVM ONNX) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
-| `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v2_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
+| `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v3_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
 | `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
 | `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
 | `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `models/gemini-embedding-001` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Gemini needs the `models/` prefix; a bare id 404s |
 | `app.embedding.openai.dimensions` | `768` | Width requested via the OpenAI `dimensions` parameter; `0` omits it and takes the model's native width. `gemini-embedding-001` is natively 3072, so this is what keeps it inside the 768 knn mapping. A model that ignores the parameter fails loudly on the first batch |
 | `app.llm.provider` | `openai-compat` | `openai-compat` (hosted Groq/Gemini or local Ollama) or `none` (`StubLlmProvider`, disables `answer: true`) |
 | `app.llm.base-url` / `.model` / `.api-key` | Groq / `llama-3.3-70b-versatile` / `${GROQ_API_KEY:}` | Grounded-answer LLM. Point `base-url` at `http://localhost:11434/v1` for Ollama — no code change |
+| `app.search.snippet-chars` | `280` | Length of a hit's **display** excerpt. Display only: the agent is grounded in the full chunk text, not this. `0` returns chunks untruncated. Used to be a hardcoded constant applied *before* the text reached the agent — see [`opensearch-index.md`](./opensearch-index.md) |
+| `app.search.highlight-fragments` | `2` | Highlight fragments requested per field, so the excerpt is the region that matched rather than the head of the chunk. `0` disables highlighting. Lexical leg only — a knn query has no query terms to mark up |
+| `app.search.max-top-k` | `100` | Ceiling on `topK`, clamped in `DefaultSearchService`. `topK` is multiplied before it becomes the OpenSearch `size` and knn `k`, so this is what bounds a single request |
+| `app.search.candidate-multiplier` | `4` | Candidates fetched per leg per requested result. Over-fetch is what lets a chunk only one leg ranks well reach the fusion step |
+| `app.search.lexical.fields` / `.type` / `.minimum-should-match` / `.phrase-boost` | `text,title^2` / `best_fields` / `2<70%` / `2.0` | BM25 query shape. A bare `multi_match` scores a document for matching **any** term, so a conversational query ranked documents containing "give"/"all"/"this"/"year" above the one document on topic and flooded the candidate set with them. Blank `minimum-should-match` sends nothing; `0` phrase-boost omits the phrase clause |
+| `app.search.rrf-k` | `60` | RRF rank-smoothing constant. Larger rewards agreement between the legs over either leg's exact ordering |
+| `app.search.rrf.lexical-weight` / `.vector-weight` | `1.0` / `1.0` | Per-leg weights on the fused score, for discounting a leg you trust less on your corpus |
+| `app.search.max-chunks-per-entity` | `0` (unlimited) | Cap on how many chunks one entity may contribute. **Off by default on purpose** — it buys source diversity but harms the case where the right answer *is* many chunks of one document |
+| _(moved)_ `embedContext` field set | `["title"]` | Context fields prefixed to a chunk's text **before embedding** now live in `config/field-sets.json`, scoped per connector — a Gmail chunk is best identified by sender, a Drive chunk by heading path, and a flat key can say only one thing. `title`/`uri` resolve against the chunk, anything else against its metadata. **Changing it requires a re-index** |
+| `app.embedding.openai.task-type-enabled` | `false` | Send `task_type` to distinguish a query embedding from a document one. **Must stay off for the shipped base-url**: it is a *native* Gemini parameter and the OpenAI-compatible endpoint rejects it with `400 … Unknown name "task_type"`, failing all indexing. The asymmetry is real but unreachable through the compat layer; the ONNX provider gets it via `app.embedding.onnx.query-instruction` |
+| `app.embedding.onnx.query-instruction` | BGE's published wording | Instruction prepended to a **query** only. Blank for a symmetric model — the wrong instruction is worse than none |
+| `app.agent.task` | `answer` | Which task in `config/prompts.json` answering runs. The task carries its own prompt, LLM profile and budgets, so a variant is a JSON entry plus this key — not a second code path. Budgets (`contextChars`, `maxSources`) live on the task, not here, because they are per-task: see [`configuration.md`](./configuration.md) |
+| `app.prompts.path` | _(empty)_ | Optional file replacing `config/prompts.json` wholesale (replace, not merge). The seam for user-supplied prompts |
+| `app.field-sets.path` | _(empty)_ | Optional file replacing `config/field-sets.json` wholesale |
+| `app.llm.profile.<name>.{base-url,model,temperature,max-tokens,api-key}` | see `application.properties` | Named per-role LLM overrides on top of `app.llm.*`, resolved **dynamically** — adding a profile is config only, no code. Unset (or blank) inherits the provider default. A profile that redirects `base-url` must supply its own `api-key`; it will not inherit one. Ships `answer` and `lite`. See [`providers.md`](./providers.md) |
 | `app.ingestion.google.client-id` / `.client-secret` | `${GOOGLE_OAUTH_CLIENT_ID:}` / `${GOOGLE_OAUTH_CLIENT_SECRET:}` | App-level OAuth fallback used to mint Gmail/Drive access tokens from a refresh token when the connection's auth blob carries no client of its own |
 | `app.ingestion.google-drive.max-file-bytes` / `.max-folders` | `26214400` / `500` | Drive download size cap (oversized files are silently skipped — see [`limitations.md`](./limitations.md) L4) and the discovery folder-walk bound |
 
@@ -267,8 +283,8 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | To add… | Implement… | Register via |
 |---|---|---|
 | A new data source (Slack, Drive, Gmail) | `ingestion.connector.SourceConnector` | CDI bean; auto-discovered by `CdiConnectorRegistry` keyed on `SourceType` |
-| A new file type / extractor (OCR, etc.) | `indexing.parser.ContentParser` (set `priority()`; delegate to `TikaSupport`) | CDI bean; selected by `CdiParserRegistry`. Per-family parsers already exist (PDF/Word/PPT/Excel/HTML) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
-| A new chunking strategy | `indexing.chunking.ChunkingStrategy` (unique `name()`) | CDI bean; discovered by `CdiChunkingStrategyRegistry`, selected per knowledge via `config.chunking` |
+| A new file type / extractor (OCR, etc.) | `indexing.parser.ContentParser` (set `priority()`; delegate to `TikaSupport`, which preserves table/heading structure) | CDI bean; selected by `CdiParserRegistry`. Per-family parsers already exist (PDF/Word/PPT/Excel/HTML) — see [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
+| A new chunking strategy | `indexing.chunking.ChunkingStrategy` (unique `name()`; override `chunk(…ParsedContent…)` to use document structure, and `prefers(contentType)` to claim a format) | CDI bean; discovered by `CdiChunkingStrategyRegistry`, selected per knowledge via `config.chunking` or by content type |
 | A real embedding model (ONNX / hosted) | `indexing.embedding.EmbeddingProvider` | replace the bean; update `app.embedding.*`, then re-index |
 | A different vector store / search engine | `storage.search.SearchIndex` | new adapter package |
 | A multi-node permit limiter | `common.concurrency.PermitService` (Redis) | replace `InMemoryPermitService` |
@@ -314,7 +330,7 @@ seams already in place:
 - **Webhooks.** `ForwardCursorScheduler.armNow(knowledgeId)` is the on-demand trigger a webhook
   endpoint would invoke; the webhook config already lives on `Knowledge.Config.webhookSettings`.
 - **File splitting** for very large or container files (zip / mbox) — slots into
-  `IndexingRunner.extractText` before extraction.
+  `IndexingRunner.extract` before extraction.
 - **Metrics endpoints** beyond the current counters/logging (e.g. Micrometer gauges for lag and
   queue depth, surfaced through the existing health/metrics infrastructure).
 - **Redis-backed `PermitService`** for multi-node deployments. The in-memory implementation is

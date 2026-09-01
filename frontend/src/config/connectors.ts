@@ -1,4 +1,4 @@
-import { Folder, HardDrive, Hash, Mail, NotebookPen } from 'lucide-react'
+import { Briefcase, Folder, HardDrive, Hash, Mail, NotebookPen } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SourceType } from '@/api/types'
 import type { FieldSpec } from './fields'
@@ -158,6 +158,66 @@ export const connectors: ConnectorDescriptor[] = [
       steps: googleHelpSteps,
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],
     },
+  },
+  {
+    id: 'GREENHOUSE',
+    label: 'Greenhouse job boards',
+    description: 'Open roles from company career pages hosted on Greenhouse.',
+    icon: Briefcase,
+    implemented: true,
+    requiresConnection: false,
+    inputFields: [
+      {
+        name: 'boards',
+        kind: 'list',
+        label: 'Board tokens',
+        hint: 'One per line. The name in boards.greenhouse.io/<name>.',
+        placeholder: 'stripe',
+        required: true,
+      },
+    ],
+    authFields: [],
+    configFields: [],
+  },
+  {
+    id: 'LEVER',
+    label: 'Lever job boards',
+    description: 'Open roles from company career pages hosted on Lever.',
+    icon: Briefcase,
+    implemented: true,
+    requiresConnection: false,
+    inputFields: [
+      {
+        name: 'boards',
+        kind: 'list',
+        label: 'Company handles',
+        hint: 'One per line. The name in jobs.lever.co/<name>.',
+        placeholder: 'netflix',
+        required: true,
+      },
+    ],
+    authFields: [],
+    configFields: [],
+  },
+  {
+    id: 'ASHBY',
+    label: 'Ashby job boards',
+    description: 'Open roles from company career pages hosted on Ashby.',
+    icon: Briefcase,
+    implemented: true,
+    requiresConnection: false,
+    inputFields: [
+      {
+        name: 'boards',
+        kind: 'list',
+        label: 'Board names',
+        hint: 'One per line. The name in jobs.ashbyhq.com/<name>.',
+        placeholder: 'linear',
+        required: true,
+      },
+    ],
+    authFields: [],
+    configFields: [],
   },
   {
     id: 'SLACK',

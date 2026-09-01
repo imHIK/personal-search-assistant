@@ -70,8 +70,9 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
   behind the persisted top-bar toggle. When adding a field, decide which side of that line it is on.
 - **Two async traps the API sets** — both already handled, don't undo them: `POST /api/knowledge`
   returns **200 with `status: "ERROR"`** on a failed activation (check the body, not the HTTP status),
-  and `POST /api/search` with `answer: true` **500s and loses the hits** when the LLM is unavailable
-  (`useSearch` retries once without the flag).
+  and `POST /api/search` with `answer: true` returns **200 with `answerError` set** when the LLM is
+  unavailable — the hits are intact, so read that field rather than treating it as a failed search
+  (`useSearch` keeps a retry-without-answer fallback for older behaviour).
 - Things the backend lacks are flags in `src/config/features.ts`, not deletions.
 
 ## Invariants — breaking these corrupts data
@@ -90,7 +91,7 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    be replayed after a crash. Files pass as `fileRef` (a path), never bytes — Mongo's 16 MB cap.
 5. **Embedding dimension is baked into the index mapping.** `app.embedding.dimension=768` is written into the
    `knn_vector` mapping by `OpenSearchIndexInitializer` at index creation. A different-width model needs a new
-   physical index (`chunks_v2_768` today) + alias flip + full re-index. Code only ever talks to the `chunks`
+   physical index (`chunks_v3_768` today) + alias flip + full re-index. Code only ever talks to the `chunks`
    alias. This key deliberately has **no `defaultValue`** at any injection point — a guessed width builds an
    index nothing fits, so an absent property must fail startup. `ConfigDefaultsTest` enforces both that and
    general agreement between `@ConfigProperty` defaults and `application.properties`.
@@ -160,8 +161,10 @@ edit / pause / delete semantics), `docs/indexing-design.md` + `docs/indexing-imp
 two stages, and the config reference in §6), `docs/connectors.md` (the `SourceConnector` SPI and
 `Connection` auth), `docs/parsing-and-chunking.md`, `docs/providers.md` (embedding + LLM providers,
 including the ONNX model export), `docs/mongodb-schema.md` / `docs/opensearch-index.md`
-(persistence), `docs/limitations.md` (L1–L5 accepted gaps — don't "fix" these unprompted).
-`application.properties` is the tiebreaker for any config default.
+(persistence), `docs/limitations.md` (L1–L6 accepted gaps — don't "fix" these unprompted).
+`application.properties` is the tiebreaker for any config default, but **content** — prompts and
+metadata field sets — lives in `src/main/resources/config/*.json`; `docs/configuration.md` is the rule
+for which mechanism a new setting belongs in.
 
 ## Repo etiquette
 

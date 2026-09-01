@@ -198,7 +198,12 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 patch.chunking().overlap().orElse(curChunk.overlap()),
                 patch.chunking().separators().orElse(curChunk.separators()));
 
-        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking);
+        // Retention is a config-class edit like chunking: it changes only what a later sweep removes,
+        // never what is ingested. Absent from the patch means keep the current window (not "clear it").
+        Knowledge.Retention retention = new Knowledge.Retention(
+                patch.retentionPeriod().orElse(cur.retention().period()));
+
+        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking, retention);
 
         return current.withEdits(patch.name().orElse(current.name()), cd,
                 patch.inputs().orElse(current.inputs()), config, now);

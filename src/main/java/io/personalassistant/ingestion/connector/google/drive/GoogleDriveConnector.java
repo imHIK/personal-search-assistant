@@ -271,7 +271,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         byte[] bytes = api.export(token, id, exportMime);
         String text = new String(bytes, StandardCharsets.UTF_8);
         return new RawItem(id, EntityType.PAGE, exportMime, name, uri, checksum, modifiedAt,
-                raw, text, null, metadata, false);
+                raw, text, null, metadata, null, false);
     }
 
     /** Regular file: download bytes to local scratch and reference by fileRef (Tika reads it). */

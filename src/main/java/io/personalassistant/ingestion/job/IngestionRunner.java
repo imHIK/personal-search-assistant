@@ -172,6 +172,7 @@ public class IngestionRunner {
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
                 EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
                 createdAt, now,
+                item.expiresAt(), // source-declared expiry, if any; else the knowledge window governs
                 kn.syncGeneration()); // stamp the walk generation so re-walked items aren't seen as stale
         entities.upsert(entity);
     }

@@ -59,7 +59,7 @@ class IngestionRunnerTest {
     private static RawItem textItem(String ext) {
         return new RawItem(ext, EntityType.MESSAGE, "text/plain", ext, "uri:" + ext,
                 "sha256:" + ext, Instant.now(), Map.of("k", "v"), "body of " + ext, null,
-                Map.of("title", ext), false);
+                Map.of("title", ext), null, false);
     }
 
     private Cursor seedCursor(CursorDirection direction) {
@@ -170,7 +170,7 @@ class IngestionRunnerTest {
         // Revision 2 of the same externalId arrives while idx1 is still working.
         RawItem revised = new RawItem("doc", EntityType.MESSAGE, "text/plain", "doc", "uri:doc",
                 "sha256:doc-v2", Instant.now(), Map.of("k", "v"), "the new body", null,
-                Map.of("title", "doc"), false);
+                Map.of("title", "doc"), null, false);
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(revised), CursorPosition.of(Map.of("seq", 2L)), false));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});

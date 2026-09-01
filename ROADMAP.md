@@ -43,6 +43,14 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
 
 ## Tier 2 — Breadth & correctness
 
+- **Automatic OAuth token refresh for connections.** `ConnectionHealthScheduler` now *detects* a dead
+  credential — it re-verifies every connection on `app.connections.health-interval`, marks it `ERROR`,
+  and `IngestionJob` skips that connection's knowledges rather than failing on every tick. What it
+  cannot do is fix one. A Google refresh token that expires still needs the user to paste a new one.
+  The refresh path exists for access tokens (`DefaultGoogleAccessTokens` refreshes and persists them);
+  what is missing is handling a *refresh token* that has itself been revoked or expired — re-prompting
+  through the OAuth consent flow, which needs a redirect endpoint and somewhere to land the callback.
+
 3. **Knowledge-edit Phase 2 purge** (M). Tracked gap L2: after a scope shrink, stale entities /
    chunks stay searchable. The staleness marks (`syncGeneration` / `lastSeenGeneration`) are already
    written, so this is the deliberate completion-gated cleanup path.

@@ -1,5 +1,6 @@
 package io.personalassistant.ingestion.connector.localfs;
 
+import io.personalassistant.common.ContentTypes;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
@@ -382,13 +383,14 @@ public class LocalFsConnector implements SourceConnector {
         }
     }
 
+    /**
+     * The type stored here is what picks the parser at indexing time, so a wrong answer silently changes
+     * how a file is extracted. {@link ContentTypes} sniffs name <em>and</em> bytes, unlike
+     * {@code Files.probeContentType} alone, which returns null for {@code .xlsx} on macOS and left every
+     * spreadsheet typed as {@code application/octet-stream}.
+     */
     private static String probeContentType(Path path) {
-        try {
-            String type = Files.probeContentType(path);
-            return type != null ? type : "application/octet-stream";
-        } catch (IOException e) {
-            return "application/octet-stream";
-        }
+        return ContentTypes.detect(path);
     }
 
     /** Ordering key: last-modified millis + absolute path (for deterministic, stable paging). */

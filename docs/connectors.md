@@ -18,6 +18,9 @@ resume from where it stopped.
 | Local filesystem | `LOCAL_FS` | `localfs.LocalFsConnector` | none | root + one per sub-directory |
 | Gmail | `GMAIL` | `google.gmail.GmailConnector` | required (OAuth) | all-mail, or one per configured label |
 | Google Drive | `GOOGLE_DRIVE` | `google.drive.GoogleDriveConnector` | required (OAuth) | one per folder (tree walked at discovery) |
+| Greenhouse | `GREENHOUSE` | `ats.greenhouse.GreenhouseConnector` | none (public board) | one per board token |
+| Lever | `LEVER` | `ats.lever.LeverConnector` | none (public board) | one per company handle |
+| Ashby | `ASHBY` | `ats.ashby.AshbyConnector` | none (public board) | one per board name |
 
 ## Connections (credentials, separated from knowledges)
 
@@ -64,6 +67,32 @@ The app-level fallback client is `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT
 Required OAuth scopes: `https://www.googleapis.com/auth/gmail.readonly` and
 `https://www.googleapis.com/auth/drive.readonly`.
 
+### Connection health
+
+Credentials are verified at create and on an auth edit — and, until now, never again. A token that
+expired afterwards left its connection reading `ACTIVE` while every sync failed: the failures scrolled
+past in the log, the console showed nothing wrong, and the first real signal was that the data had
+quietly stopped updating.
+
+`ConnectionHealthScheduler` re-runs `verifyConnection` on every connection every
+`app.connections.health-interval` (30m) and records the outcome as `ConnectionStatus` + `lastError`.
+`POST /api/connections/{id}/test` does the same on demand, and is what the console's **Test** button
+calls. Both return 200 whether or not the check passed — a bad credential is a result to display, not
+a 4xx.
+
+`IngestionJob` then **skips** knowledges whose connection is in `ERROR`, instead of burning a lease and
+a permit per tick to fail. Three properties of that are deliberate:
+
+- **Nothing is paused and no knowledge state is written.** The skip is derived from the connection's
+  status, so a connection that starts working again resumes sync on its own — and a user's own pause is
+  never overridden by the framework.
+- **`DISABLED` is left alone.** That is an operator decision; a passing credential check must not
+  silently re-enable it.
+- **Any doubt runs the knowledge as before.** A missing connection, an unknown type or a lookup failure
+  all fall through to running it. This is an optimisation, and it must never be the reason a sync stops.
+
+It detects a dead credential; it cannot fix one. Automatic re-consent is tracked in `ROADMAP.md`.
+
 ## Gmail
 
 **Inputs** (`knowledge.inputs`): optional `labelIds` (a list — one iterable per label; omit for a
@@ -100,6 +129,58 @@ Content mapping splits by type: Google-native docs are exported to text
 binary files are downloaded to a local scratch dir (`app.ingestion.google-drive.download-dir`) and
 referenced by `fileRef` so the existing Tika path parses them exactly like a local `FILE`. Files over
 `max-file-bytes` and unsupported native types (forms, maps, drawings) are skipped.
+
+## ATS job boards (Greenhouse, Lever, Ashby)
+
+**Inputs** (`knowledge.inputs`): `boards` — a list of board identifiers (or a single string). These
+are the handles in `boards.greenhouse.io/<token>`, `jobs.lever.co/<site>` and
+`jobs.ashbyhq.com/<name>`. Each becomes one iterable.
+
+All three share `ats.SnapshotBoardConnector`, because all three are **snapshot-shaped**: one request
+returns the entire current board. There is no `updated_after` parameter, no continuation token and no
+meaningful pagination, so neither `TokenWindowGrabber` nor `TimeWindowGrabber` applies and they
+implement `SourceConnector` directly, as `LocalFsConnector` does. `grab` ignores the seed `TimeWindow`
+and returns everything in one page with `hasMore=false`.
+
+That sounds like the incremental machinery is wasted, but the expensive half still works: change
+detection in `IngestionRunner.persistItem` skips any posting whose checksum is unchanged and is
+already `INDEXED`, so a poll costs one HTTP call plus N cheap Mongo lookups.
+
+Two consequences worth knowing:
+
+- **Forward-only.** `supportedDirections()` is `FORWARD` alone. Backward cursors exist to walk history
+  below the anchor, and a job board has no history worth walking — a posting old enough to sit below
+  the anchor is filled or withdrawn.
+- **These are the connectors that opt into retention.** Boards send no tombstone when a role closes;
+  it simply stops appearing. `defaultRetention()` returns 14 days against a 3-hour
+  `defaultSchedule()` — comfortably longer than the cadence, because an item is re-created by the next
+  walk if it still exists, so a short window would only churn re-embeddings. See
+  [`knowledge-lifecycle.md`](./knowledge-lifecycle.md).
+
+Compensation parsing handles Indian notation (Indian digit grouping, `LPA`, lakh, crore) as well as
+the western forms, and always records the currency it read — `compMin`/`compMax` are plain numbers in
+the index, so a corpus mixing INR and USD would make one numeric filter mean two things. Every match
+must be anchored by a currency symbol or a magnitude unit: measured on live boards, an unanchored
+pattern read "6-12 months" as six to twelve million and invented a salary band on postings that never
+mentioned pay. Expect null far more often than not — see `docs/job-discovery.md` for the measured rate.
+
+Normalisation lives in `ats.AtsNormalization` and is shared, because everything *derived* from the
+per-board JSON must be computed identically — most of all `dedupeKey`
+(`company|title|location`, normalised), since the same role only collapses across sources if both
+sides build the key the same way. The derivations are deliberately conservative: seniority, remoteness
+and compensation return null/false rather than guessing, because confidently-wrong metadata makes
+filters silently exclude good matches. Where a board states a fact structurally it wins over any
+inference — Ashby's `isRemote` and its `includeCompensation` pay bands are used directly.
+
+Per-board quirks:
+
+- **Greenhouse** — `?content=true` is what makes one call sufficient; without it the descriptions need
+  a second request per posting. `updated_at` is the change signal.
+- **Lever** — publishes **no update timestamp**, only `createdAt`. A checksum built from `createdAt`
+  alone would never move, so an edited posting would be skipped forever (an invariant-3 violation).
+  The checksum therefore hashes the body as well.
+- **Ashby** — the richest of the three, and the only one that can state a close date; when it does,
+  that becomes `Entity.expiresAt` and beats the knowledge-level retention window.
 
 ## Known limitations
 

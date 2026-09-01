@@ -73,41 +73,75 @@ can't mass-delete), and (b) removes parked (`RETIRED`) iterables' kept data.
 
 ---
 
-## L3 — No OCR, and no structure-aware extraction below the per-format layer
+## L2b — Source-side deletion is only handled by retention
 
-> **Superseded in part.** The original form of this limitation ("only `PlainTextParser` and a single
-> general-purpose `TikaContentParser` exist") no longer holds — the per-format parser layer described
-> as the candidate fix has since been built. What remains is the narrower gap below.
+**Area:** Ingestion · entity lifecycle
+
+**What:** No connector emits a tombstone. `RawItem.tombstone` exists and `IngestionRunner` handles it,
+but nothing produces one — so a local file that is deleted, a Drive file that is trashed, or a Gmail
+message that is removed stays ingested and searchable indefinitely.
+
+Entity **retention** (`config.retention.period`, `RetentionSweeper`) covers this for sources that opt
+in: an item ages out on a window measured from `createdAt`, whether or not it still exists upstream.
+That is the right answer for feeds — the ATS job boards use it — because a posting the source stopped
+returning is stale regardless. It is *not* a general answer, for two reasons:
+
+1. Retention is opt-in and unset by default, so document corpora get no cleanup at all. This is
+   deliberate: a global window would silently start deleting Drive/Gmail/local content.
+2. Ageing out is not the same as noticing a removal. An item deleted upstream lingers for the whole
+   window, and an item that still exists is deleted and then **re-created** by the next walk —
+   re-parsed, re-chunked and re-embedded, with a fresh `createdAt`. Windows must therefore be long
+   enough that anything surviving one is genuinely stale.
+
+**Impact:** Low–medium. Over-inclusion, never data loss.
+
+**Candidate approach:** a `lastSeenAt` stamped on every walk including the change-detection skip path
+(`stampLastSeen` already fires there, so it is one extra field on an existing write), which would
+distinguish *removed at source* from *merely old* and let a closed item be tombstoned on the next poll
+instead of at the end of the window. Gmail's push (`watch`) and Drive's Changes feed are the
+source-specific alternatives.
+
+---
+
+## L3 — No OCR, and no table structure in formats that do not carry it
+
+> **Largely superseded.** Two earlier forms of this limitation are now closed. The per-format parser
+> layer was built, and structure-preserving extraction has since replaced the flattening body handler:
+> `StructureAwareHandler` turns Tika's XHTML back into row-per-line text and records
+> `ParsedContent.blocks`, which the `table` chunking strategy splits on while repeating the header row
+> into every chunk. See [`parsing-and-chunking.md`](./parsing-and-chunking.md) §1.1. What remains is
+> narrower.
 
 **Area:** Indexing · content parsing (`indexing/parser/*` — `ContentParser`, `CdiParserRegistry`,
-`TikaSupport`, `TikaContentParser`)
+`TikaSupport`, `StructureAwareHandler`)
 
-**What:** Six parsers now ship and are selected by MIME type through `CdiParserRegistry`, lowest
+**What:** Seven parsers ship and are selected by MIME type through `CdiParserRegistry`, lowest
 `priority()` first: `PlainTextParser` (0), then `PdfContentParser` / `WordDocumentParser` /
 `SpreadsheetContentParser` / `PresentationParser` / `HtmlContentParser` (all 10), with
-`TikaContentParser` (100) as the catch-all fallback for types nothing else claims — RTF, EPUB,
-e-mail, and the long tail. See [`parsing-and-chunking.md`](./parsing-and-chunking.md).
-
-Two gaps remain:
+`TikaContentParser` (100) as the catch-all fallback. Two gaps remain:
 
 1. **No OCR.** Scanned PDFs and images extract to little or nothing — Tesseract is not wired into
    Tika, so image-only content is effectively unsearchable.
-2. **Structure is still flattened.** The per-format parsers improve extraction over the generic path
-   but still emit plain text. Tables, headings, slide/page boundaries, and spreadsheet cell topology
-   are not carried through to chunking as structure, so a chunk boundary can land mid-table.
+2. **A format that does not encode tables still has none.** Structure now survives extraction *where
+   the format carries it* — spreadsheets, Word tables, HTML. A PDF carries no table semantics: a
+   visually tabular page is positioned text, which PDFBox emits as a sequence of `<p>`. So a PDF
+   yields paragraph blocks and no table blocks, and while rows are no longer cut in half, there is no
+   header row to identify or repeat. The `table` strategy correctly falls back to recursive splitting.
 
-**Impact:** Low–Medium. Scanned documents are silently near-empty rather than failing loudly.
-Structure loss degrades chunk coherence and therefore retrieval precision on tabular and slide
-content. No data loss in either case.
+**Impact:** Low–Medium. Scanned documents are silently near-empty rather than failing loudly. For
+tabular PDFs, chunks after the first hold bare rows with no column headers and nothing naming the
+table, which is a retrieval problem rather than an extraction one — see **L6**, and note that the
+embedded context prefix (the `embedContext` field set in `config/field-sets.json`) is what addresses it, not extraction.
 
-**Why we left it:** OCR adds a heavyweight native dependency for a format that is uncommon in typical
-personal corpora, and structure-preserving chunking is a larger design question (it changes the
-`ParsedContent` contract, not just a parser).
+**Why we left it:** OCR adds a heavyweight native dependency for a format uncommon in typical personal
+corpora. Recovering table structure from a PDF's visual layout is a genuinely hard inference problem
+(column detection from glyph positions), quite unlike reading markup that already says `<tr>`.
 
 **Candidate approaches (for later):** wire Tesseract in as a higher-priority image/PDF
 `ContentParser` — the CDI registry auto-discovers it and prefers it over the fallback with no wiring
-changes; and extend `ParsedContent` to carry structural markers that a structure-aware
-`ChunkingStrategy` can split on, rather than splitting a flat string.
+changes; and, for tabular PDFs, either a layout-analysis pass that infers columns from glyph geometry
+(Tika can expose positions) or a heuristic that detects a repeated line shape and treats the first
+matching line as a header.
 
 ---
 
@@ -172,3 +206,94 @@ schedule (or fold reconcile into the same due-check the forward scheduler alread
 flat global interval; for both schedulers, wake at the earliest upcoming `nextSyncDueAt` rather than a
 fixed `every=…`; or, minimally, document `discovery-interval` / `forward-interval` as the floor on
 discovery/sync latency and validate configured schedules against them.
+
+---
+
+## L6 — Retrieval has no way to recover content that spans chunk boundaries
+
+**Area:** Read path · retrieval + answering (`HybridRetriever`, `NoopReranker`,
+`DefaultSearchAgent`, `AnswerPromptBuilder`)
+
+**What:** A hit is a single chunk, and nothing on the read path can reach the chunks around it. If an
+answer needs content that spans several chunks of one document, each of those chunks has to earn its
+own place in the top-K independently — there is no neighbour expansion, no whole-entity escalation, and
+no second retrieval round.
+
+That is fine for prose, where a paragraph is usually self-contained, and it is a real gap for lists and
+tables. The first chunk of a table carries the header row and matches the query; the continuation
+chunks are bare rows that match neither the keywords nor the query vector, so they never appear as
+hits, and the answer is built from the fraction of the list that happened to rank. This is the
+retrieval half of the same failure recorded in L3 — the extraction half is what makes those
+continuation chunks context-free in the first place.
+
+Two smaller read-path gaps sit alongside it:
+
+1. **No reranker.** `NoopReranker` only trims to `topK`, so final ordering is whatever RRF produced.
+   Precision on near-miss candidates is untuned. Tracked in `ROADMAP.md`.
+2. **Queries and documents are embedded identically.** All three `EmbeddingProvider`s call the same
+   path for both, while the configured models (`gemini-embedding-001`, `bge-base-en-v1.5`) are
+   asymmetric-trained and document a query-side instruction or `task_type`. Retrieval works, but the
+   vector leg is not being used the way the model was trained.
+
+**Impact:** Medium for list/table content — an answer can be confidently incomplete, which is worse
+than an obvious failure, because the model reports the rows it cannot see as absent from the source
+rather than as unretrieved. Low for prose. No data is lost or corrupted; everything is in the index and
+a differently-phrased query can reach it.
+
+**Why we left it:** post-hoc expansion is a guess. Pulling in `ordinal ± n` spends the context budget
+on chunks that may be irrelevant, and adjacency is a poor proxy for relevance. The better fix is
+upstream — extraction that keeps table rows intact and chunking that repeats the header row, so each
+chunk is independently retrievable on its own merit (see L3's candidate fix). Beyond that, expansion
+belongs to an agent that can *decide* to expand, with `expand_chunk` / `fetch_entity` /
+`list_entity_chunks` as tools, rather than to a fixed heuristic in the retrieval path. `SearchHit`
+already carries `ordinal` so those tools have what they need.
+
+**Candidate approaches (for later):** structure-preserving extraction plus a header-repeating,
+row-aligned chunking strategy (the upstream fix, L3); a real `Reranker` behind the existing port
+(LLM listwise, or an ONNX cross-encoder on the DJL runtime already wired up); `embedQuery` as a
+default method on `EmbeddingProvider` so asymmetric models get their query instruction; and an agentic
+retrieval loop that exposes expansion as tools it can choose to call.
+
+---
+
+## L7 — Duplicate collapsing sees only the retrieved page
+
+**Area:** Retrieval · `DuplicateCollapser`
+
+**What:** Collapsing runs over the candidates one query returned, not over the corpus. Two copies of
+the same document only group if both are retrieved for that query — if one ranks below the candidate
+window, the other is shown alone and nothing indicates a duplicate exists. The near-duplicate layer is
+additionally capped at `app.search.dedupe.max-comparisons`, because it is pairwise.
+
+It is also text-based (token shingles), so it is length-sensitive: a fixed boilerplate header costs
+proportionally more overlap on a short chunk than a long one, which is why the threshold sits at 0.85
+rather than higher.
+
+**Impact:** Low. Over-inclusion — a duplicate slips through — never a missing distinct result, which is
+the failure the thresholds are tuned to avoid.
+
+**Why we left it:** corpus-wide dedupe means a clustering pass over every chunk, with somewhere to
+store the cluster assignments and a way to keep them fresh as content changes. That is a real feature,
+not a tweak, and query-time grouping covers the case that actually shows up in a result list.
+
+---
+
+## L8 — Digest run history is unbounded
+
+**Area:** Digests · `digestRuns`
+
+**What:** Every run is kept forever. Nothing prunes the collection, and the already-seen set is
+computed by reading a digest's whole history on each run — so a daily digest accumulates a run
+document per day indefinitely, and its newness check gets slower as it ages.
+
+The read is projected to entity ids alone, so this is a slow drift rather than a cliff: a year of daily
+runs at topK 10 is ~3,650 ids. It will not be felt soon; it will be felt eventually.
+
+**Impact:** Low, and slow.
+
+**Why we left it:** any retention rule here is a real product decision — capping runs discards history a
+user may want, while capping the already-seen set silently starts re-reporting old items. Both need a
+deliberate choice rather than a default picked to keep a collection small.
+
+**Candidate approach:** keep the last N runs for display, plus a separate compacted "seen" set per
+digest that is appended to rather than recomputed.

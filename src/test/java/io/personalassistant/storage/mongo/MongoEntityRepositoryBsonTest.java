@@ -40,7 +40,7 @@ class MongoEntityRepositoryBsonTest {
         return new Entity("ent_1", "kn_1", "root", EntityType.FILE, "ext_1", Map.of(),
                 Entity.Content.ofText("body"), Map.of("title", "t"), "sha256:abc",
                 EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
-                now, now, 7L);
+                now, now, null, 7L);
     }
 
     /** The B3 fix: ingestion writes fields, never a whole document, and drops the indexer's lease. */

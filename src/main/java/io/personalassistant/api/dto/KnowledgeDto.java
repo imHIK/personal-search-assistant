@@ -40,7 +40,8 @@ public record KnowledgeDto(
         String chunkingStrategy,
         Integer chunkingMaxSize,
         Integer chunkingOverlap,
-        List<String> chunkingSeparators) {
+        List<String> chunkingSeparators,
+        String retentionPeriod) {
 
     public KnowledgeService.NewKnowledge toRequest() {
         Knowledge.Config defaults = Knowledge.Config.defaults();
@@ -54,7 +55,10 @@ public record KnowledgeDto(
                 defaults.webhookSettings(),
                 new Knowledge.Backfill(backfillEnabled != null ? backfillEnabled : defaults.backfill().enabled()),
                 // Any chunking field left null/empty means "inherit the global default at index time".
-                new Knowledge.ChunkingSettings(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators));
+                new Knowledge.ChunkingSettings(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators),
+                // Null means "inherit": the connector default, then the global default — which is
+                // unset, i.e. never expire. Only a feed-like source should end up with a window.
+                new Knowledge.Retention(retentionPeriod));
         return new KnowledgeService.NewKnowledge(name, SourceType.valueOf(type), connectionId, auth, inputs, config);
     }
 }

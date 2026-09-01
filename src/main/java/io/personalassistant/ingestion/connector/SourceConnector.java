@@ -5,8 +5,10 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.SourceType;
+import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -64,6 +66,21 @@ public interface SourceConnector {
      */
     default SyncSchedule defaultSchedule() {
         return SyncSchedule.NONE;
+    }
+
+    /**
+     * How long this source's items stay useful — the connector-level tier of retention resolution
+     * (custom &rarr; <strong>connector default</strong> &rarr; global). The default is
+     * {@link Optional#empty()}: no opinion, which for a document source is the right answer, because
+     * an unset window at every tier means <em>never expire</em> and a corpus must not delete itself.
+     *
+     * <p>Only feed-like sources should override this — a job board or a news feed, where an item that
+     * has survived the window is stale by definition. Pick a window comfortably longer than the
+     * {@linkplain #defaultSchedule() poll cadence}: an item is re-created by the next walk if it still
+     * exists at the source, so too short a window just churns re-embeddings.
+     */
+    default Optional<Duration> defaultRetention() {
+        return Optional.empty();
     }
 
     /**

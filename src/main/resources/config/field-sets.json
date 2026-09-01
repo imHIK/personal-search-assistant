@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "fieldSets": {
+    "embedContext": {
+      "description": "Metadata prefixed to a chunk's text before embedding (never to the stored or displayed text). A chunk of bare table rows shares no term and no semantic signal with the document it came from, so without this it is unretrievable for a query about that document's subject. CHANGING THIS REQUIRES A RE-INDEX: existing vectors were built from a different string.",
+      "default": [
+        "title"
+      ],
+      "bySourceType": {
+        "GMAIL": [
+          "title",
+          "from"
+        ],
+        "GOOGLE_DRIVE": [
+          "title",
+          "headingPath"
+        ],
+        "LOCAL_FS": [
+          "title",
+          "headingPath"
+        ],
+        "GREENHOUSE": [
+          "title",
+          "company",
+          "location"
+        ],
+        "LEVER": [
+          "title",
+          "company",
+          "location"
+        ],
+        "ASHBY": [
+          "title",
+          "company",
+          "location"
+        ]
+      }
+    },
+    "promptLocator": {
+      "description": "Metadata shown in a source header in the grounded prompt, so an answer can say where a fact came from. Only keys a chunking strategy actually produces are useful here; an absent key is skipped silently. rowRange comes from TableAwareChunkingStrategy; sheet and page are reserved for structure-aware parsing that does not yet emit them.",
+      "default": [
+        "headingPath",
+        "rowRange",
+        "sheet",
+        "page"
+      ]
+    }
+  }
+}

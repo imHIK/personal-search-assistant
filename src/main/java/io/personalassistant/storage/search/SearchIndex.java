@@ -25,6 +25,21 @@ public interface SearchIndex {
     List<SearchHit> vectorSearch(SearchQuery query, float[] vector, int limit);
 
     /** Remove all chunks belonging to one entity (mirrors a Mongo delete/tombstone). */
+    /**
+     * An entity's chunk texts, in ordinal order — the parsed document, reassembled.
+     *
+     * <p>Exists because the entity itself may not carry its text: a file-backed entity keeps only a
+     * {@code fileRef}, and the parsed form lives solely in its chunks. Anything on the read path that
+     * needs the whole document (searching <em>by</em> a document, whole-entity prompt sources) would
+     * otherwise be unable to read the most ordinary case there is — a local file.
+     *
+     * <p>Re-parsing the file here instead would duplicate the indexing stage on the read path, and would
+     * fail outright for a source whose bytes are no longer local.
+     *
+     * @param limit maximum chunks to read; a long document is bounded rather than fetched whole
+     */
+    List<String> chunkTextsByEntity(String entityId, int limit);
+
     void deleteByEntity(String entityId);
 
     /** Remove all chunks belonging to one knowledge (cascade on knowledge delete). */

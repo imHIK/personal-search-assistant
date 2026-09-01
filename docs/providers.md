@@ -28,8 +28,38 @@ finds the matching adapter, and produces it as the `@Default` bean that `Default
 | `local-hashing` | `LocalHashingEmbeddingProvider` | Offline non-semantic baseline for dev/tests |
 
 The vector width `app.embedding.dimension` (768) is **baked into the OpenSearch `knn_vector`
-mapping**. The two real providers above are both 768-dim, so you can switch between local and hosted
-with no re-index. Switching to a different-width model requires re-mapping the index and re-indexing.
+mapping**. Switching to a different-width model requires a new physical index and a full re-index
+(invariant 5).
+
+> **Same width is not the same as compatible.** Both real providers above are 768-dim, so a switch
+> between them is accepted by the index — and that is exactly the trap. Vectors from two different
+> models are not comparable to each other or to a query embedded by the new one, so the corpus ends
+> up half-and-half and semantic search quietly degrades, with no error anywhere. **Changing the
+> embedding model means re-embedding everything**, even at an identical dimension:
+>
+> ```bash
+> curl -X POST localhost:8080/api/index/knowledge/{id}/reindex   # per knowledge; returns {"queued": n}
+> ```
+>
+> That re-indexes from stored content — no re-fetch from the source. Run it for every knowledge after
+> changing `app.embedding.provider` or `app.embedding.openai.model`, and expect the embedding cost of
+> your whole corpus in one go.
+
+### Choosing an embedding provider
+
+The practical constraint is usually rate limits, not quality. A first backfill embeds every chunk of
+every entity; after that the checksum skip means only new and changed items are embedded, so steady
+state is far smaller than day one. Size the provider for the backfill, not the steady state.
+
+| Want | Use | Why |
+|---|---|---|
+| No limits, no cost, private | `onnx-bge` | Runs in-JVM. Nothing to rate-limit, so a large backfill is only CPU time. One-time model export (below) |
+| Hosted, high volume | `openai-embed` pointed at a paid endpoint | Any OpenAI-compatible `/embeddings` works. Ask for `dimensions: 768` so the existing index still fits |
+| Casual use | `openai-embed` on Gemini's free tier (the shipped default) | Fine for a modest corpus; its free quota is small enough that a first backfill of a few thousand chunks will hit it |
+
+A `429` from the hosted provider is not data loss: `IndexingRunner` records the failure, backs off,
+and the entity is retried — a rate-limited backfill finishes slowly rather than failing. It does mean
+a large first import can take hours on a free tier.
 
 `app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
 is the one config key that silently corrupts the index if guessed — a missing property would
@@ -134,6 +164,101 @@ app.llm.api-key=
 ```
 
 No code change — same adapter, different config.
+
+### LLM profiles (per-role model selection)
+
+The `app.llm.*` keys above are the *provider defaults*. On top of them sit **named profiles**, resolved
+from `app.llm.profile.<name>.<key>` by `LlmProfiles`:
+
+```properties
+app.llm.profile.answer.model=llama-3.3-70b-versatile
+app.llm.profile.answer.temperature=0.2
+app.llm.profile.answer.max-tokens=2048
+
+app.llm.profile.lite.model=llama-3.1-8b-instant
+app.llm.profile.lite.temperature=0.0
+app.llm.profile.lite.max-tokens=512
+```
+
+Recognised sub-keys: `base-url`, `model`, `temperature`, `max-tokens`, `api-key`. A caller asks for a
+profile by name — the answering *task* names `answer`, via `app.agent.task` — and gets the
+provider defaults for everything the profile does not set.
+
+**Why this exists.** LLM use is becoming both frequent and heterogeneous: answering wants a strong
+model, index-time enrichment wants a cheap one, a listwise reranker wants a fast one, and they need not
+live on the same provider. Without profiles the only way to reach a second model is a second bean with
+its own config keys, so every feature would grow the wiring. With them, giving a new feature its own
+model is a config edit — the keys are looked up dynamically, so **adding a profile requires no code at
+all**. `LlmProvider.complete(profile, system, messages)` is a `default` method, so providers that cannot
+vary anything (the stub) are unaffected.
+
+Three behaviours worth knowing:
+
+- **Unset means inherit, and blank counts as unset.** A profile naming only `model` keeps the provider's
+  temperature, timeout and endpoint. Blank has to mean "inherit" because a `${ENV_VAR:}`-backed key is
+  empty exactly when the variable is unset, and an empty model would otherwise be sent verbatim.
+- **A profile that redirects `base-url` must bring its own `api-key`.** It deliberately does *not* fall
+  back to the provider's — that would send one vendor's secret to another vendor's host. Sending no key
+  is the right default for the main reason to redirect, a local Ollama.
+- **An unknown profile name warns and inherits everything** rather than throwing. A misspelled profile on
+  a background feature should degrade to the default model, not take the feature offline.
+
+`max-tokens` deserves a note: nothing was sent before profiles existed, so the vendor default applied and
+a long list answer could be truncated with no local signal that it had been.
+
+### Tasks, prompts and profiles
+
+An LLM call resolves through three named things, each owning one decision:
+
+```
+app.agent.task=answer
+   └─ config/prompts.json  tasks.answer
+        ├─ prompt:     "answer"   →  prompts.answer  (the text)
+        ├─ llmProfile: "answer"   →  app.llm.profile.answer.*  (the model)
+        └─ contextChars / maxSources          (the budgets)
+```
+
+**A prompt is keyed by task, never by model.** One tied to a model cannot be reused when the model
+changes and cannot be shared by two features on different models — so the model lives in the profile,
+which the task references by name. A task can therefore carry a prompt but never model settings. There is
+a test that fails if any prompt mentions a model or provider name.
+
+Adding a second LLM-using feature is a JSON entry plus a profile: no new bean, no new config namespace.
+See [`configuration.md`](./configuration.md).
+
+> `app.embedding.onnx.query-instruction` below is deliberately **not** part of this. It is a model's
+> documented input format, not a prompt — meaningless to any other model.
+
+### Query vs document embeddings
+
+Retrieval embedding models are trained **asymmetrically**: a short question and a long passage are not
+the same kind of input, and the model is told which it is being given. Both models configured here are
+of that kind, and both sides previously went through the identical code path.
+
+`EmbeddingProvider.embedQuery(text)` is a `default` method delegating to `embed(text)`, so a symmetric
+provider (the offline hashing baseline) is unchanged. `DefaultSearchService` calls `embedQuery`;
+`IndexingRunner` keeps `embedAll`.
+
+- **`onnx-bge`** prepends `app.embedding.onnx.query-instruction` — BGE's published wording — to queries
+  only. The separating space is added in code, so the property needs no meaningful trailing whitespace
+  (spotless would strip it). Blank it for a symmetric model: the wrong instruction is worse than none.
+- **`openai-embed`** has `app.embedding.openai.task-type-enabled=false`, and it must stay off for the
+  shipped base-url. `task_type` is a **native** Gemini parameter; the OpenAI-compatible endpoint
+  validates strictly and answers `400 Invalid JSON payload received. Unknown name "task_type": Cannot
+  find field.`, which fails every embedding call and therefore all indexing. The compat layer exposes no
+  way to signal query vs document, so the asymmetry is simply unavailable there.
+
+### What gets embedded
+
+Not the chunk body alone. The `embedContext` field set in `config/field-sets.json` (default `["title"]`, scoped per connector) names fields prefixed to
+the text **before embedding**; the stored and displayed text is unchanged. `title`/`uri` resolve against
+the chunk, anything else against its metadata (`sheet`, `headingPath`, `rowRange`), and absent fields are
+skipped.
+
+This matters more than it sounds. A chunk holding only table rows — `17 Dussehra 20/10/2026 Tuesday` —
+shares no term and no semantic signal with a document called `public_holidays_2026.pdf`, so a query about
+holidays never retrieved it, and an answer built from the chunks that did rank was silently missing rows.
+**Changing the list means re-indexing:** existing vectors were built from a different string.
 
 ## Try it
 

@@ -37,6 +37,22 @@ public interface ConnectionService {
     Connection update(String id, ConnectionEdit edit);
 
     /**
+     * Re-check a stored connection's credentials against its connector and record the outcome on the
+     * connection ({@code ACTIVE} / {@code ERROR} plus {@code lastError}).
+     *
+     * <p>Credentials are only verified at create and on an auth edit, so a token that expires
+     * afterwards leaves a connection reading {@code ACTIVE} while every sync fails. This is what makes
+     * that visible without waiting for a user to notice their data has gone stale.
+     *
+     * <p>Does <strong>not</strong> throw on bad credentials: a failed check is a result, not an error —
+     * the caller wants to display it, and the scheduled sweep must carry on to the next connection.
+     *
+     * @return the connection as it now stands, with its refreshed status
+     * @throws java.util.NoSuchElementException if no connection with {@code id} exists
+     */
+    Connection test(String id);
+
+    /**
      * Make this connection the default for its type (demoting the previous default).
      *
      * @throws java.util.NoSuchElementException if no connection with {@code id} exists

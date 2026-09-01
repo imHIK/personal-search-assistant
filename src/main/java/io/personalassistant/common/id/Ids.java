@@ -15,6 +15,8 @@ public final class Ids {
     public static final String CURSOR_PREFIX = "cur_";
     public static final String ENTITY_PREFIX = "ent_";
     public static final String DISCOVERY_PREFIX = "dsc_";
+    public static final String DIGEST_PREFIX = "dig_";
+    public static final String DIGEST_RUN_PREFIX = "run_";
 
     private Ids() {
     }
@@ -33,6 +35,14 @@ public final class Ids {
 
     public static String entity() {
         return ENTITY_PREFIX + token();
+    }
+
+    public static String digest() {
+        return DIGEST_PREFIX + token();
+    }
+
+    public static String digestRun() {
+        return DIGEST_RUN_PREFIX + token();
     }
 
     /**

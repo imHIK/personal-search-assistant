@@ -21,7 +21,7 @@ import { absoluteTime, relativeTime } from '@/lib/utils'
 export function AccountsPage() {
   const navigate = useNavigate()
   const { data, isLoading, error, refetch } = useConnections()
-  const { makeDefault, remove } = useConnectionMutations()
+  const { makeDefault, test, remove } = useConnectionMutations()
   const [pendingRemoval, setPendingRemoval] = useState<Connection | null>(null)
 
   const needsAccounts = connectorsNeedingAccounts()
@@ -65,6 +65,25 @@ export function AccountsPage() {
             <AccountRow
               key={connection.id}
               connection={connection}
+              testing={test.isPending && test.variables === connection.id}
+              onTest={() =>
+                test.mutate(connection.id, {
+                  // The endpoint always resolves; a broken account comes back as ERROR on the body,
+                  // so the outcome is read from the result rather than caught.
+                  onSuccess: (checked) =>
+                    checked.status === 'ERROR'
+                      ? toast.error(labels.accounts.testFailed(checked.name), {
+                          description: checked.lastError
+                            ? friendlyLastError(checked.lastError).detail
+                            : undefined,
+                        })
+                      : toast.success(labels.accounts.testOk(checked.name)),
+                  onError: (mutationError) =>
+                    toast.error(friendlyError(mutationError).title, {
+                      description: friendlyError(mutationError).detail,
+                    }),
+                })
+              }
               onMakeDefault={() => {
                 makeDefault.mutate(connection.id, {
                   onSuccess: () => toast.success(`"${connection.name}" is now the default`),
@@ -115,10 +134,14 @@ export function AccountsPage() {
 
 function AccountRow({
   connection,
+  testing,
+  onTest,
   onMakeDefault,
   onRemove,
 }: {
   connection: Connection
+  testing: boolean
+  onTest: () => void
   onMakeDefault: () => void
   onRemove: () => void
 }) {
@@ -166,6 +189,15 @@ function AccountRow({
 
         <div className="flex shrink-0 items-center gap-2">
           <StateBadge state={presentConnection(connection.status)} size="sm" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onTest}
+            loading={testing}
+            title={labels.accounts.testHint}
+          >
+            {testing ? labels.accounts.testing : labels.accounts.test}
+          </Button>
           {!isDefault && (
             <Button variant="ghost" size="sm" onClick={onMakeDefault}>
               {labels.accounts.makeDefault}

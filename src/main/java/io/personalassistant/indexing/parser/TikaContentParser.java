@@ -2,11 +2,8 @@ package io.personalassistant.indexing.parser;
 
 import io.personalassistant.domain.model.ParsedContent;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.io.IOException;
 import java.io.InputStream;
-import java.util.Map;
-import org.apache.tika.Tika;
-import org.apache.tika.exception.TikaException;
+import org.apache.tika.parser.ParseContext;
 
 /**
  * General-purpose extractor backed by Apache Tika, kept as the <strong>long-tail fallback</strong>
@@ -21,31 +18,22 @@ import org.apache.tika.exception.TikaException;
 @ApplicationScoped
 public class TikaContentParser implements ContentParser {
 
-    /** Generous cap on extracted characters; bump if very large documents must be indexed whole. */
-    private static final int MAX_CHARS = 10_000_000;
-
-    private final Tika tika = newTika();
-
-    private static Tika newTika() {
-        Tika t = new Tika();
-        t.setMaxStringLength(MAX_CHARS);
-        return t;
-    }
-
     @Override
     public boolean supports(String contentType) {
         return true; // fallback for anything the specific parsers don't claim
     }
 
+    /**
+     * Goes through {@link TikaSupport} like every other parser rather than calling
+     * {@code Tika.parseToString}. That convenience method runs a plain-text handler internally, so this
+     * path — the one an unrecognised MIME type lands on, which on macOS includes any {@code .xlsx} whose
+     * type {@code Files.probeContentType} failed to identify — would otherwise be the single route that
+     * still flattened tables into undelimited text. It gets no format-specific {@code ParseContext};
+     * detection is by content sniffing, which is what this parser is for.
+     */
     @Override
     public ParsedContent parse(InputStream input, String contentType) {
-        try {
-            String text = tika.parseToString(input);
-            return new ParsedContent(text, Map.of("parser", "tika", "detectedType",
-                    contentType == null ? "unknown" : contentType));
-        } catch (IOException | TikaException e) {
-            throw new IllegalStateException("Tika extraction failed for type " + contentType, e);
-        }
+        return TikaSupport.extract("tika", input, contentType, new ParseContext());
     }
 
     @Override

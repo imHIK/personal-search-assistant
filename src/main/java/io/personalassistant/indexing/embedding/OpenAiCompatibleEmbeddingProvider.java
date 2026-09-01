@@ -40,6 +40,10 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
 
     private static final Logger LOG = Logger.getLogger(OpenAiCompatibleEmbeddingProvider.class.getName());
 
+    /** Gemini's asymmetric-retrieval task types. Indexing embeds documents; searching embeds queries. */
+    private static final String DOCUMENT_TASK = "RETRIEVAL_DOCUMENT";
+    private static final String QUERY_TASK = "RETRIEVAL_QUERY";
+
     @ConfigProperty(name = "app.embedding.openai.base-url",
             defaultValue = "https://generativelanguage.googleapis.com/v1beta/openai")
     String baseUrl;
@@ -71,12 +75,33 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
      * index width would silently start truncating vectors the moment someone edited the mapping, and
      * a server that ignores the parameter (some OpenAI-compatible backends reject unknown fields
      * instead) must fail loudly rather than write mis-sized vectors — hence the explicit check below.
+     *
+     * <p>The default tracks {@code application.properties} (the tiebreaker for any config default) rather
+     * than the "omit it" sentinel. It used to be {@code 0}, which meant an install missing this property
+     * silently requested {@code gemini-embedding-001}'s native 3072 width against a 768 {@code knn_vector}
+     * mapping — the failure mode invariant 5 exists to prevent. {@code 0} remains a legal value.
      */
-    @ConfigProperty(name = "app.embedding.openai.dimensions", defaultValue = "0")
+    @ConfigProperty(name = "app.embedding.openai.dimensions", defaultValue = "768")
     int requestedDimensions;
 
     @ConfigProperty(name = "app.embedding.openai.timeout-seconds", defaultValue = "60")
     long timeoutSeconds;
+
+    /**
+     * Whether to send {@code task_type}, distinguishing a query embedding from a document one.
+     *
+     * <p><strong>Off by default, and the default is the important part.</strong> {@code task_type} is a
+     * <em>native</em> Gemini parameter. The OpenAI-compatible endpoint this provider ships against
+     * ({@code /v1beta/openai}) validates strictly and rejects it outright — {@code 400 Invalid JSON
+     * payload received. Unknown name "task_type": Cannot find field.} — which fails every embedding call
+     * and therefore all indexing. Enable it only against an endpoint documented to accept it.
+     *
+     * <p>The asymmetry is real and worth having (both configured models are asymmetrically trained), but
+     * on this endpoint it is unreachable: the compat layer exposes no way to signal query vs document.
+     * The ONNX provider gets it through {@code app.embedding.onnx.query-instruction} instead.
+     */
+    @ConfigProperty(name = "app.embedding.openai.task-type-enabled", defaultValue = "false")
+    boolean taskTypeEnabled;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
@@ -104,14 +129,33 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         return embedAll(List.of(text == null ? "" : text)).get(0);
     }
 
+    /**
+     * Embeds with {@code task_type=RETRIEVAL_QUERY} rather than {@code RETRIEVAL_DOCUMENT}. Gemini's
+     * embedding models are asymmetrically trained, so telling the model which side it is embedding is
+     * what the model expects; sending both through the document path is a silent quality loss.
+     */
+    @Override
+    public Embedding embedQuery(String text) {
+        return embed(List.of(text == null ? "" : text), QUERY_TASK).get(0);
+    }
+
     @Override
     public List<Embedding> embedAll(List<String> texts) {
+        return embed(texts, DOCUMENT_TASK);
+    }
+
+    private List<Embedding> embed(List<String> texts, String taskType) {
         logConfigOnce();
         try {
             ObjectNode body = mapper.createObjectNode();
             body.put("model", modelName);
             if (requestedDimensions > 0) {
                 body.put("dimensions", requestedDimensions);
+            }
+            // Only sent when enabled: task_type is a Gemini extension to the OpenAI schema, and a strict
+            // OpenAI-compatible endpoint may reject an unknown field outright.
+            if (taskTypeEnabled) {
+                body.put("task_type", taskType);
             }
             ArrayNode input = body.putArray("input");
             for (String t : texts) {

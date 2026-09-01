@@ -32,7 +32,7 @@ public class InMemoryEntityRepository implements EntityRepository {
         Entity stored = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
                 EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(),
-                createdAt, entity.updatedAt(), entity.lastSeenGeneration());
+                createdAt, entity.updatedAt(), entity.expiresAt(), entity.lastSeenGeneration());
         store.put(id, stored);
         return stored;
     }
@@ -164,6 +164,43 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
+    public int flagNeedsReindexByKnowledge(String knowledgeId) {
+        int flagged = 0;
+        Instant now = Instant.now();
+        for (Entity e : List.copyOf(store.values())) {
+            if (!knowledgeId.equals(e.knowledgeId()) || e.status() == EntityStatus.DELETED) {
+                continue;
+            }
+            if (e.lease() != null && e.lease().isLiveAt(now)) {
+                continue;
+            }
+            store.put(e.id(), rebuild(e, e.status(), true, e.index(), e.lease(), Entity.Retry.zero()));
+            flagged++;
+        }
+        return flagged;
+    }
+
+    @Override
+    public List<Entity> findExpired(int limit, Instant now) {
+        return store.values().stream()
+                .filter(e -> e.expiresAt() != null && !e.expiresAt().isAfter(now))
+                .filter(e -> e.status() != EntityStatus.DELETED)
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit) {
+        return store.values().stream()
+                .filter(e -> knowledgeId.equals(e.knowledgeId()))
+                .filter(e -> e.expiresAt() == null)
+                .filter(e -> e.createdAt() != null && e.createdAt().isBefore(cutoff))
+                .filter(e -> e.status() != EntityStatus.DELETED)
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
     public List<Entity> findByStatus(EntityStatus status, int limit) {
         return store.values().stream().filter(e -> e.status() == status).limit(limit).toList();
     }
@@ -279,6 +316,6 @@ public class InMemoryEntityRepository implements EntityRepository {
                                   Entity.IndexInfo index, Entity.Lease lease, Entity.Retry retry) {
         return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
                 e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, index, lease,
-                retry, e.createdAt(), Instant.now(), e.lastSeenGeneration());
+                retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration());
     }
 }

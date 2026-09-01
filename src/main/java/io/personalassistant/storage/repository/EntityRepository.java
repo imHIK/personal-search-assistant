@@ -19,7 +19,7 @@ public interface EntityRepository {
      *
      * <p><b>Field ownership.</b> This writes only the fields ingestion owns — {@code iterableId},
      * {@code entityType}, {@code raw}, {@code content}, {@code metadata}, {@code checksum},
-     * {@code lastSeenGeneration}, {@code updatedAt} — and never the indexer's
+     * {@code expiresAt}, {@code lastSeenGeneration}, {@code updatedAt} — and never the indexer's
      * {@code index.chunkCount}/{@code embeddingModel}/{@code indexedAt}, which describe what is
      * currently in the search index and stay true until the chunks are actually replaced.
      *
@@ -93,6 +93,21 @@ public interface EntityRepository {
     void flagNeedsReindex(String id);
 
     /**
+     * Flag every one of a knowledge's entities for re-indexing without re-fetching any of them.
+     *
+     * <p>The bulk counterpart to {@link #flagNeedsReindex}, and what makes changing the embedding model
+     * survivable: vectors from two different models are not comparable even at the same dimension, so a
+     * model switch leaves the corpus half-and-half and semantically broken until everything is
+     * re-embedded. Entity-at-a-time was the only route before this.
+     *
+     * <p>Excludes {@code DELETED} (already on its way out) and skips any entity with a live lease, whose
+     * in-flight run would otherwise be fenced out mid-write.
+     *
+     * @return how many entities were flagged
+     */
+    int flagNeedsReindexByKnowledge(String knowledgeId);
+
+    /**
      * Stamp the generation a walk last saw this entity at — the cheap single-field touch used by the
      * change-detection skip path so an unchanged, already-{@code INDEXED} entity is still recorded as
      * "seen this generation" and doesn't later look stale. Idempotent; leaves {@code updatedAt}.
@@ -110,6 +125,23 @@ public interface EntityRepository {
 
     /** Tombstone an entity so the indexing stage removes its chunks. */
     void markDeleted(String id, Instant updatedAt);
+
+    /**
+     * Entities carrying an explicit {@code expiresAt} that has passed — the source told us when the
+     * item stops being valid, which always beats the knowledge-level window. Already-{@code DELETED}
+     * entities are excluded so a sweep does not re-tombstone what is already on its way out.
+     */
+    List<Entity> findExpired(int limit, Instant now);
+
+    /**
+     * A knowledge's entities created strictly before {@code cutoff} — the knowledge-level retention
+     * window, applied only to entities with no explicit {@code expiresAt} of their own.
+     *
+     * <p>Age is deliberately measured from {@code createdAt} rather than {@code updatedAt}: an item
+     * that has sat unchanged is exactly what retention is for, so a change-based clock would never
+     * fire on it. Already-{@code DELETED} entities are excluded.
+     */
+    List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit);
 
     List<Entity> findByStatus(EntityStatus status, int limit);
 

@@ -5,7 +5,10 @@ import io.personalassistant.common.concurrency.PermitService;
 import io.personalassistant.common.concurrency.ScopeLimit;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
+import io.personalassistant.ingestion.connector.ConnectionResolver;
+import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.quarkus.scheduler.Scheduled;
@@ -37,6 +40,8 @@ public class IngestionJob {
     private final KnowledgeRepository knowledge;
     private final PermitService permits;
     private final IngestionRunner runner;
+    private final ConnectorRegistry connectors;
+    private final ConnectionResolver connections;
     private final String worker = "worker-" + UUID.randomUUID().toString().substring(0, 8);
 
     @ConfigProperty(name = "app.ingestion.poll-batch", defaultValue = "20")
@@ -58,11 +63,14 @@ public class IngestionJob {
 
     @Inject
     public IngestionJob(CursorRepository cursors, KnowledgeRepository knowledge,
-                        PermitService permits, IngestionRunner runner) {
+                        PermitService permits, IngestionRunner runner,
+                        ConnectorRegistry connectors, ConnectionResolver connections) {
         this.cursors = cursors;
         this.knowledge = knowledge;
         this.permits = permits;
         this.runner = runner;
+        this.connectors = connectors;
+        this.connections = connections;
     }
 
     @Scheduled(every = "{app.ingestion.poll-interval}",
@@ -70,6 +78,28 @@ public class IngestionJob {
     void tick() {
         for (Cursor candidate : cursors.findClaimable(pollBatch)) {
             tryRun(candidate);
+        }
+    }
+
+    /**
+     * Whether this knowledge's credentials are known to be bad, so running it would only burn a lease
+     * and a permit to fail. {@code ConnectionHealthScheduler} is what marks a connection {@code ERROR};
+     * an expired Google refresh token otherwise fails on every single tick, forever.
+     *
+     * <p>Deliberately derived rather than stored: nothing is paused and no knowledge state is written,
+     * so a connection that starts working again resumes sync by itself — and a user's own pause is
+     * never fought over. Any doubt (missing connection, unknown type, lookup failure) runs the
+     * knowledge as before: this is an optimisation, and it must never be the reason a sync stops.
+     */
+    private boolean connectionUnusable(Knowledge kn) {
+        try {
+            var type = kn.connectorDetails().type();
+            if (!connectors.supports(type) || !connectors.get(type).requiresConnection()) {
+                return false;
+            }
+            return connections.resolve(kn).status() == ConnectionStatus.ERROR;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 
@@ -86,6 +116,9 @@ public class IngestionJob {
                 cursors.suspendByKnowledge(candidate.knowledgeId());
             }
             return; // not active — don't run
+        }
+        if (connectionUnusable(kn.get())) {
+            return; // credentials are known-bad; every page would fail
         }
 
         List<ScopeLimit> limits = List.of(

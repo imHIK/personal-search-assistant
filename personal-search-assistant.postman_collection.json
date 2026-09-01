@@ -9,6 +9,7 @@
     { "key": "knowledgeId", "value": "kn_123" },
     { "key": "entityId", "value": "ent_123" },
     { "key": "entityStatus", "value": "INDEXED" },
+    { "key": "digestId", "value": "dig_123" },
     { "key": "connectionId", "value": "con_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
@@ -22,7 +23,7 @@
     { "key": "embeddingApiKey", "value": "" },
     { "key": "embeddingDimension", "value": "768" },
     { "key": "llmBaseUrl", "value": "https://api.groq.com/openai/v1" },
-    { "key": "llmModel", "value": "llama-3.3-70b-versatile" },
+    { "key": "llmModel", "value": "openai/gpt-oss-120b" },
     { "key": "llmApiKey", "value": "" },
     { "key": "opensearchUrl", "value": "http://localhost:9200" },
     { "key": "chunksIndex", "value": "chunks" }
@@ -96,7 +97,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"chunkingStrategy\": \"recursive\",\n  \"chunkingMaxSize\": 1200,\n  \"chunkingOverlap\": 150,\n  \"chunkingSeparators\": [\"\\n\\n\", \"\\n\", \" \", \"\"]\n}",
+              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"chunkingStrategy\": \"recursive\",\n  \"chunkingMaxSize\": 1200,\n  \"chunkingOverlap\": 150,\n  \"chunkingSeparators\": [\"\\n\\n\", \"\\n\", \" \", \"\"],\n  \"retentionPeriod\": null\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -104,7 +105,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time."
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION, GREENHOUSE, LEVER, ASHBY.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS and the ATS job boards). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day, ATS boards = 3 hours) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time.\n\nretentionPeriod ages entities out, measured from createdAt (e.g. \"14d\"). null inherits: the connector default (ATS boards = 14 days), then the global app.retention.default-period, which ships BLANK. Unset at every tier means NEVER EXPIRE — that is what keeps a document corpus from deleting itself, so only feed-like sources age out."
           }
         },
         {
@@ -114,7 +115,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents (renamed)\",\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": \"30m\",\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"webhookEnabled\": false,\n  \"webhookSecret\": null,\n  \"chunkingStrategy\": \"token\",\n  \"chunkingMaxSize\": 512,\n  \"chunkingOverlap\": 64,\n  \"chunkingSeparators\": null\n}",
+              "raw": "{\n  \"name\": \"My Documents (renamed)\",\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": \"30m\",\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"webhookEnabled\": false,\n  \"webhookSecret\": null,\n  \"chunkingStrategy\": \"token\",\n  \"chunkingMaxSize\": 512,\n  \"chunkingOverlap\": 64,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": null\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -123,7 +124,61 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint."
+            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint.\n\nretentionPeriod is a config-class edit: it changes only what a later retention sweep removes, never what is ingested. Like cron/interval it cannot be cleared back to inherit here."
+          }
+        },
+        {
+          "name": "Create knowledge - Greenhouse board",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Greenhouse board\",\n  \"type\": \"GREENHOUSE\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"stripe\", \"figma\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            },
+            "description": "inputs.boards lists Greenhouse board tokens — the <token> in boards.greenhouse.io/<token>. One iterable per board; each poll fetches the whole board in a single call.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
+          }
+        },
+        {
+          "name": "Create knowledge - Lever board",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Lever board\",\n  \"type\": \"LEVER\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"netflix\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            },
+            "description": "inputs.boards lists Lever company handles — the <site> in jobs.lever.co/<site>.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
+          }
+        },
+        {
+          "name": "Create knowledge - Ashby board",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ashby board\",\n  \"type\": \"ASHBY\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"linear\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            },
+            "description": "inputs.boards lists Ashby board names — the <name> in jobs.ashbyhq.com/<name>. Ashby is the only one of the three that may state a close date, which becomes Entity.expiresAt and beats the knowledge-level retention window.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
           }
         },
         {
@@ -238,6 +293,20 @@
           }
         },
         {
+          "name": "Test connection",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id/test",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id", "test"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Re-checks the STORED credentials against the connector and records the outcome on the connection.\n\nAlways 200 with the refreshed connection whether or not the check passed — read status (ACTIVE / ERROR) and lastError. A bad credential is a result to display, not a 4xx.\n\nCredentials are otherwise only verified at create and on an auth edit, so a token that expires later leaves the connection reading ACTIVE while every sync fails. ConnectionHealthScheduler runs this automatically every app.connections.health-interval (30m); IngestionJob then SKIPS knowledges whose connection is in ERROR rather than failing on every tick.\n\nA DISABLED connection stays DISABLED even if the check passes — that is an operator decision."
+          }
+        },
+        {
           "name": "Set connection as default",
           "request": {
             "method": "POST",
@@ -285,7 +354,168 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer, which cites hits as [n] (1-based into hits). Each hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage) and knowledgeId (which source the hit came from) alongside entityId, title, snippet, uri, score and metadata."
+            "description": "Only query is required — a blank or absent query is a 400, and an unknown mode is a 400 that names the valid ones. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10 and is clamped to app.search.max-top-k (100); it is multiplied by app.search.candidate-multiplier before becoming the OpenSearch size and knn k.\n\nSet answer true to include a generated answer, which cites hits as [n] (1-based into hits). The answer is grounded in each hit's FULL chunk text within app.agent.context-chars; a source that had to be cut is marked \"[…truncated]\" in the prompt, so the model says what it could not see instead of reporting the missing part as absent from the source.\n\nIf the LLM is unavailable this returns 200 with the hits intact and answerError set — it no longer 500s and discards the results.\n\nEach hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage), knowledgeId (which source the hit came from) and ordinal (position within the entity) alongside entityId, title, snippet, uri, score and metadata. snippet is a display excerpt only, app.search.snippet-chars long and taken from the matching region when highlighting found one; the full chunk text grounds the answer but is not put on the wire.\n\nOptional: maxChunksPerEntity caps how many chunks one entity may contribute (1 = one result per document), overriding app.search.max-chunks-per-entity for this request; collapseDuplicates groups near-identical hits and keeps one of each. Both default off. See the \"Search job postings\" example for range filters."
+          }
+        },
+        {
+          "name": "Search job postings (metadata filters)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"backend engineer distributed systems\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.seniority\": \"SENIOR\",\n    \"metadata.postedAt\": { \"gte\": \"2026-08-18T00:00:00Z\" },\n    \"metadata.compMin\": { \"gte\": 150000 }\n  },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"]
+            },
+            "description": "Filters resolve the map key verbatim as an OpenSearch field path, so any normalised posting facet works without server changes: metadata.company, metadata.location, metadata.remote, metadata.seniority, metadata.board, metadata.dedupeKey, metadata.compMin/compMax, metadata.compCurrency, metadata.postedAt.\n\nCAUTION on comp: pair it with metadata.compCurrency or the filter is meaningless — compMin is a plain number, so 150000 reads as USD on one posting and INR on the next. And expect it to be absent: of 208 India-located postings sampled across these boards, 0 stated pay at all (US postings do, because several states require it). A comp filter excludes nearly every Indian role rather than narrowing it.\n\nThe VALUE decides the clause. A scalar is an exact term; a map carrying gte/gt/lte/lt is a range — which is the only way to say \"posted in the last week\" or \"pays at least X\". JSON types are preserved, so metadata.remote must be true and not \"true\": a string term against a boolean field matches nothing.\n\nmaxChunksPerEntity 1 returns one hit per posting instead of one per chunk of its description. collapseDuplicates groups the same role reached by different routes — identical text, then an equal metadata.dedupeKey, then high token overlap — and keeps the member with the highest metadata.sourceRank, so a direct board listing wins over an aggregator's. Both are off unless asked for.\n\nSet knowledgeIds to a job-board knowledge to search postings alone."
+          }
+        },
+        {
+          "name": "Search by a document (find things like this)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"metadata.remote\": true },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"]
+            },
+            "description": "Searches BY an already-ingested document instead of by typed text — \"find everything like this\". Set sourceEntityId to the entity id of, say, an indexed CV (find it via Knowledge > List knowledge entities).\n\nThe document is NOT used as the query. It is decomposed by the document-facets task into a few short queries written in the register of the corpus being searched, each is retrieved normally, and the rankings are fused — so a posting matching three facets outranks one that matches a single facet very well.\n\nquery stops being the search text here and becomes a statement of intent that steers the decomposition; it may be blank. Blank query AND no sourceEntityId is a 400.\n\nFacets are cached by the source document's checksum, so editing and re-indexing it derives them again with nothing to invalidate. If the LLM is unavailable this falls back to the document's opening text as a single query rather than failing. A document over app.search.document-query.max-chars is a 400; an unknown sourceEntityId is a 404."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Digests",
+      "item": [
+        {
+          "name": "List digests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests"]
+            },
+            "description": "Every saved search, newest first. nextRunAt null means \"due now\" — a freshly created digest runs on the next scheduler tick rather than one whole interval later."
+          }
+        },
+        {
+          "name": "Create digest",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"metadata.remote\": true },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/digests",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests"]
+            },
+            "description": "A digest needs EITHER query OR sourceEntityId; neither is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below."
+          }
+        },
+        {
+          "name": "Get digest by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "One digest."
+          }
+        },
+        {
+          "name": "Pause / resume digest (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "The only editable field. A paused digest is never scheduled but can still be run by hand — that is the difference between pausing and deleting.\n\nFuller editing is delete-and-recreate."
+          }
+        },
+        {
+          "name": "Run digest now",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "run"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "Runs immediately without waiting for the schedule, and returns the run.\n\nA search or task failure comes back as a run carrying \"error\" rather than a 5xx — the run happened, it just failed. That is deliberate: a scheduled job that throws leaves no trace, and a digest broken for a week has to be visible in its history.\n\nA failed run records no items, so it cannot suppress anything on the next run."
+          }
+        },
+        {
+          "name": "List digest runs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/runs?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "runs"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "History, newest first. limit is capped at 100.\n\nRuns are also how newness is computed, which is why they are kept rather than overwritten."
+          }
+        },
+        {
+          "name": "Latest digest run",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/runs/latest",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "runs", "latest"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "The most recent run. 404 if the digest has never run."
+          }
+        },
+        {
+          "name": "Delete digest",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "Deletes the digest and its whole run history. 204."
           }
         }
       ]
@@ -319,6 +549,20 @@
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
             "description": "Revives a knowledge's dead-lettered work: FAILED cursors -> AVAILABLE and FAILED entities -> INGESTED, both with a fresh retry budget. Cursor position is kept, so a revived cursor resumes where it stopped rather than re-walking the source.\n\nDistinct from *Trigger forward sync*: that one only re-arms FORWARD cursors sitting IDLE, so it can never revive a dead-lettered backward (backfill) cursor. Nothing else moves a cursor or entity out of FAILED.\n\nReturns { knowledgeId, cursorsRetried, entitiesRetried }."
+          }
+        },
+        {
+          "name": "Reindex a whole knowledge",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/knowledge/:id/reindex",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "knowledge", ":id", "reindex"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Queues every one of a knowledge's entities for re-indexing from STORED content — no re-fetch from the source. Returns {\"queued\": n}.\n\nThis is what makes changing the embedding model survivable. Same vector width does NOT mean compatible vectors: switching app.embedding.provider or app.embedding.openai.model leaves the corpus half old-model and half new, and semantic search degrades with no error anywhere. Run this for every knowledge after such a change.\n\nEntities a worker currently holds a lease on are skipped rather than raced; call again once the lease lapses to pick them up."
           }
         },
         {
@@ -732,9 +976,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{opensearchUrl}}/chunks_v2_768",
+              "raw": "{{opensearchUrl}}/chunks_v3_768",
               "host": ["{{opensearchUrl}}"],
-              "path": ["chunks_v2_768"]
+              "path": ["chunks_v3_768"]
             },
             "description": "The mapping OpenSearchIndexInitializer PUT at startup, including the `chunks` alias and the knn_vector `embedding` field. The `dimension` in that mapping is app.embedding.dimension frozen at index-creation time — check it here before switching embedding models (invariant 5)."
           }

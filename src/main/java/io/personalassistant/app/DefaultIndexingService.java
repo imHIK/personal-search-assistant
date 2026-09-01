@@ -7,6 +7,7 @@ import io.personalassistant.storage.repository.EntityRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
+import java.util.logging.Logger;
 
 /**
  * Thin orchestration for the manual indexing actions. Triggering a sync re-arms forward cursors
@@ -15,6 +16,8 @@ import java.time.Instant;
  */
 @ApplicationScoped
 public class DefaultIndexingService implements IndexingService {
+
+    private static final Logger LOG = Logger.getLogger(DefaultIndexingService.class.getName());
 
     private final ForwardCursorScheduler scheduler;
     private final EntityRepository entities;
@@ -36,6 +39,13 @@ public class DefaultIndexingService implements IndexingService {
     @Override
     public void reindexEntity(String entityId) {
         entities.flagNeedsReindex(entityId);
+    }
+
+    @Override
+    public int reindexKnowledge(String knowledgeId) {
+        int queued = entities.flagNeedsReindexByKnowledge(knowledgeId);
+        LOG.info("Queued " + queued + " entities of knowledge " + knowledgeId + " for re-indexing");
+        return queued;
     }
 
     @Override

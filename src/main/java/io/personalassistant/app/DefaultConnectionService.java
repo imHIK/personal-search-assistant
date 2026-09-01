@@ -98,6 +98,28 @@ public class DefaultConnectionService implements ConnectionService {
     }
 
     @Override
+    public Connection test(String id) {
+        Connection current = require(id);
+        if (!connectors.supports(current.type())) {
+            return connections.save(current.withStatus(ConnectionStatus.ERROR,
+                    "No connector is installed for " + current.type()));
+        }
+        try {
+            connectors.get(current.type()).verifyConnection(current);
+            // DISABLED is an operator decision, not a credential state — a passing check must not
+            // silently re-enable a connection someone turned off.
+            if (current.status() == ConnectionStatus.DISABLED) {
+                return current;
+            }
+            return connections.save(current.withStatus(ConnectionStatus.ACTIVE, null));
+        } catch (RuntimeException e) {
+            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            LOG.warning("Connection " + id + " (" + current.type() + ") failed verification: " + reason);
+            return connections.save(current.withStatus(ConnectionStatus.ERROR, reason));
+        }
+    }
+
+    @Override
     public Connection setDefault(String id) {
         Connection current = require(id);
         connections.clearDefault(current.type());

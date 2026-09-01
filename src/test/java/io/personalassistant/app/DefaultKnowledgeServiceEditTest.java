@@ -87,7 +87,7 @@ class DefaultKnowledgeServiceEditTest {
     private static RawItem textItem(String externalId) {
         return new RawItem(externalId, EntityType.MESSAGE, "text/plain", externalId, "uri:" + externalId,
                 "sha256:" + externalId, Instant.now(), Map.of("k", "v"), "body of " + externalId, null,
-                Map.of("title", externalId), false);
+                Map.of("title", externalId), null, false);
     }
 
     // ---- §8.1 config-only edit ---------------------------------------------------------------

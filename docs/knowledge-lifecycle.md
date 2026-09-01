@@ -276,6 +276,48 @@ Every query filters on `knowledgeId`, so results are scoped to the sources the u
 
 ---
 
+## 4b. Ageing content out (retention)
+
+Nothing above ever removes an entity that the source stopped returning — connectors emit no
+tombstones (see [L2b](./limitations.md#l2b--source-side-deletion-is-only-handled-by-retention)).
+**Retention** is the mechanism that does, for sources that opt in.
+
+Two expiry sources, explicit wins:
+
+| Source | Field | Set by |
+|---|---|---|
+| Source-declared end date | `Entity.expiresAt` | the connector, when the item carries one (Ashby's `closedAt`) |
+| Knowledge-level window | `config.retention.period` | the user, or the connector's `defaultRetention()` |
+
+Resolution is the same three tiers as scheduling — knowledge → connector `defaultRetention()` →
+global `app.retention.default-period` (`RetentionResolver`, mirroring `ScheduleResolver`).
+
+> **Unset at every tier means never expire, and that is the shipped default.** This is the safety
+> property of the whole feature: retention is opt-in, so a Drive or mail corpus cannot silently
+> delete itself. Only the ATS job-board connectors ship a connector-level window.
+
+`RetentionSweeper` runs on `app.retention.poll-interval` and only ever **tombstones**
+(`markDeleted`). Chunk removal is left to the ordinary deletion path — `IndexingJob.processDeletions`
+claims the tombstone under a lease and calls `deleteByEntity`. Three design points behind that:
+
+- **Age is measured from `createdAt`, never `updatedAt`.** `upsert` only writes when the checksum
+  changes, and the skip path calls `stampLastSeen`, which deliberately leaves `updatedAt` alone. An
+  item that has sat unchanged is exactly what retention is for, so a change-based clock would never
+  fire on it.
+- **No Mongo TTL index.** A native `expireAfterSeconds` would drop the document without ever telling
+  OpenSearch, permanently orphaning its chunks, and would bypass lease fencing.
+- **No connector-health gate.** The sweep is absolute. If a feed has not been walked in a week its
+  contents are stale whether or not the walk succeeded, and holding data back because ingestion is
+  broken would keep exactly the material the window exists to remove.
+
+**Re-ingest consequence.** Tombstoning does not remove the Mongo document, so an item that still
+exists upstream is re-created by the next walk's `upsert` — re-parsed, re-chunked and **re-embedded**,
+with a fresh `createdAt`. That is an accepted cost, and it is why a window should be comfortably
+longer than the poll cadence. Anything downstream that asks "is this new?" must not answer from an
+indexing timestamp alone, or a revived item will read as brand new.
+
+---
+
 ## 5. Pause, resume, delete, and manual operations
 
 | Action | Endpoint | Effect |
@@ -285,6 +327,7 @@ Every query filters on `knowledgeId`, so results are scoped to the sources the u
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
 | Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
+| Set a retention window | `PATCH /api/knowledge/{id}` (`retentionPeriod`) | Config-class edit. Changes only what a later sweep removes, never what is ingested. Absent means unchanged, not "clear". |
 | Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs (no re-fetch) |
 | Delete one entity | `DELETE /api/index/entities/{id}` | `markDeleted` → Stage 2 removes its chunks |
 | Browse entities | `GET /api/knowledge/{id}/entities` | Read-only. Pages the ingested items newest-first with an optional `EntityStatus` filter, returning `EntitySummary` projections. This is how a caller finds the `FAILED` items worth re-indexing, and the only way to enumerate entities at all. |

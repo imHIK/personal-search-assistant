@@ -1,6 +1,7 @@
 package io.personalassistant.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -121,5 +122,31 @@ class DefaultIndexingServiceTest {
         assertEquals(CursorStatus.IDLE, cursors.store.get(healthy.id()).status(), "an IDLE cursor is untouched");
         assertEquals(CursorStatus.FAILED, cursors.store.get(elsewhere.id()).status(),
                 "another knowledge's dead-letters are not swept up");
+    }
+
+    @Test
+    void bulkReindexQueuesAKnowledgesEntitiesWithoutRefetching() {
+        // The reason this exists: switching embedding model leaves the corpus half old-model vectors
+        // and half new, which same-dimension does nothing to fix.
+        entities.seed(TestData.ingestedText("ent_a", "kn_1", "a", "one"));
+        entities.seed(TestData.ingestedText("ent_b", "kn_1", "b", "two"));
+        entities.seed(TestData.ingestedText("ent_other", "kn_2", "c", "three"));
+
+        int queued = service.reindexKnowledge("kn_1");
+
+        assertEquals(2, queued);
+        assertTrue(entities.findById("ent_a").orElseThrow().needsReindex());
+        assertTrue(entities.findById("ent_b").orElseThrow().needsReindex());
+        assertFalse(entities.findById("ent_other").orElseThrow().needsReindex(),
+                "another knowledge must be untouched");
+    }
+
+    @Test
+    void bulkReindexSkipsAnEntityAWorkerIsMidRunOn() {
+        // Flagging it would race the worker's own terminal write; a later call picks it up.
+        entities.seed(TestData.ingestedText("ent_busy", "kn_1", "busy", "text"));
+        entities.claimForIndexing(1, "worker-1", java.time.Duration.ofMinutes(10));
+
+        assertEquals(0, service.reindexKnowledge("kn_1"));
     }
 }

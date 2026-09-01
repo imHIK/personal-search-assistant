@@ -3,6 +3,7 @@ import { Layout } from '@/components/Layout'
 import { RouteError } from '@/components/RouteError'
 import { AccountFormPage } from '@/features/accounts/AccountFormPage'
 import { AccountsPage } from '@/features/accounts/AccountsPage'
+import { DigestsPage } from '@/features/digests/DigestsPage'
 import { SearchPage } from '@/features/search/SearchPage'
 import { SourceDetailPage } from '@/features/sources/SourceDetailPage'
 import { SourcesPage } from '@/features/sources/SourcesPage'
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'knowledge', element: <SourcesPage /> },
       { path: 'knowledge/new', element: <AddSourcePage /> },
       { path: 'knowledge/:id', element: <SourceDetailPage /> },
+      { path: 'digests', element: <DigestsPage /> },
       { path: 'connections', element: <AccountsPage /> },
       { path: 'connections/new', element: <AccountFormPage /> },
       { path: 'connections/:id', element: <AccountFormPage /> },

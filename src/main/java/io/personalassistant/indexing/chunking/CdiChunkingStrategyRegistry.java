@@ -22,7 +22,15 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
     private static final Logger LOG = Logger.getLogger(CdiChunkingStrategyRegistry.class.getName());
 
     private final Map<String, ChunkingStrategy> byName;
+    private final List<ChunkingStrategy> all;
     private final String defaultName;
+
+    /**
+     * Whether a strategy may be chosen by content type when the knowledge did not ask for a specific
+     * one. Off restores name-only selection.
+     */
+    @ConfigProperty(name = "app.chunking.mime-aware", defaultValue = "true")
+    boolean mimeAware;
 
     @Inject
     public CdiChunkingStrategyRegistry(
@@ -39,6 +47,8 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
             map.put(strategy.name(), strategy);
         }
         this.byName = Map.copyOf(map);
+        this.all = List.copyOf(strategies);
+        this.mimeAware = true;
         if (map.containsKey(configuredDefault)) {
             this.defaultName = configuredDefault;
         } else {
@@ -61,6 +71,28 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
             throw new IllegalStateException("No chunking strategies registered (default '" + defaultName + "' missing)");
         }
         return fallback;
+    }
+
+    /**
+     * The strategy for {@code name}, letting content type break the tie when {@code name} is only the
+     * global default — i.e. when no knowledge-level setting asked for anything in particular.
+     *
+     * <p>The distinction matters: selection used to be keyed purely on a per-knowledge string, so a
+     * spreadsheet sitting in a knowledge of mostly prose was chunked as prose. An explicit per-knowledge
+     * choice still wins, so this can never override a deliberate decision — only an inherited default.
+     */
+    @Override
+    public ChunkingStrategy get(String name, String contentType) {
+        if (mimeAware && contentType != null && (name == null || name.equals(defaultName))) {
+            for (ChunkingStrategy strategy : all) {
+                if (strategy.prefers(contentType)) {
+                    LOG.fine(() -> "Chunking " + contentType + " with '" + strategy.name()
+                            + "' (preferred over the default '" + defaultName + "')");
+                    return strategy;
+                }
+            }
+        }
+        return get(name);
     }
 
     @Override

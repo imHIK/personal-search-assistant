@@ -14,10 +14,12 @@ import {
   searchModes,
 } from '@/config/constants'
 import { labels } from '@/config/labels'
+import { buildFilters, filtersFor } from '@/config/searchFilters'
 import { useKnowledgeList } from '@/hooks/queries'
 import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
+import { SearchFilters } from './SearchFilters'
 import { useSearch } from './useSearch'
 
 /**
@@ -35,6 +37,18 @@ export function SearchPage() {
   const topK = Number(params.get('topK')) || DEFAULT_TOP_K
   const scope = params.get('scope') ?? ''
   const wantsAnswer = params.get('answer') === '1'
+  const groupDuplicates = params.get('group') === '1'
+
+  // Filters are offered per source, so they follow the scope rather than the query. A scope of
+  // "everything" has no single source type and therefore offers only the universal specs.
+  const scopedSource = (sources ?? []).find((source) => source.id === scope)
+  const filterSpecs = filtersFor(scopedSource?.connectorDetails.type ?? null)
+  const filterValues = Object.fromEntries(
+    filterSpecs.map((spec) => [spec.id, params.get(spec.id) ?? '']),
+  )
+  // Serialised so the effect below re-runs when a filter changes without depending on a fresh
+  // object identity every render.
+  const filterKey = JSON.stringify(filterValues)
 
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
@@ -45,15 +59,20 @@ export function SearchPage() {
   runRef.current = search.mutate
   useEffect(() => {
     if (!urlQuery.trim()) return
+    const filters = buildFilters(filterSpecs, JSON.parse(filterKey) as Record<string, string>)
     const body: SearchBody = {
       query: urlQuery,
       mode,
       topK,
       answer: wantsAnswer,
       knowledgeIds: scope ? [scope] : [],
+      ...(Object.keys(filters).length > 0 ? { filters } : {}),
+      ...(groupDuplicates ? { collapseDuplicates: true } : {}),
     }
     runRef.current(body)
-  }, [urlQuery, mode, topK, wantsAnswer, scope])
+    // filterSpecs is derived from scope, which is already a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlQuery, mode, topK, wantsAnswer, scope, filterKey, groupDuplicates])
 
   const update = (next: Record<string, string | null>) => {
     const merged = new URLSearchParams(params)
@@ -136,13 +155,28 @@ export function SearchPage() {
             </Select>
           </Technical>
 
-          <Toggle
-            checked={wantsAnswer}
-            onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
-            label={labels.search.answerToggle}
-            className="ml-auto"
-          />
+          {/* The two toggles sit together rather than one being pinned right: split across the
+              row they wrap onto separate lines at this container width. */}
+          <div className="ml-auto flex items-center gap-4">
+            <Toggle
+              checked={groupDuplicates}
+              onCheckedChange={(checked) => update({ group: checked ? '1' : null })}
+              label={labels.search.groupDuplicates}
+            />
+            <Toggle
+              checked={wantsAnswer}
+              onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
+              label={labels.search.answerToggle}
+            />
+          </div>
         </div>
+
+        <SearchFilters
+          specs={filterSpecs}
+          values={filterValues}
+          onChange={(id, value) => update({ [id]: value })}
+          onClear={() => update(Object.fromEntries(filterSpecs.map((spec) => [spec.id, null])))}
+        />
       </form>
 
       <div className="mt-7">

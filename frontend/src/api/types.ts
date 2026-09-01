@@ -7,7 +7,15 @@
  * api/dto and domain/model.
  */
 
-export type SourceType = 'LOCAL_FS' | 'GMAIL' | 'SLACK' | 'GOOGLE_DRIVE' | 'NOTION'
+export type SourceType =
+  | 'LOCAL_FS'
+  | 'GMAIL'
+  | 'SLACK'
+  | 'GOOGLE_DRIVE'
+  | 'NOTION'
+  | 'GREENHOUSE'
+  | 'LEVER'
+  | 'ASHBY'
 
 export type KnowledgeStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ERROR' | 'DELETED'
 export type EntityStatus = 'INGESTED' | 'INDEXING' | 'INDEXED' | 'FAILED' | 'DELETED'
@@ -199,11 +207,25 @@ export interface PatchConnectionBody {
 export interface SearchBody {
   query: string
   knowledgeIds?: string[]
-  /** Exact-match term filters keyed by full index field path (`sourceType`, `metadata.author`…). */
+  /**
+   * Filters keyed by full index field path (`sourceType`, `metadata.author`…). A scalar is an exact
+   * term match; a `{ gte, lte }` map becomes a range, which is the only way to express a date window
+   * or a numeric floor.
+   */
   filters?: Blob
   topK?: number
   mode?: SearchMode
   answer?: boolean
+  /** Cap on how many chunks one entity may contribute. 1 gives one result per document. */
+  maxChunksPerEntity?: number
+  /** Group near-identical results and keep one of each. Off by default on the server. */
+  collapseDuplicates?: boolean
+  /**
+   * Search *by* an already-ingested entity rather than by typed text. When set, `query` stops being
+   * the search text and becomes a statement of intent steering how the document is decomposed; it
+   * may be blank.
+   */
+  sourceEntityId?: string
 }
 
 export interface SearchHit {
@@ -212,7 +234,10 @@ export interface SearchHit {
   entityId: string
   /** What lets a result be attributed to the source it came from. */
   knowledgeId: string
+  /** Position of the chunk inside its entity — orders several hits from one document. */
+  ordinal: number
   title: string | null
+  /** Display excerpt: the matching region when the lexical leg produced a highlight, else the head. */
   snippet: string | null
   uri: string | null
   score: number
@@ -223,6 +248,12 @@ export interface SearchResult {
   hits: SearchHit[]
   /** Non-null only when the request set `answer: true`. Cites hits as `[n]`, 1-based. */
   answer: string | null
+  /**
+   * Why no answer came back despite `answer: true` — an unavailable or misconfigured LLM. The
+   * server now returns 200 with the hits intact and this set, instead of 500ing and losing them,
+   * so this is the primary signal; `useSearch`'s retry is only a fallback for older behaviour.
+   */
+  answerError: string | null
   tookMs: number
 }
 
@@ -231,4 +262,59 @@ export interface SearchResult {
 export interface SyncTrigger {
   knowledgeId: string
   cursorsArmed: number
+}
+
+// ---- Digests --------------------------------------------------------------------------------
+
+/**
+ * A saved search that runs on a schedule and keeps its results. The job-hunt case (new postings
+ * scored against a CV) is one row of this, not a separate feature.
+ */
+export interface Digest {
+  id: string
+  name: string
+  /** With sourceEntityId set this is a statement of intent rather than the search text. */
+  query: string | null
+  /** Search *by* this entity instead of by typed text. */
+  sourceEntityId: string | null
+  knowledgeIds: string[]
+  filters: Blob
+  /** How far back a run looks, e.g. "1d". Null means no time bound. */
+  window: string | null
+  cron: string | null
+  interval: string | null
+  /** A prompt-catalogue task run over the results, or null for results only. */
+  taskId: string | null
+  topK: number
+  collapseDuplicates: boolean
+  maxChunksPerEntity: number | null
+  /** Drop results an earlier run already reported — what makes it a digest. */
+  onlyNew: boolean
+  enabled: boolean
+  nextRunAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export type CreateDigestBody = Pick<Digest, 'name'> &
+  Partial<Omit<Digest, 'id' | 'name' | 'nextRunAt' | 'createdAt' | 'updatedAt'>>
+
+export interface DigestRunItem {
+  entityId: string
+  chunkId: string
+  title: string | null
+  uri: string | null
+  score: number
+  snippet: string | null
+}
+
+export interface DigestRun {
+  id: string
+  digestId: string
+  ranAt: string
+  items: DigestRunItem[]
+  /** The LLM task's reply, or null when the digest names no task. */
+  taskOutput: string | null
+  /** Why the run failed. A failed run is still recorded, so a broken digest is visible. */
+  error: string | null
 }

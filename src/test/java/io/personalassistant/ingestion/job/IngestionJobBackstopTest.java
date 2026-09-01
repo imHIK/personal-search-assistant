@@ -10,6 +10,8 @@ import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.SingleConnectorRegistry;
+import io.personalassistant.testsupport.StubConnector;
 import io.personalassistant.testsupport.TestData;
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +33,13 @@ class IngestionJobBackstopTest {
     void setUp() {
         knowledge = new InMemoryKnowledgeRepository();
         cursors = new InMemoryCursorRepository();
-        job = new IngestionJob(cursors, knowledge, null, null);
+        // Connector registry and resolver are only consulted on the ACTIVE path, which these
+        // tests never reach; nulls would NPE there, so a registry supporting nothing is passed.
+        job = new IngestionJob(cursors, knowledge, null, null,
+                new SingleConnectorRegistry(new StubConnector(SourceType.SLACK, java.util.List.of())),
+                kn -> {
+                    throw new java.util.NoSuchElementException("no connection");
+                });
         job.pollBatch = 20;
     }
 

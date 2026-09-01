@@ -214,7 +214,7 @@ public class GmailConnector extends TokenWindowGrabber {
         metadata.put("modifiedAt", modifiedAt);
 
         return new RawItem(id, EntityType.EMAIL, "text/plain", subject, uri, checksum,
-                modifiedAt, raw, text, null, metadata, false);
+                modifiedAt, raw, text, null, metadata, null, false);
     }
 
     private static String buildSearchText(String subject, String from, String to, String date,

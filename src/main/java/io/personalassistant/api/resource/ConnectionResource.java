@@ -76,6 +76,21 @@ public class ConnectionResource {
         }
     }
 
+    /**
+     * Re-check the stored credentials and record the outcome. Returns 200 with the refreshed
+     * connection whether or not the check passed — read {@code status} and {@code lastError}. Bad
+     * credentials are a result to display, not a 4xx.
+     */
+    @POST
+    @Path("/{id}/test")
+    public Connection test(@PathParam("id") String id) {
+        try {
+            return connectionService.test(id);
+        } catch (NoSuchElementException e) {
+            throw new NotFoundException(e.getMessage());
+        }
+    }
+
     /** Make this connection the default for its type. */
     @POST
     @Path("/{id}/default")

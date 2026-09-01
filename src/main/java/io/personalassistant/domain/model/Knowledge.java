@@ -120,16 +120,24 @@ public record Knowledge(
             ScheduleSettings scheduleSettings,
             WebhookSettings webhookSettings,
             Backfill backfill,
-            ChunkingSettings chunking) {
+            ChunkingSettings chunking,
+            Retention retention) {
 
         public Config {
             // Older callers/records may omit chunking → treat as "inherit the global default".
             chunking = chunking == null ? ChunkingSettings.inherit() : chunking;
+            retention = retention == null ? Retention.inherit() : retention;
+        }
+
+        /** Convenience for callers that don't set retention: inherit (which globally means "never expire"). */
+        public Config(ScheduleSettings scheduleSettings, WebhookSettings webhookSettings,
+                      Backfill backfill, ChunkingSettings chunking) {
+            this(scheduleSettings, webhookSettings, backfill, chunking, Retention.inherit());
         }
 
         /** Convenience for callers that don't set chunking: inherit the global chunking default. */
         public Config(ScheduleSettings scheduleSettings, WebhookSettings webhookSettings, Backfill backfill) {
-            this(scheduleSettings, webhookSettings, backfill, ChunkingSettings.inherit());
+            this(scheduleSettings, webhookSettings, backfill, ChunkingSettings.inherit(), Retention.inherit());
         }
 
         public static Config defaults() {
@@ -137,7 +145,8 @@ public record Knowledge(
                     new ScheduleSettings(null, null, false),
                     new WebhookSettings(false, null),
                     new Backfill(true),
-                    ChunkingSettings.inherit());
+                    ChunkingSettings.inherit(),
+                    Retention.inherit());
         }
     }
 
@@ -204,6 +213,42 @@ public record Knowledge(
         /** All-inherit: no strategy, no sizes, no separators — fall through to {@code app.chunking.*}. */
         public static ChunkingSettings inherit() {
             return new ChunkingSettings(null, null, null, java.util.List.of());
+        }
+    }
+
+    /**
+     * How long this knowledge's entities are kept — the <em>custom</em> tier of retention resolution
+     * (custom &rarr; connector {@code defaultRetention()} &rarr; global {@code app.retention.default-period}).
+     * Age is measured from {@code Entity.createdAt}; an entity older than the resolved window is
+     * tombstoned by {@code RetentionSweeper} and its chunks removed through the ordinary deletion path.
+     *
+     * <p>Unset at every tier means <strong>never expire</strong>, which is the shipped default. That
+     * is deliberate: a document corpus must not silently delete itself, so retention is opt-in and
+     * only feed-like sources (job boards, news) turn it on.
+     *
+     * <p><b>Re-ingest consequence.</b> Tombstoning does not remove the Mongo document, so a source
+     * item that still exists is re-created by the next walk's {@code upsert} — re-parsed, re-chunked
+     * and re-embedded, with a fresh {@code createdAt}. Windows should therefore be long enough that
+     * anything surviving one is genuinely stale. See {@code docs/knowledge-lifecycle.md}.
+     *
+     * @param period a {@link Durations}-style window such as {@code "14d"}; null/blank to inherit
+     */
+    public record Retention(String period) {
+
+        public Retention {
+            if (period != null && period.isBlank()) {
+                period = null;
+            }
+        }
+
+        /** All-inherit: fall through to the connector default, then the global default. */
+        public static Retention inherit() {
+            return new Retention(null);
+        }
+
+        /** The user's window, or {@code null} when nothing is set here (so the resolver falls through). */
+        public Duration custom() {
+            return Durations.parse(period);
         }
     }
 

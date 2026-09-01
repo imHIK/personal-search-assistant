@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { connectionsApi } from '@/api/connections'
+import { digestsApi } from '@/api/digests'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
 import type {
   Connection,
   CreateConnectionBody,
+  CreateDigestBody,
   CreateKnowledgeBody,
   CursorInfo,
   EntityStatus,
@@ -29,6 +31,8 @@ export const keys = {
   entities: (id: string, status: EntityStatus | null, offset: number, limit: number) =>
     ['knowledge', id, 'entities', status ?? 'all', offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
+  digests: ['digests'] as const,
+  digestRuns: (id: string) => ['digests', id, 'runs'] as const,
   connections: ['connections'] as const,
   connectionsOfType: (type?: SourceType) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
@@ -256,12 +260,16 @@ export function useConnectionMutations() {
     mutationFn: (id: string) => connectionsApi.makeDefault(id),
     onSuccess: invalidate,
   })
+  const test = useMutation({
+    mutationFn: (id: string) => connectionsApi.test(id),
+    onSuccess: invalidate,
+  })
   const remove = useMutation({
     mutationFn: (id: string) => connectionsApi.remove(id),
     onSuccess: invalidate,
   })
 
-  return { create, patch, makeDefault, remove }
+  return { create, patch, makeDefault, test, remove }
 }
 
 /** Connections indexed by id, for showing an account name next to a source. */
@@ -282,4 +290,50 @@ export function useHealth() {
     retry: false,
     staleTime: 0,
   })
+}
+
+// ---- Digests --------------------------------------------------------------------------------
+
+export function useDigests() {
+  return useQuery({ queryKey: keys.digests, queryFn: digestsApi.list })
+}
+
+export function useDigestRuns(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.digestRuns(id!),
+    queryFn: () => digestsApi.runs(id!),
+    enabled: Boolean(id),
+  })
+}
+
+/** Create / enable / delete / run-now, each invalidating exactly what it affected. */
+export function useDigestActions() {
+  const client = useQueryClient()
+  const invalidate = () => void client.invalidateQueries({ queryKey: keys.digests })
+
+  const create = useMutation({
+    mutationFn: (body: CreateDigestBody) => digestsApi.create(body),
+    onSuccess: invalidate,
+  })
+  const setEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      digestsApi.setEnabled(id, enabled),
+    onSuccess: invalidate,
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => digestsApi.remove(id),
+    onSuccess: (_data, id) => {
+      client.removeQueries({ queryKey: keys.digestRuns(id) })
+      invalidate()
+    },
+  })
+  const run = useMutation({
+    mutationFn: (id: string) => digestsApi.run(id),
+    onSuccess: (_data, id) => {
+      void client.invalidateQueries({ queryKey: keys.digestRuns(id) })
+      invalidate()
+    },
+  })
+
+  return { create, setEnabled, remove, run }
 }

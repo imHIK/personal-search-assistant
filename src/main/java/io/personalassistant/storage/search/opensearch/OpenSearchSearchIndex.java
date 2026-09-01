@@ -38,13 +38,41 @@ import org.opensearch.client.RestClient;
 public class OpenSearchSearchIndex implements SearchIndex {
 
     private static final Logger LOG = Logger.getLogger(OpenSearchSearchIndex.class.getName());
-    private static final int SNIPPET_CHARS = 280;
     /** Cap on how many per-item bulk failures are named in the summary; the rest are counted. */
     private static final int BULK_ERRORS_REPORTED = 3;
+    /** Fields never worth shipping back on a search — see {@link #excludeSource}. */
+    private static final String[] SOURCE_EXCLUDES = {"embedding"};
 
     private final RestClient client;
     private final String alias;
     private final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * Length of the display excerpt on each hit. Package-private for tests (project convention), and
+     * {@code <= 0} disables truncation entirely, which is what an un-injected instance in a unit test
+     * gets — a test asserting on hit text should see the text, not an empty string.
+     */
+    @ConfigProperty(name = "app.search.snippet-chars", defaultValue = "280")
+    int snippetChars;
+
+    /** How many highlight fragments to ask for per field; 0 disables highlighting altogether. */
+    @ConfigProperty(name = "app.search.highlight-fragments", defaultValue = "2")
+    int highlightFragments;
+
+    /** BM25 fields, with optional {@code ^boost} suffixes. Empty falls back to {@code text,title}. */
+    @ConfigProperty(name = "app.search.lexical.fields", defaultValue = "text,title^2")
+    List<String> lexicalFields;
+
+    @ConfigProperty(name = "app.search.lexical.type", defaultValue = "best_fields")
+    String lexicalType;
+
+    /** How much of the query must match. Blank sends nothing, restoring OR-any-term behaviour. */
+    @ConfigProperty(name = "app.search.lexical.minimum-should-match", defaultValue = "2<70%")
+    String minimumShouldMatch;
+
+    /** Boost applied to an exact-phrase match on {@code text}; 0 omits the clause. */
+    @ConfigProperty(name = "app.search.lexical.phrase-boost", defaultValue = "2.0")
+    double phraseBoost;
 
     @Inject
     public OpenSearchSearchIndex(RestClient client,
@@ -128,11 +156,45 @@ public class OpenSearchSearchIndex implements SearchIndex {
     ObjectNode lexicalBody(SearchQuery query, int limit) {
         ObjectNode body = mapper.createObjectNode();
         body.put("size", limit);
+        excludeSource(body);
         ObjectNode bool = body.putObject("query").putObject("bool");
+        String text = query.text() == null ? "" : query.text();
+
+        // A bare multi_match with default OR semantics scores a document for matching *any* term, so a
+        // natural-language query like "give me all the holidays this year" ranked documents that happen to
+        // contain "give", "all", "this" and "year" above the one document actually about holidays — and
+        // then flooded the candidate set with them, crowding out the vector leg's correct hits during
+        // fusion. minimum_should_match is what requires a real share of the query to be present.
         ObjectNode multiMatch = bool.putArray("must").addObject().putObject("multi_match");
-        multiMatch.put("query", query.text() == null ? "" : query.text());
-        multiMatch.putArray("fields").add("text").add("title");
+        multiMatch.put("query", text);
+        ArrayNode fields = multiMatch.putArray("fields");
+        for (String field : lexicalFields == null ? List.<String>of() : lexicalFields) {
+            if (field != null && !field.isBlank()) {
+                fields.add(field.trim());
+            }
+        }
+        if (fields.isEmpty()) {
+            fields.add("text").add("title");
+        }
+        if (lexicalType != null && !lexicalType.isBlank()) {
+            multiMatch.put("type", lexicalType);
+        }
+        if (minimumShouldMatch != null && !minimumShouldMatch.isBlank()) {
+            multiMatch.put("minimum_should_match", minimumShouldMatch);
+        }
+
+        // A phrase match is a strong relevance signal that term-level scoring misses entirely, so it is
+        // added as an optional boost rather than a requirement: it lifts exact wording without excluding
+        // documents that only match term-wise.
+        if (phraseBoost > 0) {
+            ObjectNode phrase = bool.putArray("should").addObject().putObject("match_phrase")
+                    .putObject("text");
+            phrase.put("query", text);
+            phrase.put("boost", phraseBoost);
+        }
+
         bool.set("filter", filters(query));
+        highlight(body);
         return body;
     }
 
@@ -152,6 +214,7 @@ public class OpenSearchSearchIndex implements SearchIndex {
     ObjectNode vectorBody(SearchQuery query, float[] vector, int limit) {
         ObjectNode body = mapper.createObjectNode();
         body.put("size", limit);
+        excludeSource(body);
         ObjectNode embedding = body.putObject("query").putObject("bool").putArray("must")
                 .addObject().putObject("knn").putObject("embedding");
         ArrayNode vec = embedding.putArray("vector");
@@ -190,6 +253,9 @@ public class OpenSearchSearchIndex implements SearchIndex {
 
     // ---- internals ---------------------------------------------------------------------------
 
+    /** Bounds recognised inside a range-filter value, in the order they are written. */
+    private static final List<String> RANGE_OPS = List.of("gte", "gt", "lte", "lt");
+
     private List<SearchHit> runSearch(ObjectNode body) {
         Request request = new Request("POST", "/" + alias + "/_search");
         request.setJsonEntity(write(body));
@@ -210,13 +276,95 @@ public class OpenSearchSearchIndex implements SearchIndex {
             // The filter key is used verbatim as the target field, so callers may filter on any
             // indexed field (top-level keyword fields like "sourceType"/"uri" or nested
             // "metadata.<key>"), rather than being locked to the metadata subtree.
-            query.filters().forEach((field, value) -> {
-                ObjectNode term = mapper.createObjectNode();
-                term.putObject("term").put(field, String.valueOf(value));
-                filters.add(term);
-            });
+            query.filters().forEach((field, value) -> filters.add(clause(field, value)));
         }
         return filters;
+    }
+
+    /**
+     * One filter clause: a {@code range} when the value is a bounds map, else an exact {@code term}.
+     *
+     * <p>A scalar cannot express "newer than" or "at least", which rules out every date window and
+     * numeric floor — so a {@link Map} value carrying any of {@code gte}/{@code gt}/{@code lte}/{@code lt}
+     * is emitted as a range instead. Anything else in that map is ignored rather than passed through:
+     * forwarding arbitrary keys would let a caller inject OpenSearch query DSL through what is
+     * documented as a value.
+     */
+    private ObjectNode clause(String field, Object value) {
+        ObjectNode node = mapper.createObjectNode();
+        if (value instanceof Map<?, ?> bounds) {
+            ObjectNode range = node.putObject("range").putObject(field);
+            boolean any = false;
+            for (String op : RANGE_OPS) {
+                Object bound = bounds.get(op);
+                if (bound != null) {
+                    putScalar(range, op, bound);
+                    any = true;
+                }
+            }
+            if (any) {
+                return node;
+            }
+            // A map with no recognised bound is a caller mistake, not a licence to match everything —
+            // fall through to a term on its string form, which matches nothing and is visible in the
+            // query rather than silently widening the result set.
+            node.removeAll();
+        }
+        putScalar(node.putObject("term"), field, value);
+        return node;
+    }
+
+    /**
+     * Write a filter value with its JSON type preserved. {@code String.valueOf} on every value made
+     * {@code metadata.remote: true} serialise as the string {@code "true"} and a numeric bound as a
+     * quoted number — a term query against a {@code boolean} or {@code long} field then matches nothing,
+     * and a range comparison is lexicographic rather than numeric.
+     */
+    private static void putScalar(ObjectNode target, String field, Object value) {
+        switch (value) {
+            case null -> target.putNull(field);
+            case Boolean b -> target.put(field, b);
+            case Integer i -> target.put(field, i);
+            case Long l -> target.put(field, l);
+            case Double d -> target.put(field, d);
+            case Float f -> target.put(field, f);
+            case Number n -> target.put(field, n.doubleValue());
+            case Instant i -> target.put(field, i.toString());
+            default -> target.put(field, String.valueOf(value));
+        }
+    }
+
+    /**
+     * Drop fields from {@code _source} that the app never reads back. The embedding is the whole cost
+     * here: every hit otherwise ships its full vector (768 floats by default) over the wire only to be
+     * discarded in {@link #parseHits}, which on a 40-candidate hybrid search is two orders of magnitude
+     * more bytes than the text everyone actually wants.
+     */
+    private void excludeSource(ObjectNode body) {
+        ArrayNode excludes = body.putObject("_source").putArray("excludes");
+        for (String field : SOURCE_EXCLUDES) {
+            excludes.add(field);
+        }
+    }
+
+    /**
+     * Ask for highlight fragments on the searchable text fields so the display excerpt shows the region
+     * that actually matched rather than the head of the chunk. Lexical only: a knn query has no query
+     * terms to highlight against, so requesting fragments there would return none.
+     *
+     * <p>Tags are stripped out again in {@link #fragment} — the fragment boundaries are the useful part,
+     * not the markup, and passing markup to the UI would mean the console had to trust and render it.
+     */
+    private void highlight(ObjectNode body) {
+        if (highlightFragments <= 0) {
+            return;
+        }
+        ObjectNode fields = body.putObject("highlight")
+                .put("fragment_size", Math.max(snippetChars, 1))
+                .put("number_of_fragments", highlightFragments)
+                .putObject("fields");
+        fields.putObject("text");
+        fields.putObject("title");
     }
 
     private List<SearchHit> parseHits(JsonNode response) {
@@ -224,17 +372,65 @@ public class OpenSearchSearchIndex implements SearchIndex {
         for (JsonNode hit : response.path("hits").path("hits")) {
             JsonNode src = hit.path("_source");
             String text = src.path("text").asText("");
+            String highlighted = fragment(hit.path("highlight").path("text"));
             hits.add(new SearchHit(
                     src.path("chunkId").asText(null),
                     src.path("entityId").asText(null),
                     src.path("knowledgeId").asText(null),
+                    src.path("ordinal").asInt(0),
                     src.path("title").asText(null),
-                    snippet(text),
+                    text,
+                    highlighted != null ? highlighted : snippet(text),
                     src.path("uri").asText(null),
                     hit.path("_score").asDouble(0.0),
                     toMap(src.path("metadata"))));
         }
         return hits;
+    }
+
+    /**
+     * Join the highlight fragments for one field into a display excerpt, stripping the {@code <em>}
+     * markers OpenSearch wraps matches in. Returns null when the field produced no fragments, so the
+     * caller can fall back to the head of the text (the vector leg always lands here).
+     */
+    private String fragment(JsonNode fragments) {
+        if (!fragments.isArray() || fragments.isEmpty()) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        for (JsonNode f : fragments) {
+            if (!out.isEmpty()) {
+                out.append(" … ");
+            }
+            out.append(f.asText("").replace("<em>", "").replace("</em>", ""));
+        }
+        String joined = out.toString().trim();
+        return joined.isEmpty() ? null : joined;
+    }
+
+    @Override
+    public List<String> chunkTextsByEntity(String entityId, int limit) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("size", Math.max(limit, 1));
+        body.putObject("query").putObject("term").put("entityId", entityId);
+        // Ordinal order, so the reassembled text reads as the document did rather than in score order.
+        body.putArray("sort").addObject().putObject("ordinal").put("order", "asc");
+        body.putObject("_source").putArray("includes").add("text");
+
+        Request request = new Request("POST", "/" + alias + "/_search");
+        request.setJsonEntity(write(body));
+        JsonNode response = execute(request);
+        if (response == null) {
+            return List.of();
+        }
+        List<String> texts = new ArrayList<>();
+        for (JsonNode hit : response.path("hits").path("hits")) {
+            String text = hit.path("_source").path("text").asText("");
+            if (!text.isBlank()) {
+                texts.add(text);
+            }
+        }
+        return List.copyOf(texts);
     }
 
     private void deleteByTerm(String field, String value) {
@@ -257,6 +453,9 @@ public class OpenSearchSearchIndex implements SearchIndex {
         doc.put("title", chunk.title());
         doc.put("uri", chunk.uri());
         doc.put("ordinal", chunk.ordinal());
+        // Computed on every chunk but previously never written, so nothing downstream could budget by
+        // tokens — the answer context budget is in characters for exactly that reason.
+        doc.put("tokenCount", chunk.tokenCount());
         if (chunk.embedding() != null && chunk.embedding().vector() != null) {
             ArrayNode vec = doc.putArray("embedding");
             for (float v : chunk.embedding().vector()) {
@@ -324,10 +523,15 @@ public class OpenSearchSearchIndex implements SearchIndex {
         return mapper.convertValue(node, new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {});
     }
 
-    private static String snippet(String text) {
-        if (text == null) {
-            return null;
+    /**
+     * Head-of-text display excerpt, used when highlighting produced nothing. A non-positive
+     * {@code snippetChars} means "don't truncate" — the setting is a display concern, and an
+     * un-injected instance (unit tests) must not silently blank out the excerpt.
+     */
+    private String snippet(String text) {
+        if (text == null || snippetChars <= 0 || text.length() <= snippetChars) {
+            return text;
         }
-        return text.length() <= SNIPPET_CHARS ? text : text.substring(0, SNIPPET_CHARS) + "…";
+        return text.substring(0, snippetChars) + "…";
     }
 }

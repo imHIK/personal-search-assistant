@@ -28,6 +28,24 @@ public class RecordingSearchIndex implements SearchIndex {
         indexed.addAll(chunks);
     }
 
+    /** Chunk texts a test asked for explicitly, keyed by entity id; falls back to what was indexed. */
+    public final java.util.Map<String, List<String>> chunkTexts = new java.util.HashMap<>();
+
+    @Override
+    public List<String> chunkTextsByEntity(String entityId, int limit) {
+        List<String> scripted = chunkTexts.get(entityId);
+        if (scripted != null) {
+            return scripted.size() <= limit ? scripted : scripted.subList(0, limit);
+        }
+        return indexed.stream()
+                .filter(c -> entityId.equals(c.entityId()))
+                .sorted(java.util.Comparator.comparingInt(io.personalassistant.domain.model.Chunk::ordinal))
+                .map(io.personalassistant.domain.model.Chunk::text)
+                .filter(t -> t != null && !t.isBlank())
+                .limit(limit)
+                .toList();
+    }
+
     @Override
     public List<SearchHit> lexicalSearch(SearchQuery query, int limit) {
         return lexicalResult;
