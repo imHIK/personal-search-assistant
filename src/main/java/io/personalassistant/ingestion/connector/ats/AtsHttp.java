@@ -36,12 +36,31 @@ public final class AtsHttp {
 
     /** GET a URL and parse the body as JSON. */
     public JsonNode getJson(String url) {
-        HttpRequest request = HttpRequest.newBuilder()
+        return send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .timeout(timeout)
                 .header("Accept", "application/json")
                 .GET()
-                .build();
+                .build(), url);
+    }
+
+    /**
+     * POST a JSON body and parse the reply as JSON.
+     *
+     * <p>Here for Workday, whose job search is a POST with the paging window in the body rather than a
+     * query string. Everything else about the call — timeout, non-2xx translation — is identical.
+     */
+    public JsonNode postJson(String url, String body) {
+        return send(HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(timeout)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build(), url);
+    }
+
+    private JsonNode send(HttpRequest request, String url) {
         HttpResponse<String> response;
         try {
             response = http.send(request, HttpResponse.BodyHandlers.ofString());

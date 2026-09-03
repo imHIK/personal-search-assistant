@@ -13,9 +13,7 @@ export type SourceType =
   | 'SLACK'
   | 'GOOGLE_DRIVE'
   | 'NOTION'
-  | 'GREENHOUSE'
-  | 'LEVER'
-  | 'ASHBY'
+  | 'JOB_BOARDS'
 
 export type KnowledgeStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ERROR' | 'DELETED'
 export type EntityStatus = 'INGESTED' | 'INDEXING' | 'INDEXED' | 'FAILED' | 'DELETED'
@@ -317,4 +315,15 @@ export interface DigestRun {
   taskOutput: string | null
   /** Why the run failed. A failed run is still recorded, so a broken digest is visible. */
   error: string | null
+}
+
+/** What a candidate company name resolves to, before it is committed to a knowledge. */
+export interface CompanyLookup {
+  company: string
+  /** Null when no supported platform hosts a board — a normal answer, not a failure. */
+  platform: string | null
+  handle: string | null
+  /** Postings on that board, before any location filter. */
+  postings: number
+  found: boolean
 }

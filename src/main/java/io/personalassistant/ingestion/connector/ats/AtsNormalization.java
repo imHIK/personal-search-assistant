@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.connector.ats;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -293,6 +294,36 @@ public final class AtsNormalization {
             case "cr", "crore", "crores" -> 10_000_000L;
             default -> 1L;
         };
+    }
+
+    /**
+     * Whether a posting's location matches one of {@code terms}, case-insensitively.
+     *
+     * <p>Shared so that a platform filtering early (to avoid per-posting work) and the connector
+     * filtering authoritatively afterwards cannot disagree — a mismatch there would drop postings the
+     * connector would have kept, invisibly.
+     *
+     * <p><strong>A blank location matches.</strong> Boards leave the field empty often enough that
+     * dropping those would lose real roles on a missing value, and nothing distinguishes an irrelevant
+     * location from an unstated one.
+     *
+     * @param terms match terms, already lowercased; empty keeps everything
+     */
+    public static boolean matchesLocation(String location, List<String> terms) {
+        if (terms == null || terms.isEmpty()) {
+            return true;
+        }
+        String trimmed = location == null ? "" : location.trim();
+        if (trimmed.isEmpty()) {
+            return true;
+        }
+        String lowered = trimmed.toLowerCase(Locale.ROOT);
+        for (String term : terms) {
+            if (lowered.contains(term)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Parse an ISO-8601 timestamp leniently; boards vary and a bad date must not fail a whole page. */

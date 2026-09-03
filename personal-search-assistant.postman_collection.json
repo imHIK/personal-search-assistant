@@ -25,6 +25,17 @@
     { "key": "llmBaseUrl", "value": "https://api.groq.com/openai/v1" },
     { "key": "llmModel", "value": "openai/gpt-oss-120b" },
     { "key": "llmApiKey", "value": "" },
+    { "key": "greenhouseBoard", "value": "groww" },
+    { "key": "greenhouseJobId", "value": "" },
+    { "key": "leverSite", "value": "paytm" },
+    { "key": "ashbyBoard", "value": "sarvam" },
+    { "key": "smartRecruitersCompany", "value": "Swiggy" },
+    { "key": "smartRecruitersPostingId", "value": "" },
+    { "key": "workdayTenant", "value": "adobe" },
+    { "key": "workdaySite", "value": "external_experienced" },
+    { "key": "workdayWd", "value": "wd5" },
+    { "key": "adzunaAppId", "value": "" },
+    { "key": "adzunaAppKey", "value": "" },
     { "key": "opensearchUrl", "value": "http://localhost:9200" },
     { "key": "chunksIndex", "value": "chunks" }
   ],
@@ -105,7 +116,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION, GREENHOUSE, LEVER, ASHBY.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS and the ATS job boards). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day, ATS boards = 3 hours) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time.\n\nretentionPeriod ages entities out, measured from createdAt (e.g. \"14d\"). null inherits: the connector default (ATS boards = 14 days), then the global app.retention.default-period, which ships BLANK. Unset at every tier means NEVER EXPIRE — that is what keeps a document corpus from deleting itself, so only feed-like sources age out."
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION, JOB_BOARDS.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS and the ATS job boards). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day, JOB_BOARDS = 3 hours) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time.\n\nretentionPeriod ages entities out, measured from createdAt (e.g. \"14d\"). null inherits: the connector default (JOB_BOARDS = 14 days), then the global app.retention.default-period, which ships BLANK. Unset at every tier means NEVER EXPIRE — that is what keeps a document corpus from deleting itself, so only feed-like sources age out."
           }
         },
         {
@@ -128,31 +139,31 @@
           }
         },
         {
-          "name": "Create knowledge - Greenhouse board",
+          "name": "Look up company job boards",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Greenhouse board\",\n  \"type\": \"GREENHOUSE\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"stripe\", \"figma\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
+              "raw": "{\n  \"companies\": [\n    \"paytm\",\n    \"databricks\",\n    \"Swiggy\",\n    \"sarvam\",\n    \"lever:cred\",\n    \"adobe/external_experienced/wd5\",\n    \"razorpay\"\n  ]\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/knowledge",
+              "raw": "{{baseUrl}}/api/connectors/job-boards/lookup",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "knowledge"]
+              "path": ["api", "connectors", "job-boards", "lookup"]
             },
-            "description": "inputs.boards lists Greenhouse board tokens — the <token> in boards.greenhouse.io/<token>. One iterable per board; each poll fetches the whole board in a single call.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
+            "description": "Which platform hosts each company, and how many postings its board holds — run this BEFORE the next request to build a companies list that is known to resolve.\n\nReach here is purely a function of how many companies you name, so this is the endpoint you spend time in: paste a batch of candidates, keep the ones that come back found.\n\nEach name is probed against Greenhouse, Lever, Ashby and SmartRecruiters in that order, first hit wins. A platform prefix (lever:cred) pins it and skips the probe. Workday is never probed — it cannot be derived from a bare name — so pass its full tenant/site/wd triple and it is verified directly.\n\nfound: false is a normal answer, not an error: it means none of the supported platforms has a board for that name. razorpay is in the sample body as a known example of one.\n\npostings is the WHOLE board, before inputs.locations is applied. Expect the Indian share to be roughly a tenth of it — databricks came back 862 here and yields 92 after an India city filter.\n\nThese are live, sequential calls to someone else's APIs. Three names took about 30 seconds; the request is capped at 50 names (400 above that, and 400 on an empty list). Nothing is written — safe to re-run."
           }
         },
         {
-          "name": "Create knowledge - Lever board",
+          "name": "Create knowledge - company job boards",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Lever board\",\n  \"type\": \"LEVER\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"netflix\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
+              "raw": "{\n  \"name\": \"India job boards\",\n  \"type\": \"JOB_BOARDS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": {\n    \"companies\": [\n      \"paytm\",\n      \"meesho\",\n      \"databricks\",\n      \"sarvam\",\n      \"lever:cred\"\n    ],\n    \"locations\": [\n      \"India\",\n      \"Bengaluru\",\n      \"Bangalore\",\n      \"Hyderabad\",\n      \"Pune\",\n      \"Mumbai\",\n      \"Gurugram\",\n      \"Noida\",\n      \"Chennai\",\n      \"Delhi\"\n    ]\n  },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"chunkingStrategy\": null,\n  \"chunkingMaxSize\": null,\n  \"chunkingOverlap\": null,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": \"14d\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -160,25 +171,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "inputs.boards lists Lever company handles — the <site> in jobs.lever.co/<site>.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
-          }
-        },
-        {
-          "name": "Create knowledge - Ashby board",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Ashby board\",\n  \"type\": \"ASHBY\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"boards\": [\"linear\"] },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"retentionPeriod\": \"14d\"\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/knowledge",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "knowledge"]
-            },
-            "description": "inputs.boards lists Ashby board names — the <name> in jobs.ashbyhq.com/<name>. Ashby is the only one of the three that may state a close date, which becomes Entity.expiresAt and beats the knowledge-level retention window.\n\nbackfillEnabled is false because these connectors are FORWARD-ONLY: a job board has no history worth walking, so no backward cursor is created either way.\n\nretentionPeriod is what removes closed postings. Boards send no tombstone when a role closes — it simply stops appearing — so entities age out on this window instead. Leave it null to inherit the connector default of 14 days.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR and lastError set, not a 4xx."
+            "description": "ONE knowledge for every company job board. inputs.companies takes company handles as they appear in the careers URL; Greenhouse, Lever, Ashby and SmartRecruiters are all probed and the platform that hosts each company is resolved once at discovery and recorded on its iterable, so grab never re-probes.\n\nPrefix an entry with a platform to pin it (lever:cred) — useful for a company mid-migration with boards on two platforms, where probe order would otherwise decide silently.\n\ninputs.locations keeps only postings whose location matches one of the terms; omit it to keep every country. LIST THE CITIES, not just \"India\" — 27 of Stripe's 36 Indian roles are filed as plain \"Bengaluru\" with no country, so the country alone keeps 3 of 36. A posting with NO location always survives (unstated is not the same as irrelevant). This is a cost control more than a correctness one: Databricks is 857 postings for 92 Indian ones, and everything kept gets parsed, chunked and embedded.\n\nbackfillEnabled is false because this connector is FORWARD-ONLY: a job board has no history worth walking.\n\nretentionPeriod is what removes closed postings — boards send no tombstone, a role just stops appearing. Leave it null to inherit the connector default of 14 days.\n\nA company that resolves to no platform is skipped and logged; activation only fails if NONE of them resolve.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR."
           }
         },
         {
@@ -860,6 +853,169 @@
               "path": ["gmail", "v1", "users", "me", "profile"]
             },
             "description": "Mirrors HttpGmailApi.getProfile — the credential-verification probe run by POST /api/connections for a GMAIL connection, and the source of the historyId that feeds the gmail:<id>;hist:<historyId> checksum. Returns { emailAddress, messagesTotal, threadsTotal, historyId }."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Job Board APIs (raw)",
+      "description": "The public job-board APIs behind the ATS connectors, called directly so you can inspect the raw JSON the connectors parse and map — same endpoints, same params.\n\nAll of these are PUBLIC AND KEYLESS except Adzuna: no Authorization header, no Connection required, which is why the ATS connectors override requiresConnection() to false.\n\nGreenhouse, Lever and Ashby return a whole board in one response (snapshot-shaped, no pagination). SmartRecruiters and Workday are paginated and are NOT yet wired into connectors — they are here so you can evaluate them before the adapters are built.\n\nCounts quoted in each request were measured on 2026-09-02 and will drift.",
+      "item": [
+        {
+          "name": "Greenhouse - list board jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://boards-api.greenhouse.io/v1/boards/{{greenhouseBoard}}/jobs?content=true",
+              "protocol": "https",
+              "host": ["boards-api", "greenhouse", "io"],
+              "path": ["v1", "boards", "{{greenhouseBoard}}", "jobs"],
+              "query": [
+                { "key": "content", "value": "true" }
+              ]
+            },
+            "description": "Exactly what GreenhouseConnector.fetchBoard calls. content=true is what makes ONE call sufficient — without it you get job stubs and each description needs a second request.\n\nThe whole board comes back in a single response: no pagination, no updated_after. That is why these connectors are snapshot-shaped and implement SourceConnector directly rather than extending a paging base.\n\nFields the normaliser reads: id, title, updated_at (the change signal), first_published, absolute_url, company_name, location.name, content (HTML-escaped).\n\nTry boards: groww, databricks, stripe, gitlab, inmobi, rubrik, mongodb."
+          }
+        },
+        {
+          "name": "Greenhouse - single job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://boards-api.greenhouse.io/v1/boards/{{greenhouseBoard}}/jobs/{{greenhouseJobId}}",
+              "protocol": "https",
+              "host": ["boards-api", "greenhouse", "io"],
+              "path": ["v1", "boards", "{{greenhouseBoard}}", "jobs", "{{greenhouseJobId}}"]
+            },
+            "description": "One posting, for inspecting the full content HTML the parser and chunker receive. Take an id from the list call above. Not used by the connector — it is here for debugging a single posting's parse."
+          }
+        },
+        {
+          "name": "Lever - list postings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.lever.co/v0/postings/{{leverSite}}?mode=json",
+              "protocol": "https",
+              "host": ["api", "lever", "co"],
+              "path": ["v0", "postings", "{{leverSite}}"],
+              "query": [
+                { "key": "mode", "value": "json" }
+              ]
+            },
+            "description": "What LeverConnector.fetchBoard calls. mode=json returns structured postings rather than rendered HTML.\n\nNOTE THE MISSING FIELD: Lever publishes createdAt but NO updated timestamp. A checksum built from createdAt alone would never move, so an edited posting would be skipped forever by change detection — the connector hashes the body as well. That is the one real difference between the three ATS connectors.\n\nFields read: id, text (title), createdAt (epoch millis), hostedUrl, categories.location/team/commitment, description (HTML), descriptionPlain.\n\nTry sites: paytm (174 India roles), meesho, cred, zeta, mindtickle, nium. A site that does not exist returns 404 with {\"ok\":false}; an empty board returns []."
+          }
+        },
+        {
+          "name": "Ashby - list jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.ashbyhq.com/posting-api/job-board/{{ashbyBoard}}?includeCompensation=true",
+              "protocol": "https",
+              "host": ["api", "ashbyhq", "com"],
+              "path": ["posting-api", "job-board", "{{ashbyBoard}}"],
+              "query": [
+                { "key": "includeCompensation", "value": "true" }
+              ]
+            },
+            "description": "What AshbyConnector.fetchBoard calls. The richest of the three: includeCompensation=true returns STRUCTURED pay bands (compensation.summaryComponents with minValue/maxValue/currencyCode), which the connector prefers over scraping prose. isRemote is stated as a real boolean rather than inferred, and closedAt — when present — becomes Entity.expiresAt and beats the knowledge-level retention window.\n\nTry boards: sarvam (62/62 India), tekion, snowflake, bureau, atlan, confluent."
+          }
+        },
+        {
+          "name": "SmartRecruiters - list postings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.smartrecruiters.com/v1/companies/{{smartRecruitersCompany}}/postings?limit=100&offset=0",
+              "protocol": "https",
+              "host": ["api", "smartrecruiters", "com"],
+              "path": ["v1", "companies", "{{smartRecruitersCompany}}", "postings"],
+              "query": [
+                { "key": "limit", "value": "100" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "PUBLIC AND KEYLESS — no auth header at all. Not yet wired into a connector; this is the platform proposed as the next adapter.\n\nPaginated on limit/offset with totalFound, unlike the three boards above which return everything at once.\n\nMeasured: Swiggy 71 postings of which 70 are in India; Freshworks 162 of which 31. Both companies are absent from Greenhouse, Lever and Ashby — this platform is how they become reachable.\n\nAn unknown company returns 200 with totalFound: 0 and an empty content array, NOT a 404 — so a resolver must check totalFound, not the status code."
+          }
+        },
+        {
+          "name": "SmartRecruiters - single posting",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.smartrecruiters.com/v1/companies/{{smartRecruitersCompany}}/postings/{{smartRecruitersPostingId}}",
+              "protocol": "https",
+              "host": ["api", "smartrecruiters", "com"],
+              "path": ["v1", "companies", "{{smartRecruitersCompany}}", "postings", "{{smartRecruitersPostingId}}"]
+            },
+            "description": "Full detail for one posting, including the job description sections the list call omits. Take an id from the list call above.\n\nRelevant to the adapter design: if the list response lacks the description, ingestion needs one call per posting rather than one per company — check this before assuming the snapshot shape applies."
+          }
+        },
+        {
+          "name": "Workday - search jobs (POST)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appliedFacets\": {},\n  \"limit\": 20,\n  \"offset\": 0,\n  \"searchText\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "https://{{workdayTenant}}.{{workdayWd}}.myworkdayjobs.com/wday/cxs/{{workdayTenant}}/{{workdaySite}}/jobs",
+              "protocol": "https",
+              "host": ["{{workdayTenant}}", "{{workdayWd}}", "myworkdayjobs", "com"],
+              "path": ["wday", "cxs", "{{workdayTenant}}", "{{workdaySite}}", "jobs"]
+            },
+            "description": "PUBLIC AND KEYLESS, but a POST with a JSON body — the existing AtsHttp helper only does GET, so this platform needs one new method.\n\nGenuinely paginated: limit caps at 20 while tenants hold 200-300+, so a grab must loop on offset until it drains. Response carries total and jobPostings[] with title, locationsText and externalPath.\n\nTHE URL IS THE HARD PART. It needs a tenant + site + wd-number triple, and none of the three is guessable — 13 of 22 blind guesses failed even for companies that certainly use Workday (Accenture, Walmart, IBM, Visa, Qualcomm). Read the real URL off the company's careers page.\n\nVerified triples: adobe/external_experienced/wd5 (133 India roles), nvidia/nvidiaexternalcareersite/wd5, salesforce/External_Career_Site/wd12, micron/External/wd1, mastercard/CorporateCareers/wd1, target/targetcareers/wd5, hpe/Jobsathpe/wd5.\n\nA wrong site or wd number returns HTML or a 422, not a clean 404."
+          }
+        },
+        {
+          "name": "Workday - India country facet",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appliedFacets\": {\n    \"locationCountry\": [\"c4f78be1a8f14da0ab49ce1162348a5e\"]\n  },\n  \"limit\": 20,\n  \"offset\": 0,\n  \"searchText\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "https://{{workdayTenant}}.{{workdayWd}}.myworkdayjobs.com/wday/cxs/{{workdayTenant}}/{{workdaySite}}/jobs",
+              "protocol": "https",
+              "host": ["{{workdayTenant}}", "{{workdayWd}}", "myworkdayjobs", "com"],
+              "path": ["wday", "cxs", "{{workdayTenant}}", "{{workdaySite}}", "jobs"]
+            },
+            "description": "Server-side filtering to India, which would avoid ingesting the ~90% of a tenant's postings that are other countries.\n\nIT IS NOT RELIABLE. That GUID is India on Adobe (returns 133 roles) but returns total: null on NVIDIA and Salesforce — the facet ids are not dependably cross-tenant. That is why the plan filters location client-side instead; this request is here so you can check whether a given tenant happens to support it.\n\nTo find a tenant's real facet ids, POST with an empty appliedFacets and read the facets[] block in the response."
+          }
+        },
+        {
+          "name": "Adzuna - India search",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.adzuna.com/v1/api/jobs/in/search/1?app_id={{adzunaAppId}}&app_key={{adzunaAppKey}}&results_per_page=20&what=backend%20engineer&where=Bengaluru&sort_by=date",
+              "protocol": "https",
+              "host": ["api", "adzuna", "com"],
+              "path": ["v1", "api", "jobs", "in", "search", "1"],
+              "query": [
+                { "key": "app_id", "value": "{{adzunaAppId}}" },
+                { "key": "app_key", "value": "{{adzunaAppKey}}" },
+                { "key": "results_per_page", "value": "20" },
+                { "key": "what", "value": "backend engineer" },
+                { "key": "where", "value": "Bengaluru" },
+                { "key": "sort_by", "value": "date" }
+              ]
+            },
+            "description": "AGGREGATOR, not an ATS — indexes postings copied from many sources rather than serving one company's own board. Needs a free API key from developer.adzuna.com; set adzunaAppId and adzunaAppKey.\n\nThe 'in' path segment is the India endpoint and is confirmed live: with dummy NON-EMPTY credentials it returns a clean {\"exception\":\"AUTH_FAIL\"} rather than a 404.\n\nLeaving adzunaAppId/adzunaAppKey blank gives an HTML 400 instead, which looks like a broken request — put any placeholder value in both to see the real auth error.\n\nNot implemented. It is tracked as the breadth option once the ATS platforms are in, and would be the first connector in the repo needing outbound rate limiting — nothing throttles HTTP today (PermitService caps lease concurrency, not request rate).\n\nPaginates by page number in the PATH (.../search/1, /2, /3), which is why it would extend TokenWindowGrabber with the page number as the token rather than the snapshot base."
           }
         }
       ]

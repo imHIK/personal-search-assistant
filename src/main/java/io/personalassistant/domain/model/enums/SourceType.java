@@ -11,7 +11,10 @@ public enum SourceType {
     SLACK,
     GOOGLE_DRIVE,
     NOTION,
-    GREENHOUSE,
-    LEVER,
-    ASHBY
+    // Company job boards across every supported applicant-tracking platform (Greenhouse, Lever,
+    // Ashby). ONE type, not one per platform: which ATS a company uses is an implementation detail of
+    // fetching, resolved per company in JobBoardsConnector.discover and carried on the iterable.
+    // Public, unauthenticated and snapshot-shaped — a feed rather than a corpus, so it is the
+    // connector that opts into a retention window.
+    JOB_BOARDS
 }

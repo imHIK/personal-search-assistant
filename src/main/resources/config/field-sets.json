@@ -19,17 +19,7 @@
           "title",
           "headingPath"
         ],
-        "GREENHOUSE": [
-          "title",
-          "company",
-          "location"
-        ],
-        "LEVER": [
-          "title",
-          "company",
-          "location"
-        ],
-        "ASHBY": [
+        "JOB_BOARDS": [
           "title",
           "company",
           "location"

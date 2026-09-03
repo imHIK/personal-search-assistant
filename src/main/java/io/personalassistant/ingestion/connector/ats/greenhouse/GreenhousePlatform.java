@@ -3,10 +3,8 @@ package io.personalassistant.ingestion.connector.ats.greenhouse;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
-import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
-import io.personalassistant.ingestion.connector.ats.SnapshotBoardConnector;
+import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
@@ -14,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 
 /**
  * Greenhouse job-board connector. One iterable per board token (the {@code <token>} in
@@ -22,7 +21,7 @@ import java.util.Map;
  * {@link SnapshotBoardConnector}.
  */
 @ApplicationScoped
-public class GreenhouseConnector extends SnapshotBoardConnector {
+public class GreenhousePlatform implements BoardPlatform {
 
     /**
      * Preference order when the same role is found on several sources. A direct ATS board is the
@@ -33,25 +32,33 @@ public class GreenhouseConnector extends SnapshotBoardConnector {
     private final GreenhouseApi api;
 
     @Inject
-    public GreenhouseConnector(GreenhouseApi api) {
+    public GreenhousePlatform(GreenhouseApi api) {
         this.api = api;
     }
 
     @Override
-    public SourceType type() {
-        return SourceType.GREENHOUSE;
+    public String id() {
+        return "greenhouse";
     }
 
     @Override
-    protected void verifyBoard(String boardId) {
-        JsonNode response = api.listJobs(boardId);
-        if (response == null || !response.has("jobs")) {
-            throw new AtsApiException("Greenhouse board '" + boardId + "' returned no jobs array");
+    public OptionalInt countPostings(String handle) {
+        try {
+            JsonNode response = api.listJobs(handle);
+            if (response == null || !response.has("jobs")) {
+                return OptionalInt.empty();
+            }
+            return OptionalInt.of(response.path("jobs").size());
+        } catch (RuntimeException e) {
+            // A miss is the normal outcome for all but one platform, so it must not propagate.
+            return OptionalInt.empty();
         }
     }
 
     @Override
-    protected List<RawItem> fetchBoard(String boardId) {
+    public List<RawItem> fetch(String boardId, List<String> locationHints) {
+        // Hint ignored: one request returns the whole board either way, so filtering
+        // early would save nothing. The connector filters what comes back.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
@@ -85,6 +92,7 @@ public class GreenhouseConnector extends SnapshotBoardConnector {
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", boardId);
+        metadata.put("platform", id());
         metadata.put("sourceRank", SOURCE_RANK);
         metadata.put("remote", AtsNormalization.isRemote(location, descriptionText));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));

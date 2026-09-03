@@ -18,9 +18,7 @@ resume from where it stopped.
 | Local filesystem | `LOCAL_FS` | `localfs.LocalFsConnector` | none | root + one per sub-directory |
 | Gmail | `GMAIL` | `google.gmail.GmailConnector` | required (OAuth) | all-mail, or one per configured label |
 | Google Drive | `GOOGLE_DRIVE` | `google.drive.GoogleDriveConnector` | required (OAuth) | one per folder (tree walked at discovery) |
-| Greenhouse | `GREENHOUSE` | `ats.greenhouse.GreenhouseConnector` | none (public board) | one per board token |
-| Lever | `LEVER` | `ats.lever.LeverConnector` | none (public board) | one per company handle |
-| Ashby | `ASHBY` | `ats.ashby.AshbyConnector` | none (public board) | one per board name |
+| Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Workday |
 
 ## Connections (credentials, separated from knowledges)
 
@@ -130,32 +128,166 @@ binary files are downloaded to a local scratch dir (`app.ingestion.google-drive.
 referenced by `fileRef` so the existing Tika path parses them exactly like a local `FILE`. Files over
 `max-file-bytes` and unsupported native types (forms, maps, drawings) are skipped.
 
-## ATS job boards (Greenhouse, Lever, Ashby)
+## Company job boards (`JOB_BOARDS`)
 
-**Inputs** (`knowledge.inputs`): `boards` — a list of board identifiers (or a single string). These
-are the handles in `boards.greenhouse.io/<token>`, `jobs.lever.co/<site>` and
-`jobs.ashbyhq.com/<name>`. Each becomes one iterable.
+**Inputs**: `companies` — the companies to watch, plus optional `locations` (below). One knowledge, one
+list; you widen the net by adding names.
 
-All three share `ats.SnapshotBoardConnector`, because all three are **snapshot-shaped**: one request
-returns the entire current board. There is no `updated_after` parameter, no continuation token and no
-meaningful pagination, so neither `TokenWindowGrabber` nor `TimeWindowGrabber` applies and they
-implement `SourceConnector` directly, as `LocalFsConnector` does. `grab` ignores the seed `TimeWindow`
-and returns everything in one page with `hasMore=false`.
+**A company is an iterable, not a platform.** Which ATS a company uses is an implementation detail of
+fetching, and requiring someone to know it before they can watch a company makes widening the net
+needlessly expensive — Meesho and CRED are on Lever, Databricks on Greenhouse, Tekion on Ashby. So
+there is one `SourceType` and one connector, with a `BoardPlatform` bean per platform behind it.
 
-That sounds like the incremental machinery is wasted, but the expensive half still works: change
-detection in `IngestionRunner.persistItem` skips any posting whose checksum is unchanged and is
-already `INDEXED`, so a poll costs one HTTP call plus N cheap Mongo lookups.
+`discover()` resolves each name by probing every platform in turn and records the answer in the
+iterable's `attributes` (`platform`, `handle`). The framework snapshots those onto the `Cursor`, so
+`grab()` reads the platform straight back and never re-probes — which is what the attributes mechanism
+exists for. An entry may pin a platform explicitly as `platform:handle` (`lever:paytm`), which matters
+for a company mid-migration with boards on two platforms, where probe order would otherwise decide
+silently.
 
-Two consequences worth knowing:
+An unresolvable company is skipped by `discover` and logged. `verify` throws only when **every** name
+fails: all of them missing is a typo or an outage, whereas some of them missing is normal — plenty of
+companies are on none of these platforms.
 
-- **Forward-only.** `supportedDirections()` is `FORWARD` alone. Backward cursors exist to walk history
-  below the anchor, and a job board has no history worth walking — a posting old enough to sit below
-  the anchor is filled or withdrawn.
-- **These are the connectors that opt into retention.** Boards send no tombstone when a role closes;
-  it simply stops appearing. `defaultRetention()` returns 14 days against a 3-hour
-  `defaultSchedule()` — comfortably longer than the cadence, because an item is re-created by the next
-  walk if it still exists, so a short window would only churn re-embeddings. See
-  [`knowledge-lifecycle.md`](./knowledge-lifecycle.md).
+### Looking a company up before adding it
+
+`POST /api/connectors/job-boards/lookup` takes candidate names and reports, per name, the platform that
+hosts it, the handle and how many postings that board holds. The console renders it above the companies
+field, driven by a `companyResolver` flag on the connector descriptor rather than by any component
+branching on `SourceType`.
+
+It exists because **reach here is a function of how many companies are named**, so the list is edited
+constantly and a name that resolves to nothing is invisible otherwise — it would be a line in the log of
+a knowledge that was already created. `found: false` is a normal answer, not an error.
+
+The counts are the whole board, before `locations`. That is deliberately the pre-filter number: it is
+what the connector will actually fetch, so it says what a company costs, and the Indian share is roughly
+a tenth of it.
+
+Probing is live and sequential across platforms, so it is slow — three names took ~30s, most of it spent
+on the one that resolved nowhere and therefore paid for every probe. Hence the 50-name cap: an unbounded
+list would be a long-running request against APIs that are someone else's to pay for.
+
+### Adding a platform
+
+Add an `@ApplicationScoped` bean implementing `BoardPlatform` (`id()`, `countPostings()`, `fetch()`),
+discovered by CDI and registered nowhere — the same shape as connectors, parsers and chunking
+strategies. `countPostings` must return an empty `OptionalInt` rather than throw for a miss, since
+resolution probes every platform and a miss is the normal outcome for all but one; `hasBoard` is a
+default method over it.
+
+It returns a **count**, not a boolean, because every platform's existence check already knew one —
+Greenhouse, Lever and Ashby from the listing size, SmartRecruiters from `totalFound`, Workday from
+`total`. Throwing it away and re-fetching the board to answer "how big is it?" would double the
+requests for a number already in hand, which is what makes the lookup endpoint below cheap.
+
+### Snapshot-shaped
+
+Every supported platform returns the entire current board in one request — no `updated_after`, no
+continuation token, no meaningful pagination — so `JobBoardsConnector` implements `SourceConnector`
+directly, as `LocalFsConnector` does. The seed `TimeWindow` is ignored and every grab returns one page
+with `hasMore=false`. The expensive half of the machinery still works: change detection skips any
+posting whose checksum is unchanged and already `INDEXED`.
+
+Backward cursors are not supported — a job board has no history worth walking. A closed posting simply
+stops appearing; boards send no tombstone, which is why this connector opts into a 14-day retention
+window against a 3-hour poll.
+
+Per-platform quirks:
+
+- **Greenhouse** — `?content=true` makes one call sufficient. `updated_at` is the change signal.
+- **Lever** — publishes **no update timestamp**, only `createdAt`. A checksum from `createdAt` alone
+  would never move, so an edited posting would be skipped forever (an invariant-3 violation). The
+  checksum hashes the body too.
+- **Ashby** — the richest: states `isRemote` structurally, publishes real pay bands with
+  `includeCompensation`, and is the only one that may carry a close date, which becomes
+  `Entity.expiresAt` and beats the knowledge-level retention window.
+- **SmartRecruiters** — the only platform that pays **per posting**, and the only one that reaches
+  Swiggy (71 postings, 70 in India) and Freshworks. Two consequences below.
+
+#### SmartRecruiters costs 1 + N requests
+
+Its listing carries metadata only — no description — so every posting needs a second call. A board of
+N postings therefore costs `1 + N` requests where Greenhouse costs 1, and change detection cannot help:
+the runner only skips a posting *after* the connector has produced a `RawItem`, which requires the text.
+
+Two things keep it bounded:
+
+- **The location hint is applied to the listing first**, so only survivors are fetched in full.
+  Measured live: Freshworks is 157 postings, and filtering on `india` first made **47 detail calls
+  instead of 157**. Take the hint seriously when adding a per-posting platform — this is the difference
+  between a viable connector and one that hammers a public API eight times a day.
+- **A failed detail fetch skips that posting**, not the board. A posting withdrawn between the listing
+  and the fetch must not cost the other 156.
+
+Expect it to be slow: 47 sequential detail calls took ~14s. That is fine behind a lease and a 3-hour
+poll, but it is an order of magnitude slower than the single-call platforms.
+
+Two API quirks worth knowing:
+
+- **An unknown company returns 200 with `totalFound: 0`**, not a 404 — so `hasBoard` reads the field.
+  Treating the status code as the answer would resolve every company ever typed to this platform.
+- **No update timestamp is published.** `releasedDate` is when the posting first went live and does not
+  move on an edit, so — as with Lever — the checksum hashes the body, or an edited posting would be
+  skipped forever (invariant 3).
+
+#### Workday is addressed by a triple, and cannot use the hint
+
+A Workday site is a `tenant/site/wd` triple (`adobe/external_experienced/wd5`) or the career-site URL,
+and **none of the three parts is guessable** — 13 of 22 blind attempts failed on companies that
+certainly use Workday. So `WorkdaySite.parse` returning empty is what tells the connector a bare
+company name is not a Workday site, and `hasBoard` answers `false` for one **without any network
+call**. Resolution asks every platform about every name; a speculative POST per name would slow adding
+companies for no possible benefit.
+
+Search is a `POST` with the paging window in the body — the reason `AtsHttp` has `postJson` — and pages
+at 20 against sites holding several hundred (Adobe: 742).
+
+**It deliberately ignores the location hint**, unlike SmartRecruiters. Its search result is
+systematically less complete than its detail: a bare city with no country (`"Bengaluru"`), and for a
+multi-site role a *count* with no place at all (`"5 Locations"`). Filtering on that would drop a
+Bengaluru role whenever the filter names "India", and drop every multi-site role outright — the same
+silent miss already measured on Stripe. So everything is fetched and the connector filters the full
+locations, which is why the detail's `location` + `additionalLocations` + `country.descriptor` are
+joined into one string: without the country appended, a filter naming "India" would never match a role
+in Bengaluru.
+
+That makes it the most expensive platform here — `1 + N` over the *whole* site, where SmartRecruiters
+pays only for what survives the hint. Add a Workday site deliberately. What the location filter still
+bounds is everything downstream: entities, chunks and embeddings.
+
+`postedOn` is prose ("Posted Today"), so `startDate` is the only usable date, and as with Lever and
+SmartRecruiters the checksum hashes the body.
+
+
+### Filtering by location (`inputs.locations`)
+
+Optional list of match terms; empty keeps everything. Applied in `JobBoardsConnector.grab()` rather
+than in the platform's `fetch`, because none of these APIs takes a location parameter — the whole board arrives
+either way and the saving is entirely downstream, in the upsert, parse, chunk and **embed** that every
+surviving posting pays for. Matching is case-insensitive substring against `metadata.location`.
+
+It matters mostly for cost. Measured on the live boards: Databricks carries **857 postings for 92
+Indian ones (11%)**, Stripe **592 for 36 (6%)**. Without the filter, roughly nine tenths of everything
+ingested is embedded for a country the user will never apply to — and embeddings are the scarcest
+resource in the pipeline.
+
+Two behaviours worth knowing:
+
+- **A posting with no location survives.** Boards leave the field blank often enough that dropping
+  those would lose real roles on a missing value, and nothing distinguishes an irrelevant location from
+  an unstated one. Same rule as `IngestionJob.connectionUnusable`: any doubt runs it. Tombstones are
+  never filtered either — dropping one would strand the entity it exists to remove.
+- **The country name alone is not enough.** 27 of Stripe's 36 Indian roles are filed as plain
+  `Bengaluru` with no country, so `["India"]` keeps 3 of 36 — a 92% silent miss. List the cities. And
+  note that `Remote` is blunt: it matches `Remote - US` too, and adding it to Stripe pulled in ~100
+  non-Indian roles.
+
+`membershipSignature` covers `locations` and deliberately excludes `companies`. A company is a
+discovery-set dimension — each is its own iterable, so adding one is handled by discover-reconcile and
+including it would reset every surviving company's cursor on an unrelated edit. `locations` is the
+opposite: it moves the membership boundary *inside* each iterable, exactly like `GmailConnector`'s
+query, so widening it must re-walk the boards or newly-matching postings are silently never picked up.
 
 Compensation parsing handles Indian notation (Indian digit grouping, `LPA`, lakh, crore) as well as
 the western forms, and always records the currency it read — `compMin`/`compMax` are plain numbers in

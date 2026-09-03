@@ -65,6 +65,15 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
 6. **Auth & access control** (M–L). None today; `DESCRIPTION.md` calls it "critical for private
    personal data."
 
+- **Adzuna as a job aggregator** (S). Free keyed API with a live India endpoint. Deferred, not
+  rejected: five direct ATS platforms now give both better data and more breadth than an aggregator
+  (`docs/job-discovery.md` has the measured comparison), and Adzuna does not reach Naukri's inventory
+  either. Its real value is *discovering companies not already on the watchlist*, which then get added
+  as `JOB_BOARDS` companies. It would be the **first connector needing outbound rate limiting** —
+  there is none in the codebase, and `docs/knowledge-lifecycle.md` puts per-source rate limiting inside
+  the connector's `grab`, not in the shared HTTP layer. Note this is unrelated to the *inbound* rate
+  limiting in #17. Give it a low `sourceRank` so duplicate collapsing keeps the direct board listing.
+
 ## Tier 3 — Productionization
 
 7. **Observability** (S–M). Micrometer metrics + OpenTelemetry tracing across the

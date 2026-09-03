@@ -281,4 +281,16 @@ export const labels = {
     runFailed: 'This run failed',
     createFailed: 'Could not create the digest',
   },
+
+  jobBoards: {
+    lookupTitle: 'Not sure which companies are on a job board?',
+    lookupHint:
+      'Paste names and check before adding them. Greenhouse, Lever, Ashby and SmartRecruiters are searched; Workday needs its full triple.',
+    lookupPlaceholder: 'paytm\ndatabricks\nSwiggy\nrazorpay',
+    check: (n: number) => (n === 0 ? 'Check' : `Check ${n}`),
+    checking: 'Checking…',
+    addFound: (n: number) => `Add ${n}`,
+    notFound: 'not on a supported platform',
+    postings: (n: number) => `${n} ${n === 1 ? 'posting' : 'postings'}`,
+  },
 } as const

@@ -1,20 +1,12 @@
 package io.personalassistant.ingestion.connector.ats.ashby;
 
-import io.personalassistant.domain.model.CursorPosition;
-import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
-import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabContext;
-import io.personalassistant.ingestion.connector.TimeWindow;
-import io.personalassistant.ingestion.connector.ats.SnapshotBoardConnector;
-import io.personalassistant.testsupport.TestData;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-class AshbyConnectorTest {
+class AshbyPlatformTest {
 
     private static final String BOARD = """
             {"jobs":[
@@ -30,15 +22,11 @@ class AshbyConnectorTest {
                "descriptionPlain":"Hire people."}
             ]}""";
 
-    private final AshbyConnector connector =
-            new AshbyConnector(new FakeAshbyApi().withBoard("acme", BOARD));
+    private final AshbyPlatform platform =
+            new AshbyPlatform(new FakeAshbyApi().withBoard("acme", BOARD));
 
     private List<RawItem> grab() {
-        Knowledge kn = TestData.knowledge("kn_1", SourceType.ASHBY, Instant.now(),
-                Map.of(SnapshotBoardConnector.BOARDS_INPUT, List.of("acme")));
-        return connector.grab(new GrabContext(kn, "acme",
-                Map.of(SnapshotBoardConnector.BOARD_ATTRIBUTE, "acme"),
-                CursorPosition.start(), TimeWindow.atOrAfter(Instant.EPOCH), 100)).items();
+        return platform.fetch("acme", List.of());
     }
 
     @Test

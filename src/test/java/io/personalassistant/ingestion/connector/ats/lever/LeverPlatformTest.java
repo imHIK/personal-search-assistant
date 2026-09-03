@@ -1,20 +1,12 @@
 package io.personalassistant.ingestion.connector.ats.lever;
 
-import io.personalassistant.domain.model.CursorPosition;
-import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
-import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.GrabContext;
-import io.personalassistant.ingestion.connector.TimeWindow;
-import io.personalassistant.ingestion.connector.ats.SnapshotBoardConnector;
-import io.personalassistant.testsupport.TestData;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-class LeverConnectorTest {
+class LeverPlatformTest {
 
     private static String site(String description) {
         return """
@@ -25,12 +17,8 @@ class LeverConnectorTest {
     }
 
     private RawItem grabOne(String description) {
-        LeverConnector connector = new LeverConnector(new FakeLeverApi().withSite("acme", site(description)));
-        Knowledge kn = TestData.knowledge("kn_1", SourceType.LEVER, Instant.now(),
-                Map.of(SnapshotBoardConnector.BOARDS_INPUT, List.of("acme")));
-        return connector.grab(new GrabContext(kn, "acme",
-                Map.of(SnapshotBoardConnector.BOARD_ATTRIBUTE, "acme"),
-                CursorPosition.start(), TimeWindow.atOrAfter(Instant.EPOCH), 100)).items().get(0);
+        return new LeverPlatform(new FakeLeverApi().withSite("acme", site(description)))
+                .fetch("acme", List.of()).get(0);
     }
 
     @Test

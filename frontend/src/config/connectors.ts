@@ -22,6 +22,11 @@ export interface ConnectorDescriptor {
   implemented: boolean
   /** Whether an Account must be selected before this source can be created. */
   requiresConnection: boolean
+  /**
+   * Offer the company lookup helper on this connector's form. A descriptor flag rather than a check
+   * on the id, so no component branches on a SourceType.
+   */
+  companyResolver?: boolean
   /** Written into `Knowledge.inputs`. */
   inputFields: FieldSpec[]
   /** Written into `Connection.auth` — rendered masked. */
@@ -160,60 +165,28 @@ export const connectors: ConnectorDescriptor[] = [
     },
   },
   {
-    id: 'GREENHOUSE',
-    label: 'Greenhouse job boards',
-    description: 'Open roles from company career pages hosted on Greenhouse.',
+    id: 'JOB_BOARDS',
+    label: 'Company job boards',
+    description: 'Open roles from company career pages. Add companies by name — the platform they use is worked out for you.',
     icon: Briefcase,
     implemented: true,
     requiresConnection: false,
+    companyResolver: true,
     inputFields: [
       {
-        name: 'boards',
+        name: 'companies',
         kind: 'list',
-        label: 'Board tokens',
-        hint: 'One per line. The name in boards.greenhouse.io/<name>.',
-        placeholder: 'stripe',
+        label: 'Companies',
+        hint: 'One per line, as it appears in their careers URL — e.g. paytm, databricks, sarvam. Greenhouse, Lever, Ashby and SmartRecruiters are all searched. Prefix with a platform to pin it: lever:paytm. Workday needs its full triple: adobe/external_experienced/wd5.',
+        placeholder: 'paytm\ndatabricks\nsarvam',
         required: true,
       },
-    ],
-    authFields: [],
-    configFields: [],
-  },
-  {
-    id: 'LEVER',
-    label: 'Lever job boards',
-    description: 'Open roles from company career pages hosted on Lever.',
-    icon: Briefcase,
-    implemented: true,
-    requiresConnection: false,
-    inputFields: [
       {
-        name: 'boards',
+        name: 'locations',
         kind: 'list',
-        label: 'Company handles',
-        hint: 'One per line. The name in jobs.lever.co/<name>.',
-        placeholder: 'netflix',
-        required: true,
-      },
-    ],
-    authFields: [],
-    configFields: [],
-  },
-  {
-    id: 'ASHBY',
-    label: 'Ashby job boards',
-    description: 'Open roles from company career pages hosted on Ashby.',
-    icon: Briefcase,
-    implemented: true,
-    requiresConnection: false,
-    inputFields: [
-      {
-        name: 'boards',
-        kind: 'list',
-        label: 'Board names',
-        hint: 'One per line. The name in jobs.ashbyhq.com/<name>.',
-        placeholder: 'linear',
-        required: true,
+        label: 'Only these locations',
+        hint: 'One per line. LIST THE CITIES, not just the country — most boards file a role as "Bengaluru" with no country, so "India" on its own misses them. Leave empty to keep every country.',
+        placeholder: 'India\nBengaluru\nBangalore\nHyderabad\nPune\nMumbai\nGurugram\nNoida\nChennai\nDelhi',
       },
     ],
     authFields: [],

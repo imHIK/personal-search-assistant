@@ -3,10 +3,8 @@ package io.personalassistant.ingestion.connector.ats.lever;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
-import io.personalassistant.domain.model.enums.SourceType;
-import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
-import io.personalassistant.ingestion.connector.ats.SnapshotBoardConnector;
+import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
@@ -14,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 
 /**
  * Lever job-board connector. One iterable per company handle (the {@code <site>} in
@@ -24,32 +23,40 @@ import java.util.Map;
  * {@link #checksumOf} for what that forces.
  */
 @ApplicationScoped
-public class LeverConnector extends SnapshotBoardConnector {
+public class LeverPlatform implements BoardPlatform {
 
     private static final int SOURCE_RANK = 100;
 
     private final LeverApi api;
 
     @Inject
-    public LeverConnector(LeverApi api) {
+    public LeverPlatform(LeverApi api) {
         this.api = api;
     }
 
     @Override
-    public SourceType type() {
-        return SourceType.LEVER;
+    public String id() {
+        return "lever";
     }
 
     @Override
-    protected void verifyBoard(String boardId) {
-        JsonNode response = api.listPostings(boardId);
-        if (response == null || !response.isArray()) {
-            throw new AtsApiException("Lever site '" + boardId + "' did not return a postings array");
+    public OptionalInt countPostings(String handle) {
+        try {
+            JsonNode response = api.listPostings(handle);
+            if (response == null || !response.isArray() || response.isEmpty()) {
+                return OptionalInt.empty();
+            }
+            return OptionalInt.of(response.size());
+        } catch (RuntimeException e) {
+            // A miss is the normal outcome for all but one platform, so it must not propagate.
+            return OptionalInt.empty();
         }
     }
 
     @Override
-    protected List<RawItem> fetchBoard(String boardId) {
+    public List<RawItem> fetch(String boardId, List<String> locationHints) {
+        // Hint ignored: one request returns the whole board either way, so filtering
+        // early would save nothing. The connector filters what comes back.
         JsonNode postings = api.listPostings(boardId);
         List<RawItem> items = new ArrayList<>();
         for (JsonNode posting : postings) {
@@ -83,6 +90,7 @@ public class LeverConnector extends SnapshotBoardConnector {
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", boardId);
+        metadata.put("platform", id());
         metadata.put("sourceRank", SOURCE_RANK);
         metadata.put("remote", AtsNormalization.isRemote(location, descriptionText)
                 || "remote".equalsIgnoreCase(categories.path("commitment").asText("")));

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
 import type { CreateKnowledgeBody, SourceType } from '@/api/types'
 import { SchemaForm, type FormValues } from '@/components/SchemaForm'
+import { CompanyLookup } from './CompanyLookup'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Field, Input, Select } from '@/components/ui/Input'
@@ -236,7 +237,13 @@ export function AddSourcePage() {
             <CardHeader>
               <CardTitle>{labels.wizard.stepInputs}</CardTitle>
             </CardHeader>
-            <CardBody>
+            <CardBody className="space-y-4">
+              {descriptor.companyResolver && (
+                <CompanyLookup
+                  current={Array.isArray(inputs.companies) ? (inputs.companies as string[]) : []}
+                  onAdd={(companies) => setInputs({ ...inputs, companies })}
+                />
+              )}
               <SchemaForm
                 fields={descriptor.inputFields}
                 values={inputs}

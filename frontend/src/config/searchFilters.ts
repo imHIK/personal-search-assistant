@@ -33,7 +33,7 @@ export interface SearchFilterSpec {
   sourceTypes?: SourceType[]
 }
 
-const jobBoards: SourceType[] = ['GREENHOUSE', 'LEVER', 'ASHBY']
+const jobBoards: SourceType[] = ['JOB_BOARDS']
 
 export const searchFilters: SearchFilterSpec[] = [
   {
