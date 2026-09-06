@@ -297,3 +297,31 @@ deliberate choice rather than a default picked to keep a collection small.
 
 **Candidate approach:** keep the last N runs for display, plus a separate compacted "seen" set per
 digest that is appended to rather than recomputed.
+
+---
+
+## L9 — Rate-limit counters are per-process and lost on restart
+
+**Area:** Outbound rate limiting · `common.ratelimit.SlidingWindowRateLimiter`
+
+**What:** The rolling windows and the `Retry-After` pauses live in a `ConcurrentHashMap` inside one
+`@ApplicationScoped` bean. Two consequences follow. A restart begins with every window empty, so the
+instant after a restart the app may send one full burst beyond what the window should have allowed.
+And a second node would keep its own counters, so an *n*-node deployment enforces roughly *n* times the
+configured rate.
+
+The *policy* is not affected — that is stored on the connection in Mongo, or in `application.properties`
+— only the counters are.
+
+**Impact:** Low today, and deliberately so. This is the same single-node assumption `InMemoryPermitService`
+already makes (invariant 7), and the deployment is single-node; a one-off burst after a restart is well
+inside what any published quota tolerates. It becomes real the moment a second replica is added, which
+would also break permits.
+
+**Why we left it:** persisting a counter that changes on every outbound call would put a write on the hot
+path of every request, to protect against an event (restart) that costs at most one window's worth of
+allowance. The `RateLimiter` port exists precisely so this can be swapped without touching a caller.
+
+**Candidate approach:** a Redis-backed `RateLimiter` (a Lua sorted-set window, or `INCR` plus `EXPIRE`
+if the fixed-window approximation is acceptable), introduced at the same time as the Redis `PermitService` the concurrency side already
+anticipates — they share the same trigger and should not be done separately.

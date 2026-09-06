@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.job;
 
 import io.personalassistant.common.Errors;
 import io.personalassistant.common.id.Ids;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Entity;
@@ -57,6 +58,9 @@ public class IngestionRunner {
     @ConfigProperty(name = "app.ingestion.retry-limit", defaultValue = "5")
     public int retryLimit;
 
+    @ConfigProperty(name = "app.ratelimit.max-deferrals", defaultValue = "20")
+    public int maxDeferrals;
+
     @Inject
     public IngestionRunner(ConnectorRegistry connectors, EntityRepository entities,
                            CursorRepository cursors) {
@@ -106,13 +110,55 @@ public class IngestionRunner {
             }
             // Hit the batch cap with more pages remaining → re-pick next tick.
             cursors.release(cursor.id(), worker, CursorStatus.AVAILABLE);
+        } catch (RateLimitedException e) {
+            defer(cursor, worker, e);
         } catch (RuntimeException e) {
             int retryCount = cursor.retry().count() + 1;
             CursorStatus resting = retryCount > retryLimit ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
             LOG.log(Level.WARNING, "Ingestion failed for cursor " + cursor.id()
                     + " (attempt " + retryCount + ", resting " + resting + ")", e);
-            cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e));
+            cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e), null);
         }
+    }
+
+    /**
+     * A rate-limited cursor is <em>held</em>, not failed: it rests {@code RATE_LIMITED} with the
+     * reopening instant the limiter computed written as {@code nextAttemptAt}, and the claim filter
+     * simply stops excluding it once that passes. No sweeper job flips it back — the timestamp is the
+     * only state, so nothing can strand the cursor by dying.
+     *
+     * <p>The status is separate from {@code AVAILABLE} for the user's sake as much as the loop's.
+     * Resting {@code AVAILABLE} meant a throttled cursor was re-picked every poll tick — cheap, since
+     * {@code acquire} throws before sleeping and before any socket is opened, but indistinguishable in
+     * the console from healthy work, and it burned one deferral per tick rather than one per genuine
+     * reopening. Throttling is the one failure whose fix is usually the user's (raise the account's
+     * limit), which it can only be if they can see it.
+     *
+     * <p>Replaying the page is safe by construction — {@code grab} is stateless and idempotent, and all
+     * pagination state lives on the cursor (invariant 4).
+     *
+     * <p>Counted against {@code app.ratelimit.max-deferrals}, not {@code retry-limit}: being throttled
+     * is the limiter working, not the source failing, and charging it to the ordinary retry budget would
+     * park a healthy cursor {@code FAILED} after five throttled attempts. Now that each deferral is a
+     * real reopening rather than a 30-second tick, that budget is a slow backstop for a limit set to
+     * something unsatisfiable, not a ten-minute trap. Dead-lettering writes a null {@code nextAttemptAt}:
+     * {@code FAILED} is outside the claim filter entirely, and leaving an instant behind would only be a
+     * stale value for {@code retry-failed} to trip over.
+     */
+    private void defer(Cursor cursor, String worker, RateLimitedException e) {
+        int count = cursor.retry().count() + 1;
+        boolean dead = count > maxDeferrals;
+        CursorStatus resting = dead ? CursorStatus.FAILED : CursorStatus.RATE_LIMITED;
+        String reason = "Rate limited on " + e.key() + "; will retry after " + e.retryAt()
+                + " (" + count + " consecutive deferrals)";
+        if (dead) {
+            LOG.warning("Cursor " + cursor.id() + " has been rate limited " + count
+                    + " times in a row on " + e.key() + "; parking it FAILED. Raise the limit on that"
+                    + " account, or app.ratelimit.max-deferrals.");
+        } else {
+            LOG.fine(() -> reason + " for cursor " + cursor.id());
+        }
+        cursors.recordFailure(cursor.id(), worker, resting, count, reason, dead ? null : e.retryAt());
     }
 
     /**
@@ -143,14 +189,24 @@ public class IngestionRunner {
             existing.ifPresent(e -> entities.markDeleted(e.id(), Instant.now()));
             return;
         }
-        // Change detection: skip unchanged items that are already up to date. The skip must still
-        // touch the generation mark — otherwise a valid, unchanged file that a membership re-walk
-        // re-saw would later look stale (lastSeenGeneration frozen below the knowledge's current
-        // syncGeneration). Only write when it actually differs, so an ordinary poll of an unchanged
-        // knowledge (generations equal) stays a pure no-op.
+        // Change detection: skip unchanged items the indexing stage already holds the current content
+        // for. The skip must still touch the generation mark — otherwise a valid, unchanged file that a
+        // membership re-walk re-saw would later look stale (lastSeenGeneration frozen below the
+        // knowledge's current syncGeneration). Only write when it actually differs, so an ordinary poll
+        // of an unchanged knowledge (generations equal) stays a pure no-op.
+        //
+        // The status test is "not FAILED or DELETED" rather than "is INDEXED" because INGESTED and
+        // INDEXING already carry this exact content and sit in the work queue; re-upserting them is not
+        // merely a wasted write. upsert() owns the queue reset, so it zeroes retry and clears
+        // retry.nextAttemptAt — an entity deferred behind a rate limit would have its reopening instant
+        // discarded on every poll, be re-claimed immediately, and be parsed and chunked again for
+        // nothing until the window truly reopened. FAILED still falls through, so a poll is one of the
+        // ways a dead letter gets another chance; DELETED falls through so an item that reappears at the
+        // source with an unchanged checksum is re-ingested rather than left tombstoned.
         if (existing.isPresent() && item.checksum() != null
                 && item.checksum().equals(existing.get().checksum())
-                && existing.get().status() == EntityStatus.INDEXED) {
+                && existing.get().status() != EntityStatus.FAILED
+                && existing.get().status() != EntityStatus.DELETED) {
             if (existing.get().lastSeenGeneration() != kn.syncGeneration()) {
                 entities.stampLastSeen(existing.get().id(), kn.syncGeneration());
             }

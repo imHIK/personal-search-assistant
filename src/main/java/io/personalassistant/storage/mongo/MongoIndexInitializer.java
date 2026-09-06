@@ -53,6 +53,9 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.ascending("status"));
         db.getCollection(MongoCursorRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId", "direction", "status"));
+        // Rate-limit holds: the claim filter reads this on every poll tick.
+        db.getCollection(MongoCursorRepository.COLLECTION)
+                .createIndex(Indexes.ascending("retry.nextAttemptAt"));
 
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId", "externalId"), new IndexOptions().unique(true));

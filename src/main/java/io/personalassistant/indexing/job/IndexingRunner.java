@@ -3,6 +3,7 @@ package io.personalassistant.indexing.job;
 import io.personalassistant.common.ContentTypes;
 import io.personalassistant.common.Errors;
 import io.personalassistant.common.fields.FieldSets;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.Embedding;
 import io.personalassistant.domain.model.Entity;
@@ -71,6 +72,9 @@ public class IndexingRunner {
     @ConfigProperty(name = "app.indexing.lease-seconds", defaultValue = "900")
     long leaseSeconds;
 
+    @ConfigProperty(name = "app.ratelimit.max-deferrals", defaultValue = "20")
+    int maxDeferrals;
+
     /**
      * Context fields prefixed to a chunk's text before embedding (see {@link Chunk#embedText}), resolved
      * per connector so a Gmail chunk can carry its sender while a Drive chunk carries its heading path.
@@ -131,6 +135,8 @@ public class IndexingRunner {
                 LOG.warning("Lost the indexing lease on entity " + entity.id()
                         + " before markIndexed; leaving it to the new owner");
             }
+        } catch (RateLimitedException e) {
+            defer(entity, owner, e);
         } catch (RuntimeException e) {
             fail(entity, owner, Errors.summary(e), false);
             LOG.log(Level.WARNING, "Indexing failed for entity " + entity.id(), e);
@@ -203,6 +209,38 @@ public class IndexingRunner {
             }
         }
         return out;
+    }
+
+    /**
+     * A rate-limited entity is <em>deferred</em>, not failed: the wait was longer than a worker should
+     * hold, so the reopening instant the limiter computed is written as {@code nextAttemptAt} and the
+     * entity is picked up again once the window reopens. That instant beats the flat
+     * {@code backoff-seconds} — it is when the limiter's rolling window actually reopens, or the
+     * server's {@code Retry-After}, so the retry lands when the call can succeed.
+     *
+     * <p>Counted against {@code app.ratelimit.max-deferrals} rather than {@code retry-limit}, because a
+     * deferral is the limiter working as designed. Charging it to the ordinary retry budget would
+     * dead-letter a perfectly healthy entity after five throttled attempts. It is bounded at all only so
+     * an unsatisfiable limit eventually surfaces as {@code FAILED} instead of retrying forever.
+     */
+    private void defer(Entity entity, String owner, RateLimitedException e) {
+        int count = (entity.retry() == null ? 0 : entity.retry().count()) + 1;
+        boolean dead = count > maxDeferrals;
+        EntityStatus resting = dead ? EntityStatus.FAILED : EntityStatus.INGESTED;
+        String reason = "Rate limited on " + e.key() + "; deferred to " + e.retryAt()
+                + " (" + count + " consecutive deferrals)";
+        if (dead) {
+            LOG.warning("Entity " + entity.id() + " has been rate limited " + count
+                    + " times in a row on " + e.key() + "; parking it FAILED. Raise the limit on that"
+                    + " account, or app.ratelimit.max-deferrals, then retry it.");
+        } else {
+            LOG.fine(() -> reason + " for entity " + entity.id());
+        }
+        if (!entities.markFailed(entity.id(), owner, resting, reason, count,
+                dead ? null : e.retryAt())) {
+            LOG.warning("Lost the indexing lease on entity " + entity.id()
+                    + " before recording a rate-limit deferral; the new owner will retry");
+        }
     }
 
     private void fail(Entity entity, String owner, String error, boolean terminal) {

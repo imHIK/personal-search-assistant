@@ -51,14 +51,16 @@ public interface BoardPlatform {
      *
      * <p>A posting that cannot be mapped (missing id or title) is skipped rather than failing the page.
      *
-     * @param locationHints the knowledge's location terms, already lowercased, or empty. A
-     *     <strong>hint</strong>, not a contract: the connector applies the authoritative filter to
-     *     whatever comes back, so a platform is free to ignore this entirely — and the three that
+     * @param filter the knowledge's {@link BoardFilter}, or {@link BoardFilter#NONE}. A
+     *     <strong>hint</strong>, not a contract: the connector applies the same filter authoritatively
+     *     to whatever comes back, so a platform is free to ignore this entirely — and the three that
      *     return a whole board in one request do.
-     *     <p>It exists for platforms that pay <em>per posting</em>. SmartRecruiters omits the
-     *     description from its listing, so every posting needs its own second call; filtering on the
-     *     listing metadata first turns Freshworks from 157 detail requests per poll into 34. Use
-     *     {@link AtsNormalization#matchesLocation} so the early filter and the connector's agree.
+     *     <p>It exists for platforms that pay <em>per posting</em>. SmartRecruiters and Oracle HCM omit
+     *     the description from their listing, so every posting kept needs a second call; narrowing on
+     *     the listing first turns Freshworks from 157 detail requests per poll into 34, and Citi from
+     *     896 into 69. {@link BoardFilter#matchesTitle} is the part that is always safe to apply — the
+     *     title is the same string in a listing as in the detail, where a location often is not.
+     *     Workday and Oracle HCM go further and send the terms as a server-side query.
      */
-    List<RawItem> fetch(String handle, List<String> locationHints);
+    List<RawItem> fetch(String handle, BoardFilter filter);
 }

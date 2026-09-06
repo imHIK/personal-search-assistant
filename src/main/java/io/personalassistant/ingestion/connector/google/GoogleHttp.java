@@ -1,80 +1,60 @@
 package io.personalassistant.ingestion.connector.google;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.time.Duration;
 
 /**
- * Thin JSON/bytes HTTP helper shared by the Gmail and Drive REST adapters. It centralises the three
- * things every Google call needs — a bearer header, a request timeout, and non-2xx → {@link
- * GoogleApiException} translation — so the adapters read as a list of endpoints rather than a pile
- * of boilerplate. It is intentionally <em>not</em> a CDI bean: it is a value-like collaborator each
- * adapter constructs with its own base URL and timeout.
+ * JSON/bytes HTTP for the Gmail and Drive adapters: the shared {@link OutboundHttp} transport plus the
+ * two things local to this package — the {@code Authorization} header, and translating a failure into
+ * {@link GoogleApiException}, which the connectors and the token refresher already branch on.
+ *
+ * <p>The {@link GoogleAuth} argument carries the account's quota alongside its token, so two accounts on
+ * the same host are throttled independently.
  */
-public final class GoogleHttp {
+@ApplicationScoped
+public class GoogleHttp {
 
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final Duration timeout;
+    private final OutboundHttp http;
 
-    public GoogleHttp(long timeoutSeconds) {
-        this.timeout = Duration.ofSeconds(timeoutSeconds);
+    @Inject
+    public GoogleHttp(OutboundHttp http) {
+        this.http = http;
     }
 
     /** GET a URL and parse the body as JSON. */
-    public JsonNode getJson(String url, String bearer) {
-        HttpResponse<String> response = send(request(url, bearer)
-                .header("Accept", "application/json").GET().build(),
-                HttpResponse.BodyHandlers.ofString(), url);
+    public JsonNode getJson(String url, GoogleAuth auth, long timeoutSeconds) {
         try {
-            return mapper.readTree(response.body());
-        } catch (Exception e) {
-            throw new GoogleApiException("Failed to parse JSON from " + url, e);
+            return http.json(request(url, auth, timeoutSeconds).acceptJson());
+        } catch (OutboundHttpException e) {
+            throw translate(e);
         }
     }
 
     /** GET a URL and return the raw bytes (file download / export). */
-    public byte[] getBytes(String url, String bearer) {
-        return send(request(url, bearer).GET().build(),
-                HttpResponse.BodyHandlers.ofByteArray(), url).body();
-    }
-
-    private HttpRequest.Builder request(String url, String bearer) {
-        HttpRequest.Builder b = HttpRequest.newBuilder().uri(URI.create(url)).timeout(timeout);
-        if (bearer != null && !bearer.isBlank()) {
-            b.header("Authorization", "Bearer " + bearer);
-        }
-        return b;
-    }
-
-    private <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler, String url) {
+    public byte[] getBytes(String url, GoogleAuth auth, long timeoutSeconds) {
         try {
-            HttpResponse<T> response = http.send(request, handler);
-            if (response.statusCode() / 100 != 2) {
-                throw new GoogleApiException(response.statusCode(),
-                        "Google API " + response.statusCode() + " for " + url + ": "
-                                + snippet(response.body()));
-            }
-            return response;
-        } catch (GoogleApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new GoogleApiException("Google API request failed for " + url, e);
+            return http.bytes(request(url, auth, timeoutSeconds));
+        } catch (OutboundHttpException e) {
+            throw translate(e);
         }
     }
 
-    private static String snippet(Object body) {
-        if (body == null) {
-            return "";
+    private static HttpCall request(String url, GoogleAuth auth, long timeoutSeconds) {
+        HttpCall call = HttpCall.get(url, Duration.ofSeconds(timeoutSeconds),
+                auth == null ? null : auth.limit());
+        return auth == null ? call : call.header("Authorization", "Bearer " + auth.bearer());
+    }
+
+    private static GoogleApiException translate(OutboundHttpException e) {
+        if (e.status() == 0) {
+            return new GoogleApiException("Google API request failed for " + e.url(), e);
         }
-        String s = body instanceof byte[] bytes ? new String(bytes) : body.toString();
-        return s.length() <= 300 ? s : s.substring(0, 300) + "…";
+        return new GoogleApiException(e.status(),
+                "Google API " + e.status() + " for " + e.url() + ": " + e.bodySnippet());
     }
 }

@@ -19,8 +19,9 @@ Knowledge:  DRAFT ──► ACTIVE ──► PAUSED ──► ACTIVE ──► D
                          │
                          ├── creates Cursors (per iterable, per direction)
                          ▼
-Cursor:     AVAILABLE ──► IN_PROGRESS ──► (EXHAUSTED | IDLE | AVAILABLE | FAILED)
+Cursor:     AVAILABLE ──► IN_PROGRESS ──► (EXHAUSTED | IDLE | AVAILABLE | RATE_LIMITED | FAILED)
                          (paused knowledge parks cursors at SUSPENDED; resume re-arms them)
+                         (RATE_LIMITED re-enters the batch on its own once retry.nextAttemptAt passes)
                          │
                          ├── produces Entities (upsert by knowledgeId+externalId)
                          ▼
@@ -33,7 +34,7 @@ Entity:     INGESTED ──► INDEXING ──► INDEXED        (+ FAILED, DELE
 | Layer | States | Defined in |
 |---|---|---|
 | Knowledge | `DRAFT, ACTIVE, PAUSED, ERROR, DELETED` | `enums.KnowledgeStatus` |
-| Cursor | `AVAILABLE, IN_PROGRESS, IDLE, SUSPENDED, EXHAUSTED, FAILED` | `enums.CursorStatus` |
+| Cursor | `AVAILABLE, IN_PROGRESS, IDLE, SUSPENDED, EXHAUSTED, RETIRED, RATE_LIMITED, FAILED` | `enums.CursorStatus` |
 | Entity | `INGESTED, INDEXING, INDEXED, FAILED, DELETED` | `enums.EntityStatus` |
 
 ---
@@ -79,7 +80,9 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
 
    Each cursor starts `AVAILABLE`, `position = CursorPosition.start()`, with a deterministic id
    (`Ids.cursorFor(knowledgeId, iterableId, direction)`) so re-running discovery never duplicates
-   them.
+   them. It also snapshots the iterable's `displayName()` as `iterableName`, so the console has a
+   label ("Documents", "Adobe (greenhouse)") instead of a raw id; every reconcile re-writes it, which
+   both backfills older cursors and follows a source-side rename.
 6. **Activate** — `status = ACTIVE`. The Knowledge is returned to the caller.
 
 > **Iterables that appear later.** Some sources grow their iterable set over time (a new child
@@ -112,8 +115,8 @@ A poll loop (`IngestionJob.tick`, every `app.ingestion.poll-interval`, default 3
 into entities.
 
 ### Per tick
-1. **Find claimable cursors** — `AVAILABLE`, or `IN_PROGRESS` whose lease has expired (crash
-   recovery), ordered **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so
+1. **Find claimable cursors** — `AVAILABLE`, `RATE_LIMITED` whose `retry.nextAttemptAt` has passed,
+   or `IN_PROGRESS` whose lease has expired (crash recovery), ordered **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so
    no active knowledge can monopolise the bounded batch. Direction is irrelevant; backward and
    forward are treated identically.
 2. For each candidate:
@@ -199,6 +202,8 @@ repeat up to batchesPerLease times:
 | Hit the batch cap, more pages remain | `AVAILABLE` | re-picked next tick to keep going |
 | Exception, retries left | `AVAILABLE` (retry++) | retried next tick |
 | Exception, past `retry-limit` | `FAILED` | dead-letter; needs intervention |
+| `RateLimitedException`, budget left | `RATE_LIMITED` (retry++) | held out of the batch until `retry.nextAttemptAt` |
+| `RateLimitedException`, past `max-deferrals` | `FAILED` (hold cleared) | the limit is unsatisfiable; needs intervention |
 
 **At-least-once + idempotent:** the position is persisted *after* each page, and entity upserts are
 keyed on `(knowledgeId, externalId)` — so a crash mid-lease resumes from the last completed page
@@ -323,7 +328,7 @@ indexing timestamp alone, or a revived item will read as brand new.
 | Action | Endpoint | Effect |
 |---|---|---|
 | Edit | `PATCH /api/knowledge/{id}` | Update name/schedule (in place) or auth/inputs (re-verify → re-discover → reconcile). See [`knowledge-edit-design.md`](./knowledge-edit-design.md). |
-| Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
+| Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE/RATE_LIMITED → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
 | Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
@@ -354,7 +359,7 @@ code you write for a new integration is a `SourceConnector` (plus a `SourceType`
 | **Mapping a source record → `RawItem`** | **Source** — inside `grab` |
 | **Which directions are supported** | **Source** — `supportedDirections` |
 | **Whether iterables grow over time** | **Source** — `hasDynamicIterables` (framework reconciles them) |
-| **Per-source rate limiting / 429 backoff** | **Source** — inside `grab` (a connector-level concern) |
+| **Per-source rate limiting / 429 backoff** | **Framework** — `common.ratelimit` + `common.http.OutboundHttp`; the connector only names the bucket its calls belong to |
 | **Detecting deletes (tombstones)** | **Source** — emit `RawItem.tombstone(externalId)` |
 | **Credentials for authenticated sources** | **Framework** — `Connection` + `ConnectionResolver`; the source declares `requiresConnection()` and validates via `verifyConnection` |
 
@@ -444,8 +449,25 @@ RawItem.tombstone(externalId);
    rule out inlining; the indexing stage reads the file directly.
 7. **Deletes** (forward only): emit `RawItem.tombstone(externalId)` when the source reports an item
    gone; the indexing stage removes its chunks.
-8. **Rate limiting**: enforce the source's request-rate limits and exponential backoff on 429/5xx
-   *inside* `grab`. Permits cap *concurrency*; rate limiting is a connector concern.
+8. **Rate limiting**: do **not** implement this inside `grab`. It moved to the framework — every
+   outbound call goes through `common.http.OutboundHttp`, which charges a bucket before sending and
+   feeds a `429`'s `Retry-After` back into the limiter afterwards. A connector's only job is to say
+   which bucket a call belongs to (`RateLimitPolicies.forConnection` / `.forBoard`), because that is
+   the one thing the transport cannot work out: two accounts share every host and URL. Permits still
+   cap *concurrency*; the limiter caps *rate*, and a call passes through both.
+
+   Being throttled is not a failure. `IngestionRunner` catches `RateLimitedException` separately: the
+   cursor rests `RATE_LIMITED` carrying the reopening instant as `retry.nextAttemptAt`, and the claim
+   filter simply stops excluding it once that passes — no sweeper job flips it back, so the timestamp
+   is the only state and nothing can strand a cursor by dying. Counted against
+   `app.ratelimit.max-deferrals` rather than `app.ingestion.retry-limit`, so a throttled source syncs
+   slowly instead of dead-lettering; since each deferral is now a genuine reopening rather than a
+   30-second tick, that budget is a slow backstop for an unsatisfiable limit. Replaying the page is
+   safe because `grab` is idempotent (rule 4).
+
+   The status is separate from `AVAILABLE` for the user's sake: throttling is the one failure whose
+   fix is usually theirs (raise the account's limit), which it can only be if the console can show it.
+   `POST /api/index/knowledge/{id}/retry-failed` clears a hold early — the only way to shorten one.
 9. **Errors**: throw from `grab` to signal a transient failure — the framework records the retry,
    backs off, and re-arms; past the retry limit the cursor goes `FAILED` (dead-letter).
 10. **Thread-safety**: `grab` can be invoked concurrently for different cursors of the same

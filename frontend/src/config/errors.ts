@@ -26,6 +26,18 @@ interface Rule {
 
 const rules: Rule[] = [
   {
+    match: /ArC container not initialized|wrong class loader/i,
+    title: 'The dev server was mid-reload',
+    detail:
+      'Quarkus had just reloaded your code and this request hit a bean left over from before. Nothing is wrong with what you entered — try again. If it keeps happening, restart ./gradlew quarkusDev.',
+  },
+  {
+    match: /failed to read file|failed to stage/i,
+    title: 'The downloaded copy is missing',
+    detail:
+      'This item was fetched to a temporary folder that has since been cleared out. Reprocess it, or run Check now on the source to fetch it again.',
+  },
+  {
     match: /no such file|not a directory|does not exist|NoSuchFileException/i,
     title: "That folder couldn't be opened",
     detail: 'Check the path exists and is spelled correctly. It must be a folder, not a file.',
@@ -47,6 +59,12 @@ const rules: Rule[] = [
     title: 'That account is missing a permission',
     detail:
       'The token works, but not for this data. Re-run the consent flow including the read-only scope for this service, then paste the new refresh token.',
+  },
+  {
+    match: /rate limited|too many requests|\b429\b/i,
+    title: 'The service is limiting how fast we can read',
+    detail:
+      'Nothing is broken and nothing was lost — this stream pauses and picks up by itself when the limit resets. If it is too slow, raise the limit on the account under Accounts.',
   },
   {
     match: /no connection|connection not found|requires a connection/i,
@@ -118,7 +136,7 @@ export function friendlyError(error: unknown): FriendlyError {
     }
     return {
       title: 'Something went wrong on the server',
-      detail: 'The server hit an unexpected error. The details below may explain why.',
+      detail: raw || 'The server gave no reason. Check the server log for the stack trace.',
       raw,
     }
   }

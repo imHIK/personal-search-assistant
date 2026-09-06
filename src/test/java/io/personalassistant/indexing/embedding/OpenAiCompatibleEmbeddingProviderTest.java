@@ -9,10 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Embedding;
+import io.personalassistant.testsupport.RecordingRateLimiter;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,6 +33,7 @@ import org.junit.jupiter.api.Test;
  */
 class OpenAiCompatibleEmbeddingProviderTest {
 
+    private final RecordingRateLimiter limiter = new RecordingRateLimiter();
     private final ObjectMapper mapper = new ObjectMapper();
 
     private HttpServer server;
@@ -57,7 +65,7 @@ class OpenAiCompatibleEmbeddingProviderTest {
     }
 
     private OpenAiCompatibleEmbeddingProvider provider(int dim) {
-        OpenAiCompatibleEmbeddingProvider p = new OpenAiCompatibleEmbeddingProvider();
+        OpenAiCompatibleEmbeddingProvider p = new OpenAiCompatibleEmbeddingProvider(new OutboundHttp(limiter), RateLimitPolicies.unlimited());
         p.baseUrl = "http://localhost:" + server.getAddress().getPort();
         p.modelName = "text-embedding-004";
         p.apiKey = Optional.of("secret-key");
@@ -194,5 +202,52 @@ class OpenAiCompatibleEmbeddingProviderTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> p.embed("x"));
         assertNotNull(ex.getMessage());
         assertTrue(ex.getMessage().contains("429"), ex.getMessage());
+    }
+
+    /**
+     * A 429 has to reach the limiter, not just the caller: the vendor has told us its capacity, and the
+     * next backfill batch should wait on that rather than discovering it again.
+     */
+    @Test
+    void aThrottledResponsePausesTheEmbeddingQuota() {
+        status = 429;
+        responseJson = "{\"error\":\"rate limited\"}";
+
+        assertThrows(IllegalStateException.class, () -> provider(4).embed("x"));
+
+        assertTrue(limiter.penalties.containsKey("embedding:openai-embed"),
+                "expected the embedding bucket to be paused, saw " + limiter.penalties.keySet());
+    }
+
+    /**
+     * The indexing runner keys its deferral off this exact exception type, so the provider must let it
+     * through rather than folding it into the generic IllegalStateException with everything else. If it
+     * is wrapped, a throttled backfill silently reverts to being dead-lettered as an ordinary failure.
+     */
+    @Test
+    void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
+        limiter.failWith = new RateLimitedException(RateLimitKey.embedding("openai-embed"),
+                Instant.now().plusSeconds(120));
+        OpenAiCompatibleEmbeddingProvider p = provider(4);
+
+        RateLimitedException e =
+                assertThrows(RateLimitedException.class, () -> p.embedAll(List.of("doc")));
+        assertNotNull(e.retryAt());
+    }
+
+    /**
+     * The two entry points sit on opposite sides of the wait/fail boundary, and nothing else marks that
+     * split — a backfill must slow down, while a search must still answer.
+     */
+    @Test
+    void indexingWaitsForQuotaWhileASearchQueryFailsFast() {
+        responseJson = "{\"data\":[{\"index\":0,\"embedding\":[1,0,0,0]}]}";
+        OpenAiCompatibleEmbeddingProvider p = provider(4);
+
+        p.embedAll(List.of("a document"));
+        assertEquals(RateLimitMode.WAIT, limiter.acquired.get(0).mode());
+
+        p.embedQuery("a search");
+        assertEquals(RateLimitMode.FAIL_FAST, limiter.acquired.get(1).mode());
     }
 }

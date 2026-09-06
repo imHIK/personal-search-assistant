@@ -98,7 +98,7 @@
               "path": ["api", "knowledge", ":id", "cursors"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
+            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. Each carries `iterableName`, the display name discover() gave that sub-stream (null on cursors created before names were stored — the next reconcile fills it in). The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
           }
         },
         {
@@ -255,7 +255,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Work Gmail\",\n  \"type\": \"GMAIL\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\",\n    \"accessToken\": \"{{googleAccessToken}}\"\n  },\n  \"config\": {\n    \"clientId\": \"{{googleClientId}}\",\n    \"clientSecret\": \"{{googleClientSecret}}\"\n  },\n  \"makeDefault\": true\n}",
+              "raw": "{\n  \"name\": \"Work Gmail\",\n  \"type\": \"GMAIL\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\",\n    \"accessToken\": \"{{googleAccessToken}}\"\n  },\n  \"config\": {\n    \"clientId\": \"{{googleClientId}}\",\n    \"clientSecret\": \"{{googleClientSecret}}\"\n  },\n  \"rateLimit\": {\n    \"rules\": [\n      { \"permits\": 10, \"windowSeconds\": 1 },\n      { \"permits\": 500, \"windowSeconds\": 60 }\n    ]\n  },\n  \"makeDefault\": true\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -263,7 +263,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "connections"]
             },
-            "description": "Verifies the credentials, then persists and assigns the type default. type is one of GMAIL, GOOGLE_DRIVE, SLACK, NOTION; a no-connection connector like LOCAL_FS (or bad creds) is a 400.\n\nauth is opaque per-connector credentials (e.g. refreshToken/accessToken); config is opaque connector-level settings (e.g. an OAuth client), or null. The first connection of a type becomes its default; makeDefault forces it."
+            "description": "Verifies the credentials, then persists and assigns the type default. type is one of GMAIL, GOOGLE_DRIVE, SLACK, NOTION; a no-connection connector like LOCAL_FS (or bad creds) is a 400.\n\nauth is opaque per-connector credentials (e.g. refreshToken/accessToken); config is opaque connector-level settings (e.g. an OAuth client), or null. The first connection of a type becomes its default; makeDefault forces it.\n\nrateLimit caps the outbound calls made with this account. A call must satisfy EVERY rule, and each rule is a token bucket whose capacity is permits — so 500/60s already allows a 500-request burst on an idle bucket, and there is no separate burst setting. Omit the field to inherit app.ratelimit.connector.<TYPE>.rules, which ships blank (unlimited)."
           }
         },
         {
@@ -273,7 +273,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Work Gmail (renamed)\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\"\n  },\n  \"config\": null\n}",
+              "raw": "{\n  \"name\": \"Work Gmail (renamed)\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\"\n  },\n  \"config\": null,\n  \"rateLimit\": {\n    \"rules\": [{ \"permits\": 2, \"windowSeconds\": 60 }]\n  }\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -282,7 +282,26 @@
               "path": ["api", "connections", ":id"],
               "variable": [{ "key": "id", "value": "{{connectionId}}" }]
             },
-            "description": "Partial edit with patch semantics: an absent (or null) field is left unchanged; type is immutable and not editable here. Changing auth triggers re-verification of the credentials (400 on failure). An unknown id is a 404."
+            "description": "Partial edit with patch semantics: an absent (or null) field is left unchanged; type is immutable and not editable here. Changing auth triggers re-verification of the credentials (400 on failure). An unknown id is a 404.\n\nBecause absent means unchanged, REMOVING a rate limit takes an explicit empty list — {\"rateLimit\": {\"rules\": []}} — see \"Clear connection rate limit\". Sending null leaves the existing limit in place."
+          }
+        },
+        {
+          "name": "Clear connection rate limit",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rateLimit\": {\n    \"rules\": []\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Removes this account's rate limit so the server-wide app.ratelimit.* default applies again.\n\nAn empty rules array is the ONLY way to say this: null means \"leave unchanged\" on every PATCH field, so it cannot also mean \"clear\"."
           }
         },
         {
@@ -541,7 +560,7 @@
               "path": ["api", "index", "knowledge", ":id", "retry-failed"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "Revives a knowledge's dead-lettered work: FAILED cursors -> AVAILABLE and FAILED entities -> INGESTED, both with a fresh retry budget. Cursor position is kept, so a revived cursor resumes where it stopped rather than re-walking the source.\n\nDistinct from *Trigger forward sync*: that one only re-arms FORWARD cursors sitting IDLE, so it can never revive a dead-lettered backward (backfill) cursor. Nothing else moves a cursor or entity out of FAILED.\n\nReturns { knowledgeId, cursorsRetried, entitiesRetried }."
+            "description": "Revives a knowledge's dead-lettered work: FAILED cursors -> AVAILABLE and FAILED entities -> INGESTED, both with a fresh retry budget. Cursor position is kept, so a revived cursor resumes where it stopped rather than re-walking the source.\n\nIt also releases any cursor still held by a rate limit (RATE_LIMITED -> AVAILABLE, hold cleared): that instant was computed against a quota you have typically just raised, so this is the only way to shorten a hold.\n\nDistinct from *Trigger forward sync*: that one only re-arms FORWARD cursors sitting IDLE, so it can never revive a dead-lettered backward (backfill) cursor. Nothing else moves a cursor or entity out of FAILED.\n\nReturns { knowledgeId, cursorsRetried, entitiesRetried }."
           }
         },
         {

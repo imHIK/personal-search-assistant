@@ -57,6 +57,7 @@ class IndexingRunnerTest {
         r.retryLimit = 2;
         r.backoffSeconds = 30;
         r.leaseSeconds = 120;
+        r.maxDeferrals = 4;
         return r;
     }
 
@@ -70,6 +71,65 @@ class IndexingRunnerTest {
                 .filter(e -> e.id().equals(id))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("entity " + id + " was not claimable"));
+    }
+
+    /**
+     * Being throttled is the limiter working, not the source failing. The entity must come back as
+     * retryable with the reopening instant the limiter computed — not the flat backoff, and not
+     * {@code FAILED}.
+     */
+    @Test
+    void aRateLimitedEntityIsDeferredToTheReopeningInstantRatherThanFailed() {
+        Instant reopensAt = Instant.now().plusSeconds(3600);
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
+        throttled.rateLimitedUntil = reopensAt;
+        IndexingRunner limited = runnerWith(throttled);
+        entities.upsert(TestData.ingestedText("ent_rl", "kn_1", "doc", "hello"));
+
+        limited.indexEntity(claim("ent_rl"), WORKER);
+
+        Entity stored = entities.findById("ent_rl").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, stored.status(), "a deferral is retryable, not terminal");
+        assertEquals(reopensAt, stored.retry().nextAttemptAt(),
+                "the retry lands when the window reopens, not after the flat backoff");
+        assertTrue(stored.index().error().contains("Rate limited"), stored.index().error());
+    }
+
+    /**
+     * Deferrals get their own, far larger budget: charging them to retry-limit would dead-letter a
+     * healthy entity after a handful of throttled attempts.
+     */
+    @Test
+    void deferralsDoNotCountAgainstTheOrdinaryRetryLimit() {
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
+        // Reopening immediately keeps the entity claimable each pass, so the deferral COUNT is what is
+        // under test rather than the backoff window.
+        throttled.rateLimitedUntil = Instant.now();
+        IndexingRunner limited = runnerWith(throttled); // retryLimit = 2, maxDeferrals = 4
+        entities.upsert(TestData.ingestedText("ent_rl2", "kn_1", "doc", "hello"));
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            limited.indexEntity(claim("ent_rl2"), WORKER);
+            assertEquals(EntityStatus.INGESTED, entities.findById("ent_rl2").orElseThrow().status(),
+                    "still retryable after " + attempt + " deferrals (retryLimit is 2)");
+        }
+    }
+
+    /** An unsatisfiable limit must eventually surface rather than being retried forever. */
+    @Test
+    void aPersistentlyRateLimitedEntityEventuallyDeadLetters() {
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
+        throttled.rateLimitedUntil = Instant.now();
+        IndexingRunner limited = runnerWith(throttled); // maxDeferrals = 4
+        entities.upsert(TestData.ingestedText("ent_rl3", "kn_1", "doc", "hello"));
+
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            limited.indexEntity(claim("ent_rl3"), WORKER);
+        }
+
+        Entity stored = entities.findById("ent_rl3").orElseThrow();
+        assertEquals(EntityStatus.FAILED, stored.status());
+        assertNull(stored.retry().nextAttemptAt(), "a dead-lettered entity is not auto-reclaimed");
     }
 
     @Test

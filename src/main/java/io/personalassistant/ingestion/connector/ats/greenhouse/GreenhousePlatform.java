@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -56,7 +57,7 @@ public class GreenhousePlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, List<String> locationHints) {
+    public List<RawItem> fetch(String boardId, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
@@ -119,10 +120,11 @@ public class GreenhousePlatform implements BoardPlatform {
                 "text/html",
                 title,
                 applyUrl,
-                // updated_at is what moves whenever a recruiter edits the posting, so it is the
-                // change signal (invariant 3). Falling back to the content hash would re-index the
-                // whole board on any whitespace change Greenhouse makes.
-                "gh:" + id + ";upd:" + updatedAt,
+                // NOT updated_at. It moves in bulk — 178 of GitLab's 227 postings share it to the
+                // second — so trusting it re-embedded three quarters of a board for a change that
+                // never touched the text. The stamp covers what is actually indexed instead; see
+                // AtsNormalization.changeStamp.
+                "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
                 AtsNormalization.instantOrNull(updatedAt),
                 raw,
                 content,

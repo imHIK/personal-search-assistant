@@ -7,6 +7,7 @@ import type {
   EntityStatus,
   Knowledge,
 } from '@/api/types'
+import { relativeTime } from '@/lib/utils'
 
 /**
  * Translation from the backend's internal state machines to what a user is shown.
@@ -46,6 +47,7 @@ export type SourceState =
   | 'processing'
   | 'up-to-date'
   | 'paused'
+  | 'throttled'
   | 'attention'
   | 'removed'
 
@@ -55,6 +57,11 @@ const sourceStates: Record<SourceState, Presented> = {
   processing: { label: 'Processing', tone: 'busy', hint: 'Reading and indexing what was imported' },
   'up-to-date': { label: 'Up to date', tone: 'ok', hint: 'Everything is searchable' },
   paused: { label: 'Paused', tone: 'wait', hint: 'Not checking for new items until you resume' },
+  throttled: {
+    label: 'Waiting on a rate limit',
+    tone: 'wait',
+    hint: 'The service is only letting us read so fast. This resumes on its own.',
+  },
   attention: { label: 'Needs attention', tone: 'alert', hint: 'Something stopped working' },
   removed: { label: 'Removed', tone: 'neutral' },
 }
@@ -73,6 +80,12 @@ export function sourceState(knowledge: Knowledge, cursors?: CursorInfo[]): Sourc
   if (status === 'DRAFT') return 'setting-up'
 
   const pending = stats.entities - stats.indexed - stats.failed
+
+  // Throttled outranks "importing": a held stream is not making progress, and saying so is the
+  // whole point of the state — the fix, if the wait is intolerable, is the user's (raise the
+  // account's limit). Anything still running takes precedence, since that is real progress.
+  const running = cursors?.some((c) => c.status === 'IN_PROGRESS')
+  if (!running && cursors?.some((c) => c.status === 'RATE_LIMITED')) return 'throttled'
 
   // A backward cursor that hasn't EXHAUSTED means history is still being walked. That is a
   // different, and much longer, wait than "a few items are still being indexed" — worth its own
@@ -134,6 +147,11 @@ const cursorStates: Record<CursorStatus, Presented> = {
   AVAILABLE: { label: 'Queued', tone: 'busy', hint: 'Will be picked up shortly' },
   IN_PROGRESS: { label: 'Importing now', tone: 'busy' },
   SUSPENDED: { label: 'Paused', tone: 'wait' },
+  RATE_LIMITED: {
+    label: 'Waiting on a rate limit',
+    tone: 'wait',
+    hint: 'The service is only letting us read so fast. This picks up again by itself.',
+  },
   RETIRED: {
     label: 'No longer in this source',
     tone: 'wait',
@@ -142,7 +160,26 @@ const cursorStates: Record<CursorStatus, Presented> = {
   FAILED: { label: 'Stopped after repeated errors', tone: 'alert' },
 }
 
-export function presentCursorStatus(status: CursorStatus): Presented {
+/**
+ * Takes the cursor rather than the bare status because `RATE_LIMITED` has two readings. Nothing
+ * writes the status back when a hold elapses — the backend's claim query simply stops excluding the
+ * stream — so between the limit reopening and the next poll it is still `RATE_LIMITED` while
+ * genuinely queued. Reading the instant is what keeps the badge honest in both directions.
+ */
+export function presentCursorStatus(cursor: Pick<CursorInfo, 'status' | 'nextAttemptAt'>): Presented {
+  const { status, nextAttemptAt } = cursor
+  if (status === 'RATE_LIMITED') {
+    const until = nextAttemptAt ? new Date(nextAttemptAt).getTime() : null
+    if (until === null || Number.isNaN(until) || until <= Date.now()) {
+      return { ...cursorStates.AVAILABLE, raw: status }
+    }
+    const when = relativeTime(nextAttemptAt)
+    return {
+      ...cursorStates.RATE_LIMITED,
+      hint: when ? `${cursorStates.RATE_LIMITED.hint} Next try ${when}.` : cursorStates.RATE_LIMITED.hint,
+      raw: status,
+    }
+  }
   return cursorStates[status] ? { ...cursorStates[status], raw: status } : neutral(status)
 }
 

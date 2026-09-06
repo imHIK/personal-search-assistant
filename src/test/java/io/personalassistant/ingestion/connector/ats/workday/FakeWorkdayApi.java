@@ -6,6 +6,7 @@ import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /** Scriptable {@link WorkdayApi} for platform tests — no network. Models the POST search + detail pair. */
@@ -18,6 +19,9 @@ public class FakeWorkdayApi implements WorkdayApi {
 
     /** Test observability: the externalPaths whose detail was fetched, in order. */
     public final List<String> detailCalls = new ArrayList<>();
+
+    /** Test observability: every searchText the platform sent, in order. */
+    public final List<String> searchTexts = new ArrayList<>();
 
     /**
      * Add a posting.
@@ -49,13 +53,39 @@ public class FakeWorkdayApi implements WorkdayApi {
     }
 
     @Override
-    public JsonNode searchJobs(WorkdaySite site, int limit, int offset) {
-        int from = Math.min(offset, summaries.size());
-        int to = Math.min(from + limit, summaries.size());
+    public JsonNode searchJobs(WorkdaySite site, int limit, int offset, String searchText) {
+        if (offset == 0) {
+            searchTexts.add(searchText);
+        }
+        // Stands in for Workday's own index, and the modelling detail that matters: the index sees the
+        // WHOLE record, not the summary. A role whose listing says "5 Locations" is still found by a
+        // query naming one of them — which is exactly why sending a query is safe where filtering the
+        // returned summaries is not.
+        List<Map<String, Object>> matching = searchText == null || searchText.isBlank()
+                ? summaries
+                : summaries.stream().filter(s -> indexedText(s).contains(lower(searchText))).toList();
+        int from = Math.min(offset, matching.size());
+        int to = Math.min(from + limit, matching.size());
         Map<String, Object> envelope = new LinkedHashMap<>();
-        envelope.put("total", summaries.size());
-        envelope.put("jobPostings", summaries.subList(from, to));
+        envelope.put("total", matching.size());
+        envelope.put("jobPostings", matching.subList(from, to));
         return MAPPER.valueToTree(envelope);
+    }
+
+    /** Everything Workday's index can see for one posting: the summary plus its full detail. */
+    private String indexedText(Map<String, Object> summary) {
+        Map<String, Object> info = details.get(String.valueOf(summary.get("externalPath")));
+        StringBuilder out = new StringBuilder(String.valueOf(summary.get("locationsText")));
+        if (info != null) {
+            out.append(' ').append(info.get("location"))
+               .append(' ').append(((Map<?, ?>) info.get("country")).get("descriptor"))
+               .append(' ').append(info.get("jobDescription"));
+        }
+        return lower(out.toString());
+    }
+
+    private static String lower(String value) {
+        return value.toLowerCase(Locale.ROOT);
     }
 
     @Override

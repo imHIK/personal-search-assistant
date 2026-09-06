@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -46,7 +47,7 @@ class FakeDriveApi implements DriveApi {
     }
 
     @Override
-    public JsonNode listFiles(String accessToken, String query, String orderBy, String pageToken, int pageSize) {
+    public JsonNode listFiles(GoogleAuth auth, String query, String orderBy, String pageToken, int pageSize) {
         String parent = group(PARENT, query);
         boolean foldersOnly = query.contains("mimeType='" + FOLDER_MIME + "'");
         boolean nonFolders = query.contains("mimeType!='" + FOLDER_MIME + "'");
@@ -94,17 +95,17 @@ class FakeDriveApi implements DriveApi {
     }
 
     @Override
-    public byte[] download(String accessToken, String fileId) {
+    public byte[] download(GoogleAuth auth, String fileId) {
         return find(fileId).bytes;
     }
 
     @Override
-    public byte[] export(String accessToken, String fileId, String exportMimeType) {
+    public byte[] export(GoogleAuth auth, String fileId, String exportMimeType) {
         return find(fileId).exportText.getBytes(StandardCharsets.UTF_8);
     }
 
     @Override
-    public JsonNode about(String accessToken) {
+    public JsonNode about(GoogleAuth auth) {
         ObjectNode about = mapper.createObjectNode();
         about.putObject("user").put("emailAddress", "user@example.com");
         return about;

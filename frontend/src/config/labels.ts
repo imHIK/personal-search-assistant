@@ -117,6 +117,7 @@ export const labels = {
     empty: 'Nothing here yet',
     emptyHint: 'Items appear as they are imported. This can take a few minutes after connecting.',
     emptyFiltered: 'Nothing matches this filter',
+    errorHint: 'Why this item could not be processed',
     refresh: 'Reprocess',
     refreshHint: 'Read this item again from what was already downloaded',
     remove: 'Remove',
@@ -166,6 +167,24 @@ export const labels = {
     reveal: 'Show',
     hide: 'Hide',
     helpTitle: 'How do I get these?',
+    rateLimitTitle: 'Speed limit',
+    rateLimitHint:
+      'How fast this account may be called. Leave empty to use the server default. Most services ' +
+      'publish their own limits — matching them here avoids being cut off.',
+    rateLimitWarning:
+      'A tight limit slows syncing rather than breaking it: work waits its turn and picks up where it ' +
+      'left off. Set it too low and a first sync can take a very long time.',
+    rateLimitAdd: 'Add a limit',
+    rateLimitRemove: 'Remove',
+    rateLimitEmpty: 'No limit set — the server default applies.',
+    rateLimitCount: 'Requests',
+    rateLimitPer: 'Per',
+    rateLimitUnits: {
+      second: 'second',
+      minute: 'minute',
+      hour: 'hour',
+      day: 'day',
+    },
   },
 
   wizard: {
@@ -231,6 +250,15 @@ export const labels = {
     required: 'required',
     technical: 'Technical details',
     rawError: 'Raw message',
+    remove: 'Remove',
+  },
+
+  picklist: {
+    browse: (n: number, noun: string) => `Choose from ${n} ${noun}`,
+    defaultNoun: 'we already know',
+    filter: 'Type to filter…',
+    noMatch: 'Nothing matches. Add it below instead.',
+    add: 'Add',
   },
 
   errors: {
@@ -285,7 +313,7 @@ export const labels = {
   jobBoards: {
     lookupTitle: 'Not sure which companies are on a job board?',
     lookupHint:
-      'Paste names and check before adding them. Greenhouse, Lever, Ashby and SmartRecruiters are searched; Workday needs its full triple.',
+      'Paste names and check before adding them. Greenhouse, Lever, Ashby and SmartRecruiters are searched by name; Workday and Oracle HCM need the address from their careers page.',
     lookupPlaceholder: 'paytm\ndatabricks\nSwiggy\nrazorpay',
     check: (n: number) => (n === 0 ? 'Check' : `Check ${n}`),
     checking: 'Checking…',

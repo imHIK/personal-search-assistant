@@ -1,7 +1,10 @@
 package io.personalassistant.testsupport;
 
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Embedding;
 import io.personalassistant.indexing.embedding.EmbeddingProvider;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,6 +25,12 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
      * prove it skips the query embedding for a purely lexical search instead of paying for one.
      */
     public int embedCalls;
+
+    /**
+     * When set, {@link #embedAll} throws {@link RateLimitedException} with this as its {@code retryAt} —
+     * how a caller is shown to defer rather than fail, without standing up a real bucket.
+     */
+    public Instant rateLimitedUntil;
 
     private final int dim;
     private Defect defect = Defect.NONE;
@@ -63,6 +72,9 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
 
     @Override
     public List<Embedding> embedAll(List<String> texts) {
+        if (rateLimitedUntil != null) {
+            throw new RateLimitedException(RateLimitKey.embedding(providerId()), rateLimitedUntil);
+        }
         List<Embedding> out = new ArrayList<>(texts.size());
         for (String t : texts) {
             out.add(embed(t));

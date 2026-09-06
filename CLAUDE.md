@@ -86,7 +86,9 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    must be fenced the same way; an unfenced one lets a stale worker mark half-finished work complete.
 3. **`checksum` is the only change signal.** A connector must make it change whenever the item changes
    (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail: `gmail:<id>;hist:<historyId>`).
-   Unchanged checksum + `INDEXED` status = skipped entirely.
+   Unchanged checksum + a status other than `FAILED` / `DELETED` = skipped entirely. The skip covers
+   `INGESTED` and `INDEXING` too: those already carry that content, and re-upserting them would reset the
+   indexer's `retry` and `nextAttemptAt` out from under it.
 4. **`grab` is stateless and idempotent.** All pagination state lives in `CursorPosition`; the same page may
    be replayed after a crash. Files pass as `fileRef` (a path), never bytes — Mongo's 16 MB cap.
 5. **Embedding dimension is baked into the index mapping.** `app.embedding.dimension=768` is written into the

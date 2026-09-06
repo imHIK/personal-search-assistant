@@ -1,5 +1,6 @@
 package io.personalassistant.agent.llm;
 
+import io.personalassistant.common.ratelimit.RateLimitMode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Optional;
@@ -17,9 +18,10 @@ import org.eclipse.microprofile.config.Config;
  * own model without dragging a config refactor along with it.
  *
  * <p>Recognised sub-keys, all optional: {@code base-url}, {@code model}, {@code temperature},
- * {@code max-tokens}, {@code api-key}. An absent or blank value means "inherit the provider default"
- * (see {@link LlmProfile}), which is also why blank is treated as absent — SmallRye converts an empty
- * property to null, and a {@code ${ENV_VAR:}}-backed key is empty exactly when the variable is unset.
+ * {@code max-tokens}, {@code api-key}, and {@code rate-limit-mode} ({@code wait} or {@code fail-fast}).
+ * An absent or blank value means "inherit the provider default" (see {@link LlmProfile}), which is also
+ * why blank is treated as absent — SmallRye converts an empty property to null, and a
+ * {@code ${ENV_VAR:}}-backed key is empty exactly when the variable is unset.
  *
  * <p>An unknown profile name resolves to {@link LlmProfile#inherit} with a warning rather than
  * throwing. A missing profile means the call runs on the provider's configured model — degraded, but
@@ -59,9 +61,10 @@ public class LlmProfiles {
         Optional<Double> temperature = text(name, "temperature").map(Double::valueOf);
         Optional<Integer> maxTokens = text(name, "max-tokens").map(Integer::valueOf);
         Optional<String> apiKey = text(name, "api-key");
+        Optional<RateLimitMode> rateLimitMode = text(name, "rate-limit-mode").map(LlmProfiles::mode);
 
         if (baseUrl.isEmpty() && model.isEmpty() && temperature.isEmpty()
-                && maxTokens.isEmpty() && apiKey.isEmpty()) {
+                && maxTokens.isEmpty() && apiKey.isEmpty() && rateLimitMode.isEmpty()) {
             LOG.warning("No configuration found for LLM profile \"" + name + "\" (expected "
                     + PREFIX + name + ".model or similar); falling back to the provider defaults");
             return LlmProfile.inherit(name);
@@ -70,7 +73,12 @@ public class LlmProfiles {
                 + ", temperature=" + temperature.map(String::valueOf).orElse("<provider default>")
                 + ", max-tokens=" + maxTokens.map(String::valueOf).orElse("<unset>")
                 + ", endpoint=" + (baseUrl.isPresent() ? baseUrl.get() : "<provider default>"));
-        return new LlmProfile(name, baseUrl, model, temperature, maxTokens, apiKey);
+        return new LlmProfile(name, baseUrl, model, temperature, maxTokens, apiKey, rateLimitMode);
+    }
+
+    /** Accepts the kebab-case spelling used everywhere else in {@code application.properties}. */
+    private static RateLimitMode mode(String value) {
+        return RateLimitMode.valueOf(value.trim().toUpperCase().replace('-', '_'));
     }
 
     /** Blank is treated as absent — see the class Javadoc on empty values and {@code ${ENV_VAR:}}. */

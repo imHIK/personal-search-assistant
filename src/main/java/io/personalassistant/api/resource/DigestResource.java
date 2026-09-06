@@ -4,11 +4,9 @@ import io.personalassistant.api.dto.DigestDto;
 import io.personalassistant.api.dto.DigestRunDto;
 import io.personalassistant.domain.service.DigestService;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -43,7 +41,8 @@ public class DigestResource {
     @GET
     @Path("/{id}")
     public DigestDto get(@PathParam("id") String id) {
-        return digests.get(id).map(DigestDto::from).orElseThrow(NotFoundException::new);
+        return digests.get(id).map(DigestDto::from)
+                .orElseThrow(() -> ApiErrors.notFound("No digest with id " + id));
     }
 
     @POST
@@ -51,7 +50,7 @@ public class DigestResource {
         try {
             return DigestDto.from(digests.create(dto.toDomain()));
         } catch (IllegalArgumentException e) {
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
@@ -60,12 +59,12 @@ public class DigestResource {
     @Path("/{id}")
     public DigestDto setEnabled(@PathParam("id") String id, EnabledDto dto) {
         if (dto == null || dto.enabled() == null) {
-            throw new BadRequestException("enabled must be true or false");
+            throw ApiErrors.badRequest("enabled must be true or false");
         }
         try {
             return DigestDto.from(digests.setEnabled(id, dto.enabled()));
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -86,7 +85,7 @@ public class DigestResource {
         try {
             return DigestRunDto.from(digests.run(id));
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -100,7 +99,8 @@ public class DigestResource {
     @GET
     @Path("/{id}/runs/latest")
     public DigestRunDto latest(@PathParam("id") String id) {
-        return digests.latestRun(id).map(DigestRunDto::from).orElseThrow(NotFoundException::new);
+        return digests.latestRun(id).map(DigestRunDto::from)
+                .orElseThrow(() -> ApiErrors.notFound("Digest " + id + " has no run yet"));
     }
 
     /** Body of the enable/disable patch. */

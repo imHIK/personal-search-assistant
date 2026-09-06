@@ -51,9 +51,10 @@ public class DefaultConnectionService implements ConnectionService {
 
         Instant now = Instant.now();
         Connection draft = new Connection(Ids.connection(), request.name(), request.type(),
-                request.auth(), request.config(), false, ConnectionStatus.ACTIVE, null, now, now);
+                request.auth(), request.config(), request.rateLimit(), false,
+                ConnectionStatus.ACTIVE, null, now, now);
 
-        connector.verifyConnection(draft); // bad credentials → throws → 400, nothing persisted
+        verify(connector, draft); // bad credentials → throws → 400, nothing persisted
 
         boolean makeDefault = request.makeDefault()
                 || connections.findDefault(request.type()).isEmpty(); // first-of-type is the default
@@ -88,10 +89,11 @@ public class DefaultConnectionService implements ConnectionService {
                 edit.name() != null ? edit.name() : current.name(),
                 edit.auth() != null ? edit.auth() : current.auth(),
                 edit.config() != null ? edit.config() : current.config(),
+                edit.rateLimit() != null ? edit.rateLimit() : current.rateLimit(),
                 Instant.now());
 
         if (edit.auth() != null && !edit.auth().equals(current.auth())) {
-            connectors.get(current.type()).verifyConnection(edited); // re-verify changed creds
+            verify(connectors.get(current.type()), edited); // re-verify changed creds
             edited = edited.withStatus(ConnectionStatus.ACTIVE, null);
         }
         return connections.save(edited);
@@ -113,7 +115,7 @@ public class DefaultConnectionService implements ConnectionService {
             }
             return connections.save(current.withStatus(ConnectionStatus.ACTIVE, null));
         } catch (RuntimeException e) {
-            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String reason = reason(e);
             LOG.warning("Connection " + id + " (" + current.type() + ") failed verification: " + reason);
             return connections.save(current.withStatus(ConnectionStatus.ERROR, reason));
         }
@@ -147,6 +149,31 @@ public class DefaultConnectionService implements ConnectionService {
                     });
         }
         LOG.info("Deleted connection " + id);
+    }
+
+    /**
+     * Run the connector's credential check, funnelling every failure into
+     * {@link IllegalArgumentException} so the resource maps it to a 400 that carries the reason.
+     *
+     * <p>Connectors raise their own transport exceptions — {@code GoogleApiException},
+     * {@code AtsApiException}, {@code RateLimitedException} — and the resource knows none of them, so an
+     * expired refresh token used to escape as a bare 500 whose body said nothing and left the console
+     * with no cause to display. The message is worded like {@link #test}'s {@code lastError} on purpose:
+     * a rejected save and a failed re-test should read identically.
+     */
+    private void verify(SourceConnector connector, Connection connection) {
+        try {
+            connector.verifyConnection(connection);
+        } catch (IllegalArgumentException e) {
+            throw e; // already the shape the resource turns into a 400
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(
+                    connection.type() + " rejected the credentials: " + reason(e), e);
+        }
+    }
+
+    private static String reason(RuntimeException e) {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
     private Connection require(String id) {

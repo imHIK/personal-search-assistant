@@ -3,7 +3,7 @@ package io.personalassistant.ingestion.connector.google;
 import io.personalassistant.domain.model.Connection;
 
 /**
- * Resolves a usable OAuth 2.0 <em>bearer</em> access token from a {@link Connection}. This is the one
+ * Resolves usable OAuth 2.0 credentials from a {@link Connection}. This is the one
  * auth concern shared by every Google connector (Gmail, Drive), so it lives in the common
  * {@code google} package and is injected into each connector rather than re-implemented per source.
  *
@@ -15,9 +15,13 @@ import io.personalassistant.domain.model.Connection;
 public interface GoogleAccessTokens {
 
     /**
-     * @return a bearer access token for calls on behalf of {@code connection}
+     * Returns the token <em>and</em> the account's rate limit, because both are properties of the same
+     * connection and the transport needs both — a bearer alone leaves the limiter unable to tell two
+     * Google accounts apart, since they share every host and URL.
+     *
+     * @return credentials for calls on behalf of {@code connection}
      * @throws IllegalArgumentException if the connection carries no usable credentials
      * @throws GoogleApiException       if a token refresh was attempted and failed
      */
-    String bearer(Connection connection);
+    GoogleAuth authFor(Connection connection);
 }

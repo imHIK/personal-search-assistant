@@ -1,8 +1,10 @@
 package io.personalassistant.ingestion.connector.google.drive;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import io.personalassistant.ingestion.connector.google.GoogleHttp;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.StringJoiner;
@@ -28,15 +30,11 @@ public class HttpDriveApi implements DriveApi {
     @ConfigProperty(name = "app.ingestion.google-drive.timeout-seconds", defaultValue = "60")
     long timeoutSeconds;
 
-    private volatile GoogleHttp http;
+    private final GoogleHttp http;
 
-    private GoogleHttp http() {
-        GoogleHttp local = http;
-        if (local == null) {
-            local = new GoogleHttp(timeoutSeconds);
-            http = local;
-        }
-        return local;
+    @Inject
+    public HttpDriveApi(GoogleHttp http) {
+        this.http = http;
     }
 
     private String base() {
@@ -44,7 +42,7 @@ public class HttpDriveApi implements DriveApi {
     }
 
     @Override
-    public JsonNode listFiles(String accessToken, String query, String orderBy, String pageToken, int pageSize) {
+    public JsonNode listFiles(GoogleAuth auth, String query, String orderBy, String pageToken, int pageSize) {
         StringJoiner q = new StringJoiner("&", base() + "/files?", "");
         q.add("q=" + enc(query));
         q.add("fields=" + enc(LIST_FIELDS));
@@ -59,24 +57,24 @@ public class HttpDriveApi implements DriveApi {
         if (pageToken != null && !pageToken.isBlank()) {
             q.add("pageToken=" + enc(pageToken));
         }
-        return http().getJson(q.toString(), accessToken);
+        return http.getJson(q.toString(), auth, timeoutSeconds);
     }
 
     @Override
-    public byte[] download(String accessToken, String fileId) {
-        return http().getBytes(base() + "/files/" + enc(fileId)
-                + "?alt=media&supportsAllDrives=true", accessToken);
+    public byte[] download(GoogleAuth auth, String fileId) {
+        return http.getBytes(base() + "/files/" + enc(fileId)
+                + "?alt=media&supportsAllDrives=true", auth, timeoutSeconds);
     }
 
     @Override
-    public byte[] export(String accessToken, String fileId, String exportMimeType) {
-        return http().getBytes(base() + "/files/" + enc(fileId)
-                + "/export?mimeType=" + enc(exportMimeType), accessToken);
+    public byte[] export(GoogleAuth auth, String fileId, String exportMimeType) {
+        return http.getBytes(base() + "/files/" + enc(fileId)
+                + "/export?mimeType=" + enc(exportMimeType), auth, timeoutSeconds);
     }
 
     @Override
-    public JsonNode about(String accessToken) {
-        return http().getJson(base() + "/about?fields=user", accessToken);
+    public JsonNode about(GoogleAuth auth) {
+        return http.getJson(base() + "/about?fields=user", auth, timeoutSeconds);
     }
 
     private static String enc(String s) {

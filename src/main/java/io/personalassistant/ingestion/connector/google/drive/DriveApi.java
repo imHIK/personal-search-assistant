@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.google.drive;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 
 /**
  * The Google Drive REST surface the {@link GoogleDriveConnector} depends on — the {@code files.list},
@@ -8,8 +9,9 @@ import com.fasterxml.jackson.databind.JsonNode;
  * as a port keeps the connector's folder-tree discovery, pagination, and content-mapping logic
  * unit-testable against an in-memory fake, and confines transport to {@link HttpDriveApi}.
  *
- * <p>Every method takes an already-resolved bearer {@code accessToken}; obtaining/refreshing it is
- * the job of {@link io.personalassistant.ingestion.connector.google.GoogleAccessTokens}.
+ * <p>Every method takes already-resolved {@link GoogleAuth} — the bearer token plus the account's rate
+ * limit; obtaining, refreshing and resolving both is the job of
+ * {@link io.personalassistant.ingestion.connector.google.GoogleAccessTokens}.
  */
 public interface DriveApi {
 
@@ -23,14 +25,14 @@ public interface DriveApi {
      * @return node with {@code files[]} (id, name, mimeType, modifiedTime, size, version, md5Checksum,
      *         webViewLink) and an optional {@code nextPageToken}
      */
-    JsonNode listFiles(String accessToken, String query, String orderBy, String pageToken, int pageSize);
+    JsonNode listFiles(GoogleAuth auth, String query, String orderBy, String pageToken, int pageSize);
 
     /** {@code files.get?alt=media}: raw bytes of a binary (non-Google-native) file. */
-    byte[] download(String accessToken, String fileId);
+    byte[] download(GoogleAuth auth, String fileId);
 
     /** {@code files.export}: a Google-native doc rendered to {@code exportMimeType} (e.g. text/plain). */
-    byte[] export(String accessToken, String fileId, String exportMimeType);
+    byte[] export(GoogleAuth auth, String fileId, String exportMimeType);
 
     /** {@code about?fields=user}: used by {@code verify} to prove the credentials work. */
-    JsonNode about(String accessToken);
+    JsonNode about(GoogleAuth auth);
 }

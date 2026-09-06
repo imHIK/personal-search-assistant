@@ -75,6 +75,28 @@ public class JobBoardsConnector implements SourceConnector {
      */
     public static final String LOCATIONS_INPUT = "locations";
 
+    /**
+     * {@code inputs} keys holding the role filter. Title is the strongest lever available, because it
+     * is the one useful field every platform puts in its <em>listing</em>: filtering on it removes both
+     * the embedding and, on the per-posting platforms, the detail request. Measured over 71 boards, the
+     * location terms alone take 355k chunks to 34k; adding these takes it to roughly 7k.
+     *
+     * <p>Exclude exists separately from include because it does as much work: on a real corpus,
+     * dropping {@code manager|director|sales|support} removed a quarter of what an engineering include
+     * list had kept.
+     */
+    public static final String TITLE_INCLUDE_INPUT = "titleInclude";
+    public static final String TITLE_EXCLUDE_INPUT = "titleExclude";
+
+    /** {@code inputs} key: keep only postings posted within this many days. Absent or 0 = no limit. */
+    public static final String MAX_AGE_DAYS_INPUT = "maxAgeDays";
+
+    /**
+     * {@code inputs} key: when true a stated-remote posting satisfies {@link #LOCATIONS_INPUT} however
+     * it is filed. An OR with the place terms rather than a filter of its own — see {@link BoardFilter}.
+     */
+    public static final String INCLUDE_REMOTE_INPUT = "includeRemote";
+
     /** Iterable attributes carrying the resolved platform and handle through to {@link #grab}. */
     public static final String PLATFORM_ATTRIBUTE = "platform";
     public static final String HANDLE_ATTRIBUTE = "handle";
@@ -143,7 +165,14 @@ public class JobBoardsConnector implements SourceConnector {
      */
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        return String.join(",", locations(inputs));
+        // Every filter dimension is a within-iterable membership boundary: tightening one means the
+        // surviving postings of a board change, which is a §3.2 re-walk, not a §3.1 iterable add. Leave
+        // one out and editing it would quietly never re-walk, so the board keeps whatever it had.
+        BoardFilter f = filter(inputs);
+        return String.join(",", f.locations()) + "|" + String.join(",", f.titleInclude())
+                + "|" + String.join(",", f.titleExclude())
+                + "|" + (f.maxAge() == null ? "" : f.maxAge().toDays())
+                + "|" + f.includeRemote();
     }
 
     @Override
@@ -193,11 +222,13 @@ public class JobBoardsConnector implements SourceConnector {
                 .orElseThrow(() -> new AtsApiException(
                         "No supported job board for '" + context.iterableId() + "'"));
 
-        // Filtered here rather than inside the platform: none of these APIs takes a location parameter,
-        // so the whole board arrives either way and the saving is entirely downstream — the upsert,
-        // parse, chunk and embed that every surviving item pays for.
-        List<String> terms = locations(context.knowledge());
-        List<RawItem> items = retainMatching(resolved.platform().fetch(resolved.handle(), terms), terms);
+        // The platform gets the filter as a hint — the per-posting ones use it to avoid detail calls,
+        // and Workday/Oracle turn the location terms into a server-side query — but this pass is the
+        // authoritative one. Everything that survives is upserted, parsed, chunked and embedded, so
+        // this line is what actually bounds the cost of a knowledge.
+        BoardFilter filter = filter(context.knowledge());
+        List<RawItem> items = retainMatching(
+                resolved.platform().fetch(resolved.handle(), filter), filter);
 
         CursorPosition position = context.cursor().toBuilder()
                 .put(POS_SNAPSHOT_AT, Instant.now().toEpochMilli())
@@ -301,33 +332,29 @@ public class JobBoardsConnector implements SourceConnector {
     // ---- inputs ------------------------------------------------------------------------------
 
     /**
-     * Keep only postings whose location matches one of {@code terms}, case-insensitively.
+     * Apply {@code filter} to whatever the platform returned.
      *
-     * <p><strong>A posting with no location survives.</strong> Boards leave the field blank often
-     * enough that dropping those would lose real roles on the strength of a missing value, and nothing
-     * distinguishes an irrelevant location from an unstated one. Same rule as
-     * {@code IngestionJob.connectionUnusable}: any doubt runs it.
+     * <p><strong>A posting with no location survives</strong> a location term list, and one with no
+     * posted date survives an age limit. Boards leave those fields blank often enough that dropping on
+     * them would lose real roles on the strength of a missing value, and nothing distinguishes an
+     * irrelevant location from an unstated one. Same rule as {@code IngestionJob.connectionUnusable}:
+     * any doubt runs it. A title, by contrast, is always present, so the title terms are exact.
      *
-     * <p>Note the country name alone is usually not enough — most boards file a role as
-     * {@code "Bengaluru"} with no country, so a term list should name cities.
+     * <p>Note the country name alone is usually not enough for the location terms — most boards file a
+     * role as {@code "Bengaluru"} with no country, so a term list should name cities.
      */
     // Package-private for tests.
-    static List<RawItem> retainMatching(List<RawItem> items, List<String> terms) {
-        if (terms.isEmpty() || items == null) {
+    static List<RawItem> retainMatching(List<RawItem> items, BoardFilter filter) {
+        if (items == null || filter.isEmpty()) {
             return items;
         }
         List<RawItem> kept = new ArrayList<>(items.size());
         for (RawItem item : items) {
-            if (item.deleted() || matches(item, terms)) {
+            if (filter.matches(item)) {
                 kept.add(item);
             }
         }
         return List.copyOf(kept);
-    }
-
-    private static boolean matches(RawItem item, List<String> terms) {
-        Object value = item.metadata() == null ? null : item.metadata().get("location");
-        return AtsNormalization.matchesLocation(value == null ? null : value.toString(), terms);
     }
 
     /** The configured companies, de-duplicated and order-preserving. Accepts a list or a single string. */
@@ -342,6 +369,44 @@ public class JobBoardsConnector implements SourceConnector {
 
     private static List<String> locations(Map<String, Object> inputs) {
         return stringList(inputs, LOCATIONS_INPUT, true);
+    }
+
+    /** The knowledge's filter, or {@link BoardFilter#NONE} when nothing is configured. */
+    // Package-private for tests.
+    static BoardFilter filter(Knowledge knowledge) {
+        return filter(knowledge == null ? null : knowledge.inputs());
+    }
+
+    private static BoardFilter filter(Map<String, Object> inputs) {
+        return new BoardFilter(
+                stringList(inputs, LOCATIONS_INPUT, true),
+                stringList(inputs, TITLE_INCLUDE_INPUT, true),
+                stringList(inputs, TITLE_EXCLUDE_INPUT, true),
+                days(inputs, MAX_AGE_DAYS_INPUT),
+                bool(inputs, INCLUDE_REMOTE_INPUT));
+    }
+
+    /** A positive whole number of days, however the console happened to encode it. */
+    private static Duration days(Map<String, Object> inputs, String key) {
+        Object raw = inputs == null ? null : inputs.get(key);
+        long value;
+        if (raw instanceof Number n) {
+            value = n.longValue();
+        } else if (raw instanceof String s && !s.isBlank()) {
+            try {
+                value = Long.parseLong(s.trim());
+            } catch (NumberFormatException e) {
+                return null; // an unparseable limit is no limit, not an empty knowledge
+            }
+        } else {
+            return null;
+        }
+        return value > 0 ? Duration.ofDays(value) : null;
+    }
+
+    private static boolean bool(Map<String, Object> inputs, String key) {
+        Object raw = inputs == null ? null : inputs.get(key);
+        return raw instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(raw));
     }
 
     private static List<String> stringList(Map<String, Object> inputs, String key, boolean lowercase) {

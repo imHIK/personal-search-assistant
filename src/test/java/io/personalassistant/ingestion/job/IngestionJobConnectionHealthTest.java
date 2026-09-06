@@ -38,7 +38,7 @@ class IngestionJobConnectionHealthTest {
         StubConnector connector = new StubConnector(TYPE, List.of(new SourceIterable("root", "root", Map.of())))
                 .withRequiresConnection(requiresConnection);
         ConnectionResolver resolver = kn -> new Connection("conn_1", "Work", TYPE, Map.of(), Map.of(),
-                true, status, null, Instant.now(), Instant.now());
+                null, true, status, null, Instant.now(), Instant.now());
         IngestionJob job = new IngestionJob(cursors, knowledge, null, null,
                 new SingleConnectorRegistry(connector), resolver);
         job.pollBatch = 20;

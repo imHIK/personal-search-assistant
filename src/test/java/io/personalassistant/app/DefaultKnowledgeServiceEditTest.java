@@ -123,7 +123,7 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of()); // add defaults scheduleEnabled=false
         // Simulate a forward cursor that has caught up and is waiting for the scheduler.
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
-        cursors.store.put(fwd.id(), new Cursor(fwd.id(), fwd.knowledgeId(), fwd.iterableId(),
+        cursors.store.put(fwd.id(), new Cursor(fwd.id(), fwd.knowledgeId(), fwd.iterableId(), fwd.iterableName(),
                 fwd.attributes(), fwd.direction(), fwd.position(), CursorStatus.IDLE, null,
                 fwd.retry(), fwd.stats(), fwd.scope()));
 
@@ -356,7 +356,7 @@ class DefaultKnowledgeServiceEditTest {
     }
 
     private void putStatusAndPosition(Cursor c, CursorStatus status, CursorPosition position) {
-        cursors.store.put(c.id(), new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.attributes(),
+        cursors.store.put(c.id(), new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(), c.attributes(),
                 c.direction(), position, status, null, c.retry(), c.stats(), c.scope()));
     }
 }

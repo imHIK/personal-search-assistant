@@ -3,8 +3,9 @@ package io.personalassistant.domain.model.enums;
 /**
  * Operational state of a {@link io.personalassistant.domain.model.Cursor}.
  *
- * <p>The ingestion loop only ever asks one question: is this cursor {@link #AVAILABLE}?
- * Everything other than {@link #AVAILABLE}/{@link #IN_PROGRESS} simply means "don't pick me".
+ * <p>The ingestion loop asks one question: may this cursor be claimed now? {@link #AVAILABLE} and a
+ * lease-expired {@link #IN_PROGRESS} always may; {@link #RATE_LIMITED} may once its
+ * {@code retry.nextAttemptAt} has passed; everything else simply means "don't pick me".
  */
 public enum CursorStatus {
     /** Re-pick me: just created, more pages remain, or re-armed by the scheduler. */
@@ -28,6 +29,15 @@ public enum CursorStatus {
      * reappears.
      */
     RETIRED,
+    /**
+     * Held out of the claim batch because the source's quota is spent: the limiter said the window
+     * reopens at {@code retry.nextAttemptAt}, and the claim filter skips this cursor until then.
+     *
+     * <p>A resting state like {@link #AVAILABLE}, not a failure — being throttled is the limiter
+     * working. It is a separate status rather than a quiet {@code AVAILABLE} precisely so the
+     * console can say so: the fix, if any, is the user's (raise the account's limit), not the app's.
+     */
+    RATE_LIMITED,
     /** Errored past the retry limit; dead-letter, needs intervention. */
     FAILED
 }

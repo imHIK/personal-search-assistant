@@ -113,6 +113,29 @@ class DefaultKnowledgeServiceTest {
     }
 
     @Test
+    void createdCursorsSnapshotIterableDisplayNameAndReconcileRefreshesIt() {
+        Knowledge kn = addKnowledge();
+        connector.addIterable(new SourceIterable("chan_b", "Engineering", Map.of()));
+        service.reconcileCursors(kn.id());
+
+        assertEquals("Engineering", nameOf(kn.id(), "chan_b"),
+                "the cursor carries the label the console shows in place of the id");
+
+        // The channel is renamed at the source; reconcile is what catches up.
+        connector.removeIterable("chan_b");
+        connector.addIterable(new SourceIterable("chan_b", "Platform", Map.of()));
+        service.reconcileCursors(kn.id());
+
+        assertEquals("Platform", nameOf(kn.id(), "chan_b"), "a source-side rename is picked up");
+    }
+
+    private String nameOf(String knowledgeId, String iterableId) {
+        return cursors.findByKnowledge(knowledgeId).stream()
+                .filter(c -> c.iterableId().equals(iterableId)).findFirst().orElseThrow()
+                .iterableName();
+    }
+
+    @Test
     void deletedIterableRetiresItsCursorsAndPurgesData() {
         Knowledge kn = addKnowledge(); // chan_a + its cursors
         entities.upsert(TestData.entityInIterable("ent_a", kn.id(), "chan_a", "a1"));

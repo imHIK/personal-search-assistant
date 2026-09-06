@@ -32,6 +32,10 @@ public interface IndexingService {
      * budget. Nothing else moves either out of {@code FAILED}, so without this a transient burst of
      * failures leaves work permanently stranded.
      *
+     * <p>It also releases {@code RATE_LIMITED} cursors early, clearing the hold the limiter wrote.
+     * That instant was computed against a quota the caller has typically just changed, so this
+     * doubles as "I have raised the limit, run now" — the only way to shorten a hold.
+     *
      * <p>Deliberately separate from {@link #triggerSync}: that one is direction-scoped (forward
      * cursors only) and its {@code cursorsArmed} count is documented as such, while dead-lettered
      * cursors include backward ones. Folding recovery into a routine sync would also remove any way

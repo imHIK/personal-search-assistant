@@ -27,6 +27,7 @@ export type CursorStatus =
   | 'SUSPENDED'
   | 'EXHAUSTED'
   | 'RETIRED'
+  | 'RATE_LIMITED'
   | 'FAILED'
 export type SearchMode = 'LEXICAL' | 'SEMANTIC' | 'HYBRID'
 
@@ -139,6 +140,13 @@ export interface EntityItem {
   error: string | null
   retryCount: number
   needsReindex: boolean
+  /** First ingested, and immutable — this is the item's "added" date. */
+  createdAt: string
+  /**
+   * Last write to the row from either stage, and the listing's sort key. Almost all of its movement is
+   * indexing bookkeeping — a claim, a retry, a terminal write — so it is not a content date and belongs
+   * behind the technical toggle rather than in the item's summary line.
+   */
   updatedAt: string
 }
 
@@ -155,16 +163,34 @@ export interface EntityPage {
 export interface CursorInfo {
   id: string
   iterableId: string
+  /** Human label for the stream (folder, label, company). Null on cursors created before names were stored. */
+  iterableName: string | null
   direction: CursorDirection
   status: CursorStatus
   retryCount: number
   lastError: string | null
+  /** Set only while `status` is `RATE_LIMITED`: when the source's quota lets this stream run again. */
+  nextAttemptAt: string | null
   lastRunAt: string | null
   fetched: number
   position: Blob
 }
 
 // ---- Connections ---------------------------------------------------------------------------
+
+/**
+ * One ceiling on how fast this app may call the account's service: at most `permits` requests in
+ * any `windowSeconds`. Several compose, and a call must satisfy all of them.
+ */
+export interface RateLimitRule {
+  permits: number
+  windowSeconds: number
+}
+
+/** An empty `rules` array means no limit — and is how a limit is *removed* (see PatchConnectionBody). */
+export interface RateLimitPolicy {
+  rules: RateLimitRule[]
+}
 
 export interface Connection {
   id: string
@@ -173,6 +199,8 @@ export interface Connection {
   /** Returned **unredacted** by the backend — mask before rendering. */
   auth: Blob
   config: Blob
+  /** Null when the account uses the server-wide default. */
+  rateLimit: RateLimitPolicy | null
   status: ConnectionStatus
   lastError: string | null
   createdAt: string
@@ -191,6 +219,7 @@ export interface CreateConnectionBody {
   type: SourceType
   auth?: Blob
   config?: Blob
+  rateLimit?: RateLimitPolicy
   makeDefault?: boolean
 }
 
@@ -198,6 +227,11 @@ export interface PatchConnectionBody {
   name?: string
   auth?: Blob
   config?: Blob
+  /**
+   * Absent leaves the existing limit alone, since that is what an omitted PATCH field means
+   * everywhere else. To *remove* a limit send `{ rules: [] }` — there is no other way to say it.
+   */
+  rateLimit?: RateLimitPolicy
 }
 
 // ---- Search --------------------------------------------------------------------------------

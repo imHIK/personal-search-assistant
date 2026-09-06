@@ -152,7 +152,7 @@ function DigestCard({ digest, running, onRun, onToggle, onRemove }: CardProps) {
           // A failed run is shown, not hidden: a digest that has been erroring for a week should
           // look broken rather than merely quiet.
           <div className="flex gap-2">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[var(--tone-bad)]" aria-hidden />
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[var(--tone-alert)]" aria-hidden />
             <div className="min-w-0">
               <p className="text-xs text-[var(--text-muted)]">{labels.digests.runFailed}</p>
               <p className="truncate text-[11px] text-[var(--text-subtle)]">{latest.error}</p>

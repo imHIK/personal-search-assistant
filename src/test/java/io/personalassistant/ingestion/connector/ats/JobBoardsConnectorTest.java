@@ -30,6 +30,8 @@ class JobBoardsConnectorTest {
         private final String id;
         private final Map<String, List<RawItem>> boards;
         int probes;
+        /** Test observability: the filter the connector handed down as a hint. */
+        BoardFilter lastFilter;
 
         StubPlatform(String id, Map<String, List<RawItem>> boards) {
             this.id = id;
@@ -49,7 +51,8 @@ class JobBoardsConnectorTest {
         }
 
         @Override
-        public List<RawItem> fetch(String handle, List<String> locationHints) {
+        public List<RawItem> fetch(String handle, BoardFilter filter) {
+            lastFilter = filter;
             return boards.getOrDefault(handle, List.of());
         }
     }
@@ -62,6 +65,24 @@ class JobBoardsConnectorTest {
                 "sum:" + id, Instant.now(), Map.of(), "body", null, metadata, null, false);
     }
 
+    private static RawItem posting(String id, String location, boolean remote, Instant postedAt) {
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("title", id);
+        metadata.put("location", location);
+        metadata.put("remote", remote);
+        metadata.put("postedAt", postedAt);
+        return new RawItem(id, EntityType.JOB_POSTING, "text/html", id, "uri://" + id,
+                "sum:" + id, postedAt, Map.of(), "body", null, metadata, null, false);
+    }
+
+    /** Four postings spanning title, place, remote and age, used by the filter tests. */
+    private static final List<RawItem> FILTERABLE = List.of(
+            posting("engineer-blr", "Bengaluru, India", false, Instant.now()),
+            posting("engineer-remote", "London, UK", true, Instant.now()),
+            posting("manager-blr", "Bengaluru, India", false, Instant.now()),
+            posting("engineer-stale", "Bengaluru, India", false,
+                    Instant.now().minus(java.time.Duration.ofDays(60))));
+
     private static final List<RawItem> BOARD = List.of(
             posting("bengaluru", "Bengaluru, India"),
             posting("city-only", "Bengaluru"),   // no country — the common real-world shape
@@ -69,7 +90,8 @@ class JobBoardsConnectorTest {
             posting("remote-us", "Remote - US"),
             posting("unstated", null));
 
-    private final StubPlatform greenhouse = new StubPlatform("greenhouse", Map.of("acme", BOARD));
+    private final StubPlatform greenhouse =
+            new StubPlatform("greenhouse", Map.of("acme", BOARD, "filterable", FILTERABLE));
     private final StubPlatform lever = new StubPlatform("lever", Map.of("globex", BOARD));
 
     private JobBoardsConnector connector() {
@@ -85,8 +107,18 @@ class JobBoardsConnectorTest {
     }
 
     private List<String> grab(String company, Object locations) {
-        JobBoardsConnector connector = connector();
-        Knowledge kn = knowledge(List.of(company), locations);
+        return grab(company, knowledge(List.of(company), locations), connector());
+    }
+
+    /** Grab with arbitrary inputs, for the filter dimensions beyond locations. */
+    private List<String> grabWith(String company, Map<String, Object> extraInputs) {
+        Map<String, Object> inputs = new java.util.LinkedHashMap<>(extraInputs);
+        inputs.put(JobBoardsConnector.COMPANIES_INPUT, List.of(company));
+        return grab(company, TestData.knowledge("kn_1", SourceType.JOB_BOARDS, Instant.now(), inputs),
+                connector());
+    }
+
+    private List<String> grab(String company, Knowledge kn, JobBoardsConnector connector) {
         SourceIterable iterable = connector.discover(kn).stream()
                 .filter(i -> i.iterableId().equals(company)).findFirst().orElseThrow();
         return connector.grab(new GrabContext(kn, company, iterable.attributes(),
@@ -218,6 +250,59 @@ class JobBoardsConnectorTest {
     @Test
     void acceptsASingleStringAsWellAsAList() {
         Assertions.assertEquals(List.of("bengaluru", "unstated"), grab("acme", "India"));
+    }
+
+    // ---- title / age / remote filters ----------------------------------------------------------
+
+    @Test
+    void aTitleIncludeListNarrowsTheBoard() {
+        // The strongest lever there is: on a real 71-board corpus the location terms alone leave
+        // ~34k chunks to embed and adding role terms takes it to ~7k.
+        Assertions.assertEquals(List.of("engineer-blr", "engineer-remote", "engineer-stale"),
+                grabWith("filterable", Map.of(JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("engineer"))));
+    }
+
+    @Test
+    void aTitleExcludeListWinsOverTheIncludeList() {
+        Assertions.assertEquals(List.of("engineer-blr", "engineer-stale"),
+                grabWith("filterable", Map.of(
+                        JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("engineer"),
+                        JobBoardsConnector.TITLE_EXCLUDE_INPUT, List.of("remote"))));
+    }
+
+    @Test
+    void includeRemoteAdmitsARemoteRoleFiledOutsideTheNamedPlaces() {
+        Assertions.assertEquals(List.of("engineer-blr", "manager-blr", "engineer-stale"),
+                grabWith("filterable", Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"))),
+                "the London remote role is out");
+        Assertions.assertEquals(
+                List.of("engineer-blr", "engineer-remote", "manager-blr", "engineer-stale"),
+                grabWith("filterable", Map.of(
+                        JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"),
+                        JobBoardsConnector.INCLUDE_REMOTE_INPUT, true)),
+                "and back in once remote counts as a place");
+    }
+
+    @Test
+    void anAgeLimitDropsStalePostings() {
+        Assertions.assertEquals(List.of("engineer-blr", "engineer-remote", "manager-blr"),
+                grabWith("filterable", Map.of(JobBoardsConnector.MAX_AGE_DAYS_INPUT, 14)));
+    }
+
+    @Test
+    void anUnparseableAgeLimitMeansNoLimitRatherThanAnEmptyBoard() {
+        // A knowledge that silently indexes nothing is far worse than one that ignores a bad setting.
+        Assertions.assertEquals(4, grabWith("filterable",
+                Map.of(JobBoardsConnector.MAX_AGE_DAYS_INPUT, "not-a-number")).size());
+    }
+
+    @Test
+    void theFilterIsHandedToThePlatformAsAHint() {
+        // The per-posting platforms use it to skip detail calls; Workday and Oracle turn the place
+        // terms into a server-side query. The connector still re-applies it authoritatively.
+        grabWith("filterable", Map.of(JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("Engineer")));
+
+        Assertions.assertEquals(List.of("engineer"), greenhouse.lastFilter.titleInclude());
     }
 
     // ---- membershipSignature -------------------------------------------------------------------

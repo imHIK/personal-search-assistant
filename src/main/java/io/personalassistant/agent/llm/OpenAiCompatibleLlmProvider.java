@@ -6,11 +6,14 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -51,10 +54,15 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
     long timeoutSeconds;
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
     private final AtomicBoolean configLogged = new AtomicBoolean();
+    private final OutboundHttp http;
+    private final RateLimitPolicies policies;
+
+    @Inject
+    public OpenAiCompatibleLlmProvider(OutboundHttp http, RateLimitPolicies policies) {
+        this.http = http;
+        this.policies = policies;
+    }
 
     @Override
     public String providerId() {
@@ -102,38 +110,43 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
                 addMessage(msgs, m.role(), m.content());
             }
 
-            HttpRequest.Builder request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint.replaceAll("/+$", "") + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(timeoutSeconds))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
             String key = resolveKey(profile);
-            if (key != null) {
-                request.header("Authorization", "Bearer " + key);
-            }
+            // The profile decides whether a throttled call waits: answering runs on a user's request
+            // thread and should degrade to answerError, while a digest runs in the background and should
+            // simply take longer. See LlmProfile#rateLimitMode.
+            HttpCall call = HttpCall
+                    .post(endpoint.replaceAll("/+$", "") + "/chat/completions",
+                            mapper.writeValueAsString(body), Duration.ofSeconds(timeoutSeconds),
+                            policies.forLlm(providerId(), profile.rateLimitMode().orElse(defaultMode())))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", key == null ? null : "Bearer " + key);
 
             LOG.fine(() -> "LLM request: " + messages.size() + " message(s) -> "
                     + callSummary(profile, endpoint, model, key != null));
-            HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2) {
-                // See the embedding provider: a missing key is reported by vendors as anything from
-                // 400 to 404, so the resolved config belongs in the message rather than the logs only.
-                throw new IllegalStateException("LLM API " + response.statusCode() + ": "
-                        + snippet(response.body()) + " ["
-                        + callSummary(profile, endpoint, model, key != null) + "]");
-            }
-
-            JsonNode content = mapper.readTree(response.body())
+            JsonNode content = http.json(call)
                     .path("choices").path(0).path("message").path("content");
             if (content.isMissingNode() || content.isNull()) {
-                throw new IllegalStateException("LLM API returned no choices: " + snippet(response.body()));
+                throw new IllegalStateException("LLM API returned no choices from " + endpoint);
             }
             return content.asText();
+        } catch (RateLimitedException e) {
+            throw e;
+        } catch (OutboundHttpException e) {
+            throw new IllegalStateException("LLM API " + e.status() + ": " + e.bodySnippet() + " ["
+                    + callSummary(profile, endpoint, model, resolveKey(profile) != null) + "]", e);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("LLM request failed (" + endpoint + ")", e);
         }
+    }
+
+    /**
+     * What a profile that says nothing gets. Fail-fast, because the only caller that reaches the LLM
+     * without naming a background profile is answering, on a user's request thread.
+     */
+    private static RateLimitMode defaultMode() {
+        return RateLimitMode.FAIL_FAST;
     }
 
     /**
@@ -186,12 +199,5 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         ObjectNode node = messages.addObject();
         node.put("role", role);
         node.put("content", content);
-    }
-
-    private static String snippet(String body) {
-        if (body == null) {
-            return "";
-        }
-        return body.length() <= 500 ? body : body.substring(0, 500) + "…";
     }
 }

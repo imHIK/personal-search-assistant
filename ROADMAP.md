@@ -69,10 +69,11 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
   rejected: five direct ATS platforms now give both better data and more breadth than an aggregator
   (`docs/job-discovery.md` has the measured comparison), and Adzuna does not reach Naukri's inventory
   either. Its real value is *discovering companies not already on the watchlist*, which then get added
-  as `JOB_BOARDS` companies. It would be the **first connector needing outbound rate limiting** —
-  there is none in the codebase, and `docs/knowledge-lifecycle.md` puts per-source rate limiting inside
-  the connector's `grab`, not in the shared HTTP layer. Note this is unrelated to the *inbound* rate
-  limiting in #17. Give it a low `sourceRank` so duplicate collapsing keeps the direct board listing.
+  as `JOB_BOARDS` companies. Outbound rate limiting is **no longer a blocker**: it now lives in the
+  shared HTTP layer (`common.http.OutboundHttp` + `common.ratelimit`), so Adzuna would set
+  `app.ratelimit.connector.ADZUNA.rules` and name its bucket — no per-connector throttling code.
+  Note this is unrelated to the *inbound* rate limiting in #17. Give it a low `sourceRank` so
+  duplicate collapsing keeps the direct board listing.
 
 ## Tier 3 — Productionization
 

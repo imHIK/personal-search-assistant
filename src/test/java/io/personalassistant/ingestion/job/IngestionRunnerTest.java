@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Entity;
@@ -51,6 +53,7 @@ class IngestionRunnerTest {
         runner.maxItemsPerBatch = 100;
         runner.leaseSeconds = 60;
         runner.retryLimit = 2;
+        runner.maxDeferrals = 3;
 
         kn = TestData.knowledge("kn_1", SourceType.LOCAL_FS, Instant.now(), Map.of("rootPath", "/tmp"));
         knowledge.save(kn);
@@ -72,6 +75,10 @@ class IngestionRunnerTest {
         cursors.insertIfAbsent(cursor);
         // Lease it to the worker first, mirroring what IngestionJob does before runLease.
         return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
+    }
+
+    private static RateLimitedException rateLimited(Instant retryAt) {
+        return new RateLimitedException(RateLimitKey.connection("conn_1"), retryAt);
     }
 
     /** Re-arm (as the scheduler would) and re-claim, so a rested cursor can be run again. */
@@ -186,6 +193,131 @@ class IngestionRunnerTest {
         assertEquals(EntityStatus.INGESTED, entities.findById(claimed.id()).orElseThrow().status());
         assertEquals(1, entities.claimForIndexing(10, "idx2", java.time.Duration.ofMinutes(5)).size(),
                 "the new revision is re-claimable, so it does reach the index");
+    }
+
+    /**
+     * An unchanged item that is merely still queued must not be re-upserted. The write itself is cheap;
+     * what it costs is the indexing stage's state — upsert() owns the queue reset, so it would zero the
+     * retry counter and clear retry.nextAttemptAt, discarding the reopening instant a rate-limit
+     * deferral wrote and making the entity claimable again immediately. A poll every few minutes then
+     * re-parses and re-chunks it for nothing until the limit truly reopens.
+     */
+    @Test
+    void anUnchangedItemStillAwaitingIndexingIsNotRewritten() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        // The indexer tried, hit a rate limit, and deferred to a reopening instant an hour out.
+        Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
+        Instant reopensAt = Instant.now().plusSeconds(3600);
+        assertTrue(entities.markFailed(claimed.id(), "idx1", EntityStatus.INGESTED, "throttled", 4,
+                reopensAt));
+
+        // The next poll re-sees the same item, byte for byte.
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+
+        Entity stored = entities.findById(claimed.id()).orElseThrow();
+        assertEquals(4, stored.retry().count(), "the deferral streak survives a poll");
+        assertEquals(reopensAt, stored.retry().nextAttemptAt(), "and so does the reopening instant");
+        assertTrue(entities.claimForIndexing(10, "idx2", java.time.Duration.ofMinutes(5)).isEmpty(),
+                "the hold still keeps it out of the claim batch");
+    }
+
+    /** A dead letter is the one status a re-seen item revives: the poll is a way back in. */
+    @Test
+    void anUnchangedItemThatDeadLetteredIsRewrittenSoItGetsAnotherChance() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
+        assertTrue(entities.markFailed(claimed.id(), "idx1", EntityStatus.FAILED, "boom", 6, null));
+
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+
+        Entity stored = entities.findById(claimed.id()).orElseThrow();
+        assertEquals(EntityStatus.INGESTED, stored.status(), "the dead letter is back in the queue");
+        assertEquals(0, stored.retry().count(), "with a fresh retry budget");
+    }
+
+    /**
+     * Being throttled is not a failure: the cursor rests in its own visible status carrying the
+     * instant the limiter says the window reopens, and stays out of the claim batch until then.
+     * Before this it rested AVAILABLE, so it was re-picked every poll tick — indistinguishable in
+     * the console from healthy work, and spending one deferral per tick rather than one per genuine
+     * reopening.
+     */
+    @Test
+    void rateLimitHoldsTheCursorOutOfTheClaimBatchUntilTheWindowReopens() {
+        Instant reopensAt = Instant.now().plusSeconds(600);
+        connector.failNext(rateLimited(reopensAt));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(CursorStatus.RATE_LIMITED, after.status());
+        assertEquals(reopensAt, after.retry().nextAttemptAt(), "the limiter's reopening instant is kept");
+        assertEquals(1, after.retry().count(), "and it counts against the deferral budget, not retryLimit");
+        assertTrue(after.retry().lastError().contains("Rate limited"));
+        assertTrue(cursors.findClaimable(100).isEmpty(), "the hold keeps it out of the poll batch");
+    }
+
+    @Test
+    void anElapsedHoldMakesTheCursorClaimableAgain() {
+        connector.failNext(rateLimited(Instant.now().minusSeconds(1)));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        assertEquals(List.of(cursor.id()),
+                cursors.findClaimable(100).stream().map(Cursor::id).toList(),
+                "no sweeper flips the status — the instant simply stops excluding it");
+    }
+
+    /**
+     * The deferral budget is a backstop for a limit set to something unsatisfiable, and dead-lettering
+     * must drop the hold: FAILED is outside the claim filter, so a leftover instant would only be a
+     * stale value for retry-failed to trip over.
+     */
+    @Test
+    void deadLetteringAfterTheDeferralBudgetClearsTheHold() {
+        runner.maxDeferrals = 1;
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        connector.failNext(rateLimited(Instant.now().minusSeconds(1)));
+        runner.runLease(kn, cursor, "w1", () -> {});
+        assertEquals(CursorStatus.RATE_LIMITED, cursors.store.get(cursor.id()).status());
+
+        // The hold has elapsed, so the loop picks it straight back up — and hits the wall again.
+        Cursor reclaimed = cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
+        connector.failNext(rateLimited(Instant.now().plusSeconds(600)));
+        runner.runLease(kn, reclaimed, "w1", () -> {});
+
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(CursorStatus.FAILED, after.status(), "consecutive deferrals past the budget dead-letter");
+        assertNull(after.retry().nextAttemptAt(), "a dead-lettered cursor carries no stale hold");
+    }
+
+    @Test
+    void aSuccessfulRunClearsARateLimitHold() {
+        connector.failNext(rateLimited(Instant.now().minusSeconds(1)));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        assertNotNull(cursors.store.get(cursor.id()).retry().nextAttemptAt());
+
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
+        runner.runLease(kn, cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow(),
+                "w1", () -> {});
+
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(CursorStatus.IDLE, after.status());
+        assertNull(after.retry().nextAttemptAt(), "release() zeroes the whole retry block, hold included");
     }
 
     /**

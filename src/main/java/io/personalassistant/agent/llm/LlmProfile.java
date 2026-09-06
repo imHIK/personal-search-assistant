@@ -1,5 +1,6 @@
 package io.personalassistant.agent.llm;
 
+import io.personalassistant.common.ratelimit.RateLimitMode;
 import java.util.Optional;
 
 /**
@@ -24,6 +25,11 @@ import java.util.Optional;
  *                    default applies and a long answer can be cut off without any local signal
  * @param apiKey      credential override for {@code baseUrl}; blank/absent means send no auth header,
  *                    which is legitimate for a local Ollama
+ * @param rateLimitMode what a rate-limited call should do. This belongs on the profile because it is a
+ *                    property of the <em>role</em>, not of the provider: {@code answer} runs on a user's
+ *                    request thread and should fail fast into {@code answerError}, while a digest role
+ *                    runs on a scheduler and should wait. Absent means fail fast, which is the safe
+ *                    default for the only caller that names no background profile — answering.
  */
 public record LlmProfile(
         String name,
@@ -31,11 +37,12 @@ public record LlmProfile(
         Optional<String> model,
         Optional<Double> temperature,
         Optional<Integer> maxTokens,
-        Optional<String> apiKey) {
+        Optional<String> apiKey,
+        Optional<RateLimitMode> rateLimitMode) {
 
     /** A profile that overrides nothing — every call falls back to the provider's own configuration. */
     public static LlmProfile inherit(String name) {
         return new LlmProfile(name, Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), Optional.empty());
     }
 }

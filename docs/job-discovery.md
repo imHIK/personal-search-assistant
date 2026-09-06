@@ -90,13 +90,20 @@ share of what is fetched is often a tenth**, which is why `inputs.locations` is 
 nicety: everything kept is parsed, chunked and embedded.
 
 Workday misses are wrong URL guesses, not absent tenants — Accenture, Walmart, IBM, Visa and Qualcomm
-all use it. That is a lookup problem, and the triple has to be pasted from the careers URL.
+all use it. That is a lookup problem, and the triple has to be pasted from the careers URL. The same
+turned out to be true of a second hosted ATS: **Oracle Recruiting Cloud** carries BNY Mellon (1,386
+requisitions), JPMorgan Chase (7,324) and Kotak Mahindra (9,647), and is now supported as `oraclehcm`
+— addressed by a `host/siteNumber` pair read off the careers page, exactly like Workday's triple. A worked
+example of that lookup across a real 126-company watchlist — what reached a board, what did not, and
+the manual step each remaining one needs — is in [`job-board-companies.md`](./job-board-companies.md).
 
 ### What is still out of reach
 
 Anything posted only to Naukri, Instahyre, Hirist, Wellfound or LinkedIn, every company on an Indian
 ATS (Darwinbox, Keka, Zoho Recruit), and bespoke careers pages — so most services companies and
-smaller Indian firms. There is no fix inside this design: Naukri never published a job-search API,
+smaller Indian firms. Also, for now, the other hosted ATSs a real watchlist turns up: Avature (Delta),
+iCIMS (Docusign), SuccessFactors (HCL), Radancy (Intuit) and RippleHire (7-Eleven). Each is one more
+`BoardPlatform` bean; none is reachable today. There is no fix inside this design: Naukri never published a job-search API,
 LinkedIn and Indeed retired theirs, and scraping breaches their terms.
 
 Treat the companies list as a **watchlist you keep widening**, not as market coverage. Reach is a

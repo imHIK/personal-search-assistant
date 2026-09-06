@@ -114,13 +114,14 @@ ahead of the connector that will use it.
 
 ## Resolution tiers, and which pattern to copy
 
-Three resolvers exist. Match the one whose shape fits rather than inventing a fourth:
+Four resolvers exist. Match the one whose shape fits rather than inventing a fifth:
 
 | Pattern | Example | Use when |
 |---|---|---|
 | **Per-leaf overlay** | `ChunkingSpecResolver` — per-knowledge nullable fields over `app.chunking.*` | a caller should override *some* fields and inherit the rest |
 | **Whole-value tier** | `ScheduleResolver` and `RetentionResolver` (knowledge → connector → global), `FieldSets` (connector → default) | a tier states the complete answer or says nothing |
 | **Dynamic by name** | `LlmProfiles` reading `app.llm.profile.<name>.*` | adding an instance should need config only, no code |
+| **Stored-entity over config** | `RateLimitPolicies` — `Connection.rateLimit` over `app.ratelimit.connector.<TYPE>.rules` | the value is **user-editable at runtime**, so it lives in Mongo and config only supplies the fallback |
 
 All three end in an immutable **resolved value record** — `ChunkingSpec`, `SyncSchedule`, `TaskSpec` —
 whose compact constructor does the clamping. That is what keeps tests CDI-free: a test builds the record
@@ -142,6 +143,18 @@ directly instead of standing up a container, and every path that produces one is
 > per document, or wants duplicates grouped, is a property of that call — so both are fields on
 > `SearchQuery` that fall back to the configured value. The rule of thumb: config sets the default,
 > the request states the exception.
+
+> **A user-editable setting is a third thing, and it is neither a knob nor content.** A rate limit is
+> a number, which reads like an `application.properties` knob — but the user changes it from the
+> console at runtime, so it has to be persisted per entity and config can only be its default. The
+> giveaway is *who edits it and when*: an operator editing a file at deploy time is a knob; a user
+> editing a form is entity data. `RateLimitPolicies` therefore reads the stored value first and falls
+> back to config, and holds no state of its own — the caller passes the resolved policy on every call,
+> so an edit takes effect on the next grab with no cache to invalidate.
+>
+> Note the asymmetry it forces on PATCH: absent already means "unchanged", so *clearing* the value
+> needs an explicit empty (`{"rateLimit": {"rules": []}}`). Any future user-editable collection will
+> hit the same problem — decide how removal is spelled before shipping the field.
 
 > **A tier may legitimately resolve to nothing.** `RetentionResolver` returns `null` when no tier sets
 > a window, and callers must read that as *never expire* rather than *expire immediately*. Shipping

@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.lever;
 
 import io.personalassistant.domain.model.RawItem;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
@@ -18,7 +19,7 @@ class LeverPlatformTest {
 
     private RawItem grabOne(String description) {
         return new LeverPlatform(new FakeLeverApi().withSite("acme", site(description)))
-                .fetch("acme", List.of()).get(0);
+                .fetch("acme", BoardFilter.ofLocations(List.of())).get(0);
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -55,7 +56,7 @@ public class AshbyPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, List<String> locationHints) {
+    public List<RawItem> fetch(String boardId, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
@@ -81,8 +82,9 @@ public class AshbyPlatform implements BoardPlatform {
         String plain = job.path("descriptionPlain").asText("");
         String body = html.isBlank() ? plain : html;
         String descriptionText = html.isBlank() ? plain : AtsNormalization.plainText(html);
+        // publishedAt is the only timestamp Ashby publishes — there is no updatedAt on this API, and
+        // reading the absent one used to yield a constant that made every posting look unchanged.
         String publishedAt = job.path("publishedAt").asText(null);
-        String updatedAt = job.path("updatedAt").asText("");
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
@@ -115,8 +117,8 @@ public class AshbyPlatform implements BoardPlatform {
                 html.isBlank() ? "text/plain" : "text/html",
                 title,
                 applyUrl,
-                "ashby:" + id + ";upd:" + updatedAt,
-                AtsNormalization.instantOrNull(updatedAt),
+                "ashby:" + id + ";v:" + AtsNormalization.changeStamp(title, location, body),
+                AtsNormalization.instantOrNull(publishedAt),
                 raw,
                 body,
                 null,

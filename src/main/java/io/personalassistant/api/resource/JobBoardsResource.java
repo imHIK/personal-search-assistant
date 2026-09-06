@@ -3,7 +3,6 @@ package io.personalassistant.api.resource;
 import io.personalassistant.api.dto.CompanyLookupDto;
 import io.personalassistant.ingestion.connector.ats.JobBoardsConnector;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -42,10 +41,10 @@ public class JobBoardsResource {
         List<String> companies = request == null || request.companies() == null
                 ? List.of() : request.companies();
         if (companies.isEmpty()) {
-            throw new BadRequestException("companies must not be empty");
+            throw ApiErrors.badRequest("companies must not be empty");
         }
         if (companies.size() > MAX_COMPANIES) {
-            throw new BadRequestException("at most " + MAX_COMPANIES
+            throw ApiErrors.badRequest("at most " + MAX_COMPANIES
                     + " companies per request; got " + companies.size());
         }
         return connector.lookup(companies).stream().map(CompanyLookupDto::from).toList();

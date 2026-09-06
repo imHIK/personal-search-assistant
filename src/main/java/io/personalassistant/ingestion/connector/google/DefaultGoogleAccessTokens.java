@@ -1,17 +1,18 @@
 package io.personalassistant.ingestion.connector.google;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.personalassistant.common.ConfigText;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimit;
+import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -65,22 +66,29 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
     Optional<String> defaultClientSecret;
 
     private final ConnectionRepository connections;
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
+    private final OutboundHttp http;
+    private final RateLimitPolicies policies;
     private final Map<String, CachedToken> cache = new ConcurrentHashMap<>();
 
     @Inject
-    public DefaultGoogleAccessTokens(ConnectionRepository connections) {
+    public DefaultGoogleAccessTokens(ConnectionRepository connections, OutboundHttp http,
+                                     RateLimitPolicies policies) {
         this.connections = connections;
+        this.http = http;
+        this.policies = policies;
     }
 
     @Override
-    public String bearer(Connection connection) {
+    public GoogleAuth authFor(Connection connection) {
         if (connection == null) {
             throw new IllegalArgumentException("No connection to authenticate with");
         }
+        RateLimit limit = policies.forConnection(connection.id(), connection.type().name(),
+                connection.rateLimit(), RateLimitMode.WAIT);
+        return new GoogleAuth(bearer(connection, limit), limit);
+    }
+
+    private String bearer(Connection connection, RateLimit limit) {
         Map<String, Object> auth = connection.auth();
 
         String accessToken = str(auth, "accessToken");
@@ -91,7 +99,7 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
 
         String refreshToken = str(auth, "refreshToken");
         if (refreshToken != null) {
-            return refreshed(connection);
+            return refreshed(connection, limit);
         }
         if (accessToken != null) {
             return accessToken; // best effort: no refresh token, use whatever we were given
@@ -100,7 +108,7 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
                 "Google connection " + connection.id() + " has no accessToken or refreshToken");
     }
 
-    private String refreshed(Connection connection) {
+    private String refreshed(Connection connection, RateLimit limit) {
         CachedToken cached = cache.get(connection.id());
         if (cached != null && !isExpired(cached.expiresAtEpochSec)) {
             return cached.accessToken;
@@ -121,35 +129,29 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
                 + "&refresh_token=" + enc(refreshToken)
                 + "&client_id=" + enc(clientId)
                 + "&client_secret=" + enc(clientSecret);
+        // The refresh is charged to the same account bucket: it is a request to Google on this
+        // account's behalf, and a token endpoint has a quota like any other.
+        HttpCall call = HttpCall.post(tokenUrl, form, Duration.ofSeconds(30), limit)
+                .acceptJson()
+                .header("Content-Type", "application/x-www-form-urlencoded");
+        JsonNode json;
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(tokenUrl))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(form))
-                    .build();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2) {
-                throw new GoogleApiException(response.statusCode(),
-                        "Google token refresh failed: " + snippet(response.body()));
+            json = http.json(call);
+        } catch (OutboundHttpException e) {
+            if (e.status() == 0) {
+                throw new GoogleApiException("Google token refresh request failed", e);
             }
-            JsonNode json = mapper.readTree(response.body());
-            String token = json.path("access_token").asText(null);
-            if (token == null) {
-                throw new GoogleApiException(response.statusCode(),
-                        "Google token refresh returned no access_token: " + snippet(response.body()));
-            }
-            long ttl = json.path("expires_in").asLong(3600);
-            long expiresAt = Instant.now().getEpochSecond() + ttl;
-            cache.put(connection.id(), new CachedToken(token, expiresAt));
-            persist(connection, token, expiresAt);
-            return token;
-        } catch (GoogleApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new GoogleApiException("Google token refresh request failed", e);
+            throw new GoogleApiException(e.status(), "Google token refresh failed: " + e.bodySnippet());
         }
+        String token = json.path("access_token").asText(null);
+        if (token == null) {
+            throw new GoogleApiException(0, "Google token refresh returned no access_token");
+        }
+        long ttl = json.path("expires_in").asLong(3600);
+        long expiresAt = Instant.now().getEpochSecond() + ttl;
+        cache.put(connection.id(), new CachedToken(token, expiresAt));
+        persist(connection, token, expiresAt);
+        return token;
     }
 
     /** Write the freshly-minted token back onto the connection so it survives restarts. Best-effort. */
@@ -191,13 +193,6 @@ public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
 
     private static String enc(String s) {
         return URLEncoder.encode(s, StandardCharsets.UTF_8);
-    }
-
-    private static String snippet(String body) {
-        if (body == null) {
-            return "";
-        }
-        return body.length() <= 300 ? body : body.substring(0, 300) + "…";
     }
 
     private record CachedToken(String accessToken, long expiresAtEpochSec) {

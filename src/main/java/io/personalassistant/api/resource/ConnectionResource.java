@@ -6,19 +6,15 @@ import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -44,14 +40,15 @@ public class ConnectionResource {
         try {
             return connectionService.listByType(SourceType.valueOf(type));
         } catch (IllegalArgumentException e) {
-            throw new BadRequestException("Unknown connector type: " + type);
+            throw ApiErrors.badRequest("Unknown connector type: " + type);
         }
     }
 
     @GET
     @Path("/{id}")
     public Connection get(@PathParam("id") String id) {
-        return connectionService.get(id).orElseThrow(NotFoundException::new);
+        return connectionService.get(id)
+                .orElseThrow(() -> ApiErrors.notFound("No connection with id " + id));
     }
 
     /** Create a connection: verifies the credentials, then persists and assigns the type default. */
@@ -60,7 +57,7 @@ public class ConnectionResource {
         try {
             return connectionService.create(dto.toRequest());
         } catch (IllegalArgumentException e) { // unknown type, no-connection connector, or bad creds
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
@@ -70,9 +67,9 @@ public class ConnectionResource {
         try {
             return connectionService.update(id, dto.toEdit());
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) { // re-verification failed
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
@@ -87,7 +84,7 @@ public class ConnectionResource {
         try {
             return connectionService.test(id);
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -98,7 +95,7 @@ public class ConnectionResource {
         try {
             return connectionService.setDefault(id);
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -108,9 +105,9 @@ public class ConnectionResource {
         try {
             connectionService.delete(id);
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalStateException e) { // still bound to knowledges
-            throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+            throw ApiErrors.conflict(e.getMessage());
         }
     }
 }

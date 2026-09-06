@@ -43,7 +43,7 @@ public final class TestData {
     public static Connection connection(String id, SourceType type, boolean isDefault,
                                         Map<String, Object> auth) {
         Instant now = Instant.now();
-        return new Connection(id, "test-" + id, type, auth, Map.of(), isDefault,
+        return new Connection(id, "test-" + id, type, auth, Map.of(), null, isDefault,
                 ConnectionStatus.ACTIVE, null, now, now);
     }
 
@@ -102,7 +102,7 @@ public final class TestData {
     public static Cursor cursor(String knowledgeId, String iterableId, Map<String, Object> attributes,
                                 CursorDirection direction, SourceType type) {
         return new Cursor("cur_" + knowledgeId + iterableId + direction, knowledgeId, iterableId,
-                attributes, direction, CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
+                iterableId, attributes, direction, CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
                 Cursor.Stats.zero(), new Cursor.Scope(type));
     }
 

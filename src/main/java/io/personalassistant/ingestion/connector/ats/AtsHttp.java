@@ -1,90 +1,64 @@
 package io.personalassistant.ingestion.connector.ats;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimit;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.time.Duration;
 
 /**
- * Thin JSON-over-HTTP helper shared by the ATS board adapters, mirroring
- * {@code google.GoogleHttp} — a request timeout plus non-2xx &rarr; {@link AtsApiException}
- * translation, so each adapter reads as a list of endpoints.
+ * JSON-over-HTTP for the ATS board adapters: the shared {@link OutboundHttp} transport plus the one
+ * thing that is local to this package — translating a failure into {@link AtsApiException}, whose
+ * {@code isNotFound()} the board resolution path branches on.
  *
- * <p>Unlike the Google helper there is no bearer header: these are the boards' <em>public</em>
- * job-board endpoints, which is also why the connectors need no {@code Connection}.
- *
- * <p>Intentionally not a CDI bean — a value-like collaborator each adapter constructs with its own
- * base URL and timeout.
+ * <p>It used to own an {@link java.net.http.HttpClient} and be constructed per call, which meant a new
+ * client (selector thread and executor) for every request. It is now a bean over the shared client, and
+ * every call names the quota it is charged against — for these public boards that is the platform, since
+ * there is no {@code Connection} to hang a limit on.
  */
-public final class AtsHttp {
+@ApplicationScoped
+public class AtsHttp {
 
-    private static final int SNIPPET_CHARS = 300;
+    private final OutboundHttp http;
 
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final Duration timeout;
-
-    public AtsHttp(long timeoutSeconds) {
-        this.timeout = Duration.ofSeconds(timeoutSeconds);
+    @Inject
+    public AtsHttp(OutboundHttp http) {
+        this.http = http;
     }
 
     /** GET a URL and parse the body as JSON. */
-    public JsonNode getJson(String url) {
-        return send(HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(timeout)
-                .header("Accept", "application/json")
-                .GET()
-                .build(), url);
+    public JsonNode getJson(String url, long timeoutSeconds, RateLimit limit) {
+        return json(HttpCall.get(url, Duration.ofSeconds(timeoutSeconds), limit).acceptJson());
     }
 
     /**
      * POST a JSON body and parse the reply as JSON.
      *
      * <p>Here for Workday, whose job search is a POST with the paging window in the body rather than a
-     * query string. Everything else about the call — timeout, non-2xx translation — is identical.
+     * query string. Everything else about the call — timeout, quota, non-2xx translation — is identical.
      */
-    public JsonNode postJson(String url, String body) {
-        return send(HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(timeout)
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build(), url);
+    public JsonNode postJson(String url, String body, long timeoutSeconds, RateLimit limit) {
+        return json(HttpCall.post(url, body, Duration.ofSeconds(timeoutSeconds), limit)
+                .acceptJson()
+                .header("Content-Type", "application/json"));
     }
 
-    private JsonNode send(HttpRequest request, String url) {
-        HttpResponse<String> response;
+    private JsonNode json(HttpCall call) {
         try {
-            response = http.send(request, HttpResponse.BodyHandlers.ofString());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AtsApiException("Interrupted calling " + url, e);
-        } catch (Exception e) {
-            throw new AtsApiException("ATS request failed for " + url, e);
-        }
-        if (response.statusCode() / 100 != 2) {
-            throw new AtsApiException(response.statusCode(),
-                    "ATS API " + response.statusCode() + " for " + url + ": " + snippet(response.body()));
-        }
-        try {
-            return mapper.readTree(response.body());
-        } catch (Exception e) {
-            throw new AtsApiException("Failed to parse JSON from " + url, e);
+            return http.json(call);
+        } catch (OutboundHttpException e) {
+            throw translate(e);
         }
     }
 
-    private static String snippet(String body) {
-        if (body == null) {
-            return "";
+    private static AtsApiException translate(OutboundHttpException e) {
+        if (e.status() == 0) {
+            return new AtsApiException("ATS request failed for " + e.url(), e);
         }
-        return body.length() <= SNIPPET_CHARS ? body : body.substring(0, SNIPPET_CHARS) + "…";
+        return new AtsApiException(e.status(),
+                "ATS API " + e.status() + " for " + e.url() + ": " + e.bodySnippet());
     }
 }

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.ratelimit.RateLimitPolicy;
+import io.personalassistant.common.ratelimit.RateLimitRules;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.SourceType;
@@ -39,7 +41,7 @@ class DefaultConnectionServiceTest {
 
     private Connection create(String name, boolean makeDefault) {
         return service.create(new NewConnection(name, SourceType.SLACK,
-                Map.of("token", name), Map.of(), makeDefault));
+                Map.of("token", name), Map.of(), null, makeDefault));
     }
 
     @Test
@@ -71,6 +73,33 @@ class DefaultConnectionServiceTest {
         connector.failVerifyConnectionWith(new IllegalArgumentException("revoked token"));
         assertThrows(IllegalArgumentException.class, () -> create("bad", false));
         assertTrue(connections.findAll().isEmpty(), "a failed verification saves nothing");
+    }
+
+    @Test
+    void createTranslatesAConnectorsOwnExceptionIntoTheBadRequestShape() {
+        // A connector raises its own transport type (GoogleApiException, AtsApiException, ...). The
+        // resource only maps IllegalArgumentException, so anything else used to escape as a bare 500
+        // with no body and the console had nothing to show the user.
+        connector.failVerifyConnectionWith(new IllegalStateException("token refresh failed: invalid_grant"));
+
+        IllegalArgumentException thrown =
+                assertThrows(IllegalArgumentException.class, () -> create("bad", false));
+
+        assertTrue(thrown.getMessage().contains("invalid_grant"), "the reason survives: " + thrown.getMessage());
+        assertTrue(connections.findAll().isEmpty(), "a failed verification saves nothing");
+    }
+
+    @Test
+    void updateTranslatesAConnectorsOwnExceptionIntoTheBadRequestShape() {
+        Connection c = create("work", false);
+        connector.failVerifyConnectionWith(new IllegalStateException("token refresh failed: invalid_grant"));
+
+        IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+                () -> service.update(c.id(), new ConnectionEdit(null, Map.of("token", "rotated"), null, null)));
+
+        assertTrue(thrown.getMessage().contains("invalid_grant"), "the reason survives: " + thrown.getMessage());
+        assertEquals(Map.of("token", "work"), connections.findById(c.id()).orElseThrow().auth(),
+                "a rejected edit is not persisted");
     }
 
     @Test
@@ -110,15 +139,59 @@ class DefaultConnectionServiceTest {
     void updateReverifiesWhenAuthChanges() {
         Connection c = create("work", false);
         int before = connector.verifyConnectionCalls;
-        service.update(c.id(), new ConnectionEdit("Work Slack", Map.of("token", "rotated"), null));
+        service.update(c.id(), new ConnectionEdit("Work Slack", Map.of("token", "rotated"), null, null));
         assertEquals(before + 1, connector.verifyConnectionCalls, "changed auth re-verifies");
         assertEquals("Work Slack", connections.findById(c.id()).orElseThrow().name());
+    }
+
+    // ---- rate limits -------------------------------------------------------------------------
+
+    @Test
+    void anAccountsRateLimitRoundTrips() {
+        Connection c = service.create(new NewConnection("work", SourceType.SLACK, Map.of("token", "t"),
+                Map.of(), RateLimitRules.parse("10/1s,500/1m"), false));
+
+        RateLimitPolicy stored = connections.findById(c.id()).orElseThrow().rateLimit();
+        assertEquals(2, stored.rules().size());
+        assertEquals(10, stored.rules().get(0).permits());
+        assertEquals(60, stored.rules().get(1).windowSeconds());
+    }
+
+    @Test
+    void patchingOnlyTheRateLimitLeavesCredentialsAlone() {
+        Connection c = create("work", false);
+        int before = connector.verifyConnectionCalls;
+
+        service.update(c.id(), new ConnectionEdit(null, null, null, RateLimitRules.parse("5/1m")));
+
+        Connection stored = connections.findById(c.id()).orElseThrow();
+        assertEquals(1, stored.rateLimit().rules().size());
+        assertEquals(Map.of("token", "work"), stored.auth(), "auth is untouched");
+        assertEquals(before, connector.verifyConnectionCalls, "an unchanged auth blob is not re-verified");
+    }
+
+    /**
+     * Null already means "leave unchanged" on a PATCH, so removal has to be said explicitly. Without
+     * this an account's limit could be set but never taken off again.
+     */
+    @Test
+    void anEmptyRuleListClearsALimitWhileNullLeavesItAlone() {
+        Connection c = service.create(new NewConnection("work", SourceType.SLACK, Map.of("token", "t"),
+                Map.of(), RateLimitRules.parse("10/1s"), false));
+
+        service.update(c.id(), new ConnectionEdit("Renamed", null, null, null));
+        assertEquals(1, connections.findById(c.id()).orElseThrow().rateLimit().rules().size(),
+                "a null rateLimit leaves the existing one in place");
+
+        service.update(c.id(), new ConnectionEdit(null, null, null, RateLimitPolicy.UNLIMITED));
+        assertTrue(connections.findById(c.id()).orElseThrow().rateLimit().isUnlimited(),
+                "an explicit empty rule list removes the limit");
     }
 
     @Test
     void updateUnknownConnectionThrows() {
         assertThrows(NoSuchElementException.class,
-                () -> service.update("conn_missing", new ConnectionEdit("x", null, null)));
+                () -> service.update("conn_missing", new ConnectionEdit("x", null, null, null)));
     }
 
     // ---- test() -------------------------------------------------------------------------------

@@ -13,8 +13,16 @@ import com.fasterxml.jackson.databind.JsonNode;
  */
 public interface WorkdayApi {
 
-    /** One page of a site's postings: {@code {"total", "jobPostings": [...]}}. */
-    JsonNode searchJobs(WorkdaySite site, int limit, int offset);
+    /**
+     * One page of a site's postings: {@code {"total", "jobPostings": [...]}}.
+     *
+     * @param searchText Workday's own free-text query, or blank for the whole site. This is the only
+     *                   way to make a large site affordable: Lowe's answers 12,424 postings for a blank
+     *                   query and 48 for {@code "Bengaluru"}. It queries Workday's index, which sees the
+     *                   full record — unlike the summaries it returns, which is exactly why the
+     *                   <em>results</em> cannot be filtered safely but a <em>query</em> can be sent.
+     */
+    JsonNode searchJobs(WorkdaySite site, int limit, int offset, String searchText);
 
     /** One posting in full, addressed by the {@code externalPath} the search returned. */
     JsonNode posting(WorkdaySite site, String externalPath);

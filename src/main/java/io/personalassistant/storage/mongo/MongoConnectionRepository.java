@@ -92,6 +92,7 @@ public class MongoConnectionRepository implements ConnectionRepository {
                 .append("type", BsonSupport.enumName(c.type()))
                 .append("auth", BsonSupport.toBsonMap(c.auth()))
                 .append("config", BsonSupport.toBsonMap(c.config()))
+                .append("rateLimit", BsonSupport.rateLimit(c.rateLimit()))
                 .append("isDefault", c.isDefault())
                 .append("status", BsonSupport.enumName(c.status()))
                 .append("lastError", c.lastError())
@@ -106,6 +107,7 @@ public class MongoConnectionRepository implements ConnectionRepository {
                 BsonSupport.enumOf(SourceType.class, d.get("type")),
                 BsonSupport.toPlainMap(d.get("auth")),
                 BsonSupport.toPlainMap(d.get("config")),
+                BsonSupport.rateLimitPolicy(d.get("rateLimit")),
                 Boolean.TRUE.equals(d.getBoolean("isDefault")),
                 BsonSupport.enumOf(ConnectionStatus.class, d.get("status")),
                 d.getString("lastError"),

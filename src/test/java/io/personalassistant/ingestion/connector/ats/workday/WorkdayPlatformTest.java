@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.workday;
 
 import io.personalassistant.domain.model.RawItem;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -21,29 +22,66 @@ class WorkdayPlatformTest {
     }
 
     private static List<RawItem> fetch(FakeWorkdayApi api, List<String> hints) {
-        return new WorkdayPlatform(api).fetch(SITE, hints);
+        return new WorkdayPlatform(api).fetch(SITE, BoardFilter.ofLocations(hints));
     }
 
     @Test
-    void theHintIsIgnoredBecauseTheListingLocationIsNotTrustworthy() {
-        // The trap this platform must not fall into. R1's listing says "Bengaluru" with no country, so
-        // filtering it against "india" would drop a genuine Indian role; R3's says "5 Locations", a
-        // count with no place at all. Both are fetched, and the connector filters the FULL locations.
+    void theHintIsSentAsAQuerySoTheMultiSiteRoleIsFoundRatherThanDropped() {
+        // The trap this platform must not fall into, restated for the querying design. R1's listing
+        // says "Bengaluru" with no country and R3's says "5 Locations" — a count with no place at all
+        // — so FILTERING the listing against "india" would drop two genuine Indian roles. Sending
+        // "india" as a QUERY finds both, because Workday's index reads the full record, and drops only
+        // the San Jose role that a filter was always meant to drop.
         FakeWorkdayApi api = board();
 
         List<RawItem> items = fetch(api, List.of("india"));
 
-        Assertions.assertEquals(List.of("R1", "R2", "R3"),
+        Assertions.assertEquals(List.of("R1", "R3"),
                 items.stream().map(RawItem::externalId).toList());
-        Assertions.assertEquals(3, api.detailCalls.size(),
-                "everything is fetched; narrowing happens downstream where the country is known");
+        Assertions.assertEquals(2, api.detailCalls.size(),
+                "the query is what makes a large site affordable: only matches cost a detail call");
+    }
+
+    @Test
+    void eachTermIsItsOwnQueryAndTheResultsAreUnioned() {
+        // Alternative spellings, not a conjunction. Workday reads a multi-word query as AND, so
+        // "bengaluru bangalore" matches nothing; the terms have to be asked separately and merged.
+        FakeWorkdayApi api = new FakeWorkdayApi()
+                .withPosting("R1", "Backend Engineer", "Bengaluru", "Bengaluru", "India", "<p>A.</p>")
+                .withPosting("R2", "Data Engineer", "Bangalore", "Bangalore", "India", "<p>B.</p>");
+
+        List<RawItem> items = fetch(api, List.of("bengaluru", "bangalore"));
+
+        Assertions.assertEquals(List.of("bengaluru", "bangalore"), api.searchTexts);
+        Assertions.assertEquals(List.of("R1", "R2"),
+                items.stream().map(RawItem::externalId).toList());
+    }
+
+    @Test
+    void aPostingMatchedByTwoTermsIsFetchedOnce() {
+        // The detail call is the expensive part, so the union has to happen before mapping.
+        FakeWorkdayApi api = new FakeWorkdayApi()
+                .withPosting("R1", "Backend Engineer", "Bengaluru", "Bengaluru", "India", "<p>A.</p>");
+
+        List<RawItem> items = fetch(api, List.of("bengaluru", "india"));
+
+        Assertions.assertEquals(1, items.size());
+        Assertions.assertEquals(1, api.detailCalls.size(), "matched twice, fetched once");
+    }
+
+    @Test
+    void noHintsStillWalksTheWholeSite() {
+        FakeWorkdayApi api = board();
+
+        Assertions.assertEquals(3, fetch(api, List.of()).size());
+        Assertions.assertEquals(List.of(""), api.searchTexts, "one blank query, as before");
     }
 
     @Test
     void theFullLocationIsWhatTheConnectorLaterFiltersOn() {
         // R3's listing said "5 Locations"; its detail says Hyderabad, India. That is what makes the
         // connector's authoritative filter able to keep it.
-        RawItem multiSite = fetch(board(), List.of("india")).get(2);
+        RawItem multiSite = fetch(board(), List.of("india")).get(1);
 
         Assertions.assertEquals("Hyderabad, India", multiSite.metadata().get("location"));
     }
@@ -65,7 +103,7 @@ class WorkdayPlatformTest {
             api.withPosting("R" + i, "Engineer " + i, "Pune", "Pune", "India", "<p>Work.</p>");
         }
 
-        Assertions.assertEquals(55, new WorkdayPlatform(api).fetch(SITE, List.of()).size());
+        Assertions.assertEquals(55, new WorkdayPlatform(api).fetch(SITE, BoardFilter.NONE).size());
     }
 
     @Test
@@ -85,10 +123,10 @@ class WorkdayPlatformTest {
         // an edit, so without hashing the body an edited posting is skipped forever.
         String before = new WorkdayPlatform(new FakeWorkdayApi()
                 .withPosting("R1", "Engineer", "Pune", "Pune", "India", "<p>Original.</p>"))
-                .fetch(SITE, List.of()).get(0).checksum();
+                .fetch(SITE, BoardFilter.NONE).get(0).checksum();
         String after = new WorkdayPlatform(new FakeWorkdayApi()
                 .withPosting("R1", "Engineer", "Pune", "Pune", "India", "<p>Original. Plus Kafka.</p>"))
-                .fetch(SITE, List.of()).get(0).checksum();
+                .fetch(SITE, BoardFilter.NONE).get(0).checksum();
 
         Assertions.assertNotEquals(before, after);
     }
@@ -113,7 +151,7 @@ class WorkdayPlatformTest {
     @Test
     void fetchingAnUnparseableHandleIsRejectedClearly() {
         String message = Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new WorkdayPlatform(board()).fetch("paytm", List.of())).getMessage();
+                () -> new WorkdayPlatform(board()).fetch("paytm", BoardFilter.ofLocations(List.of()))).getMessage();
 
         Assertions.assertTrue(message.contains("tenant/site/wd"), message);
     }

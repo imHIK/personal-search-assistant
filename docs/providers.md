@@ -57,9 +57,44 @@ state is far smaller than day one. Size the provider for the backfill, not the s
 | Hosted, high volume | `openai-embed` pointed at a paid endpoint | Any OpenAI-compatible `/embeddings` works. Ask for `dimensions: 768` so the existing index still fits |
 | Casual use | `openai-embed` on Gemini's free tier (the shipped default) | Fine for a modest corpus; its free quota is small enough that a first backfill of a few thousand chunks will hit it |
 
-A `429` from the hosted provider is not data loss: `IndexingRunner` records the failure, backs off,
-and the entity is retried — a rate-limited backfill finishes slowly rather than failing. It does mean
-a large first import can take hours on a free tier.
+A `429` from the hosted provider is not data loss, and it is now handled ahead of time as well as
+after the fact. The response's `Retry-After` is read by `common.http.OutboundHttp` and fed into the
+limiter, so the *next* batch waits rather than rediscovering the limit; and if the wait is longer than
+`app.ratelimit.max-wait-seconds`, `IndexingRunner` records the reopening instant as the entity's
+`nextAttemptAt` and moves on. Either way a rate-limited backfill finishes slowly rather than failing —
+it does mean a large first import can take hours on a free tier.
+
+### Rate limiting the model endpoints
+
+Set ceilings with `app.ratelimit.embedding.rules` and `app.ratelimit.llm.rules`, in the same
+`"<permits>/<window>"` form the connectors use (`10/1s,500/1m,10000/1d`); blank means unlimited, which
+is the shipped default. Windows are keyed by provider id, so switching provider switches window.
+
+Each rule is a **rolling** window, not a refilling bucket: `60/1d` admits 60 calls back to back and then
+nothing until those calls are a day old. That matters on a small quota — a bucket handing one permit
+back every 24 minutes gives out a unit too small to finish a single entity, so the entity is claimed,
+parsed, chunked and deferred over and over; and against a service counting its own trailing day, the
+61st call is a 429 the local limiter thought it had avoided.
+
+What happens on a breach depends on which call it is, and the split is free because the two paths
+already have separate entry points:
+
+| Call | Entry point | On breach |
+|---|---|---|
+| Indexing a backfill | `EmbeddingProvider.embedAll` | **Waits**, then defers — the import slows down |
+| Embedding a search query | `EmbeddingProvider.embedQuery` | **Fails fast** — the search still returns lexical hits |
+| Answering | `LlmProvider.complete` under the `answer` profile | **Fails fast** — 200 with `answerError` set, hits intact |
+| A background digest | `LlmProvider.complete` under a profile with `rate-limit-mode=wait` | **Waits** |
+
+The LLM's behaviour rides on the profile rather than the provider because the same bean serves both a
+user's request thread and the digest scheduler:
+
+```properties
+app.llm.profile.answer.rate-limit-mode=fail-fast
+app.llm.profile.digest.rate-limit-mode=wait
+```
+
+Absent, it is fail-fast — the safe default for the only caller that names no background profile.
 
 `app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
 is the one config key that silently corrupts the index if guessed — a missing property would

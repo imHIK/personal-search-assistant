@@ -4,7 +4,7 @@ import { jobBoardsApi } from '@/api/jobBoards'
 import type { CompanyLookup as Lookup } from '@/api/types'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Input'
-import { friendlyError } from '@/config/errors'
+import { ErrorState } from '@/components/ui/States'
 import { labels } from '@/config/labels'
 
 interface Props {
@@ -23,7 +23,7 @@ interface Props {
 export function CompanyLookup({ current, onAdd }: Props) {
   const [draft, setDraft] = useState('')
   const [results, setResults] = useState<Lookup[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const [pending, setPending] = useState(false)
 
   const names = draft
@@ -38,7 +38,7 @@ export function CompanyLookup({ current, onAdd }: Props) {
     try {
       setResults(await jobBoardsApi.lookup(names))
     } catch (cause) {
-      setError(friendlyError(cause).detail)
+      setError(cause)
       setResults(null)
     } finally {
       setPending(false)
@@ -95,13 +95,15 @@ export function CompanyLookup({ current, onAdd }: Props) {
         )}
       </div>
 
-      {error && <p className="mt-2 text-xs text-[var(--tone-bad)]">{error}</p>}
+      {/* The shared display, not a bare line: a lookup failure needs the same cause-and-fix
+          translation as every other one, and --tone-bad never existed so this rendered uncoloured. */}
+      {error ? <ErrorState error={error} compact className="mt-2" /> : null}
 
       {results && (
         <ul className="mt-3 space-y-1">
           {found.map((r) => (
             <li key={r.company} className="flex items-center gap-2 text-xs">
-              <Check className="size-3.5 shrink-0 text-[var(--tone-good)]" aria-hidden />
+              <Check className="size-3.5 shrink-0 text-[var(--tone-ok)]" aria-hidden />
               <span className="font-medium">{r.company}</span>
               <span className="text-[var(--text-subtle)]">
                 {r.platform} · {labels.jobBoards.postings(r.postings)}

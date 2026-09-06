@@ -56,7 +56,7 @@ class ForwardCursorSchedulerTest {
     }
 
     private void forwardCursor(String knId, CursorStatus status) {
-        cursors.insertIfAbsent(new Cursor("cur_" + knId + "_F", knId, "root", Map.of(),
+        cursors.insertIfAbsent(new Cursor("cur_" + knId + "_F", knId, "root", "root", Map.of(),
                 CursorDirection.FORWARD, CursorPosition.start(), status, null,
                 Cursor.Retry.zero(), Cursor.Stats.zero(), new Cursor.Scope(TYPE)));
     }

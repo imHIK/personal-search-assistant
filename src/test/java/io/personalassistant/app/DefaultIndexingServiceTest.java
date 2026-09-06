@@ -56,7 +56,7 @@ class DefaultIndexingServiceTest {
         Cursor cursor = TestData.cursor(knowledgeId, iterableId, direction, SourceType.LOCAL_FS);
         cursors.insertIfAbsent(cursor);
         cursors.claim(cursor.id(), "w1", Duration.ofMinutes(5));
-        cursors.recordFailure(cursor.id(), "w1", CursorStatus.FAILED, 6, "source unreachable");
+        cursors.recordFailure(cursor.id(), "w1", CursorStatus.FAILED, 6, "source unreachable", null);
         return cursor;
     }
 

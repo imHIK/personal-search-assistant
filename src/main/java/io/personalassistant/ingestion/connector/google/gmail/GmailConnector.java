@@ -13,6 +13,7 @@ import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
@@ -101,7 +102,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     public void verifyConnection(Connection connection) {
-        String token = tokens.bearer(connection);
+        GoogleAuth token = tokens.authFor(connection);
         JsonNode profile = api.getProfile(token);
         if (!profile.hasNonNull("emailAddress")) {
             throw new IllegalArgumentException(
@@ -121,7 +122,7 @@ public class GmailConnector extends TokenWindowGrabber {
         if (configured.isEmpty()) {
             return List.of(new SourceIterable(ALL_MAIL_ITERABLE, "All mail", Map.of()));
         }
-        String token = tokens.bearer(connections.resolve(knowledge));
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
         Map<String, String> labelNames = labelNames(token);
         List<SourceIterable> iterables = new ArrayList<>(configured.size());
         for (String labelId : configured) {
@@ -133,7 +134,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     protected Page fetchWindow(GrabContext ctx, TimeWindow window, String pageToken, int cap) {
-        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        GoogleAuth token = tokens.authFor(connections.resolve(ctx.knowledge()));
         Object labelId = ctx.attributes().get(LABEL_KEY);
         List<String> labelIds = labelId == null ? List.of() : List.of(labelId.toString());
         String query = combine(str(ctx.knowledge().inputs(), "query"), windowQuery(window));
@@ -170,7 +171,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     // ---- message -> RawItem ------------------------------------------------------------------
 
-    private RawItem fetchAndMap(String token, String id) {
+    private RawItem fetchAndMap(GoogleAuth token, String id) {
         if (id == null || id.isBlank()) {
             return null;
         }
@@ -314,7 +315,7 @@ public class GmailConnector extends TokenWindowGrabber {
         return List.of();
     }
 
-    private Map<String, String> labelNames(String token) {
+    private Map<String, String> labelNames(GoogleAuth token) {
         Map<String, String> names = new LinkedHashMap<>();
         for (JsonNode label : api.listLabels(token).path("labels")) {
             names.put(label.path("id").asText(), label.path("name").asText());

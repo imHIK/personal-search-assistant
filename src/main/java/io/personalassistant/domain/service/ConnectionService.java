@@ -1,5 +1,6 @@
 package io.personalassistant.domain.service;
 
+import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
@@ -75,11 +76,19 @@ public interface ConnectionService {
      * @param type        connector type
      * @param auth        opaque credentials
      * @param config      opaque connector-level settings, or null
+     * @param rateLimit   outbound call ceilings for this account, or null for the operator default
      * @param makeDefault force this to become the type default (first-of-type is default regardless)
      */
     record NewConnection(String name, SourceType type, Map<String, Object> auth,
-                         Map<String, Object> config, boolean makeDefault) {}
+                         Map<String, Object> config, RateLimitPolicy rateLimit,
+                         boolean makeDefault) {}
 
-    /** A partial edit; a null field is left unchanged. */
-    record ConnectionEdit(String name, Map<String, Object> auth, Map<String, Object> config) {}
+    /**
+     * A partial edit; a null field is left unchanged.
+     *
+     * <p>{@code rateLimit} therefore needs an explicit empty rule list to remove a limit — null cannot
+     * mean both "leave it alone" and "clear it", and leaving it alone is the far more common intent.
+     */
+    record ConnectionEdit(String name, Map<String, Object> auth, Map<String, Object> config,
+                          RateLimitPolicy rateLimit) {}
 }

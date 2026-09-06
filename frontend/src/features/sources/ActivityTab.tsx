@@ -67,7 +67,11 @@ export function ActivityTab({ knowledgeId }: { knowledgeId: string }) {
 function StreamCard({ iterableId, cursors }: { iterableId: string; cursors: CursorInfo[] }) {
   const backward = cursors.find((cursor) => cursor.direction === 'BACKWARD')
   const forward = cursors.find((cursor) => cursor.direction === 'FORWARD')
-  const name = presentIterableId(iterableId, labels.activity.everything)
+  // The backend snapshots a display name at discovery; cursors created before it did have none, so
+  // the id-shortening fallback stays.
+  const name =
+    cursors.find((cursor) => cursor.iterableName)?.iterableName ??
+    presentIterableId(iterableId, labels.activity.everything)
 
   return (
     <Card>
@@ -83,15 +87,19 @@ function StreamCard({ iterableId, cursors }: { iterableId: string; cursors: Curs
 
         <Technical>
           <TechnicalPanel
-            rows={cursors.flatMap((cursor) => [
-              [`${cursor.direction} id`, cursor.id],
-              [`${cursor.direction} status`, cursor.status],
-              [`${cursor.direction} fetched`, formatNumber(cursor.fetched)],
-              [`${cursor.direction} retryCount`, String(cursor.retryCount)],
-              [`${cursor.direction} lastRunAt`, absoluteTime(cursor.lastRunAt) ?? 'never'],
-              [`${cursor.direction} position`, JSON.stringify(cursor.position)],
-              [`${cursor.direction} lastError`, cursor.lastError ?? '—'],
-            ]) as [string, React.ReactNode][]}
+            rows={[
+              ['iterableId', iterableId],
+              ...cursors.flatMap((cursor) => [
+                [`${cursor.direction} id`, cursor.id],
+                [`${cursor.direction} status`, cursor.status],
+                [`${cursor.direction} fetched`, formatNumber(cursor.fetched)],
+                [`${cursor.direction} retryCount`, String(cursor.retryCount)],
+                [`${cursor.direction} lastRunAt`, absoluteTime(cursor.lastRunAt) ?? 'never'],
+                [`${cursor.direction} nextAttemptAt`, absoluteTime(cursor.nextAttemptAt) ?? '—'],
+                [`${cursor.direction} position`, JSON.stringify(cursor.position)],
+                [`${cursor.direction} lastError`, cursor.lastError ?? '—'],
+              ]),
+            ] as [string, React.ReactNode][]}
           />
         </Technical>
       </CardBody>
@@ -108,7 +116,7 @@ function StreamLine({
   icon: typeof History
   title: string
 }) {
-  const presented = presentCursorStatus(cursor.status)
+  const presented = presentCursorStatus(cursor)
   const lastRun = relativeTime(cursor.lastRunAt)
 
   const detail =

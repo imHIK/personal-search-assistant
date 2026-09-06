@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.testsupport.RecordingRateLimiter;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -19,7 +22,9 @@ import org.junit.jupiter.api.Test;
 class OpenAiCompatibleLlmProviderProfileTest {
 
     private static OpenAiCompatibleLlmProvider provider() {
-        OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider();
+        // No request is ever sent here — these assert resolution, not transport.
+        OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider(
+                new OutboundHttp(new RecordingRateLimiter()), RateLimitPolicies.unlimited());
         p.baseUrl = "https://api.groq.com/openai/v1";
         p.modelName = "llama-3.3-70b-versatile";
         p.temperature = 0.2;
@@ -48,7 +53,7 @@ class OpenAiCompatibleLlmProviderProfileTest {
     @Test
     void aProfileOverridesOnlyWhatItSets() {
         LlmProfile lite = new LlmProfile("lite", Optional.empty(), Optional.of("llama-3.1-8b-instant"),
-                Optional.empty(), Optional.of(512), Optional.empty());
+                Optional.empty(), Optional.of(512), Optional.empty(), Optional.empty());
 
         String summary = summary(provider(), lite);
 
@@ -62,7 +67,7 @@ class OpenAiCompatibleLlmProviderProfileTest {
     @Test
     void namesTheProfileSoAFailureReportsTheModelThatActuallyFailed() {
         LlmProfile rerank = new LlmProfile("rerank", Optional.empty(), Optional.of("some-model"),
-                Optional.empty(), Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
 
         assertTrue(summary(provider(), rerank).contains("profile=rerank"));
     }
@@ -74,7 +79,8 @@ class OpenAiCompatibleLlmProviderProfileTest {
     @Test
     void aRedirectedProfileDoesNotInheritTheProvidersKey() {
         LlmProfile ollama = new LlmProfile("local", Optional.of("http://localhost:11434/v1"),
-                Optional.of("llama3.1:8b"), Optional.empty(), Optional.empty(), Optional.empty());
+                Optional.of("llama3.1:8b"), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.empty());
 
         assertNull(provider().resolveKey(ollama),
                 "a redirected endpoint gets no key unless the profile supplies one");
@@ -84,7 +90,7 @@ class OpenAiCompatibleLlmProviderProfileTest {
     void aRedirectedProfileUsesItsOwnKeyWhenItHasOne() {
         LlmProfile elsewhere = new LlmProfile("elsewhere", Optional.of("https://api.openai.com/v1"),
                 Optional.of("gpt-4o-mini"), Optional.empty(), Optional.empty(),
-                Optional.of("other-key"));
+                Optional.of("other-key"), Optional.empty());
 
         assertEquals("other-key", provider().resolveKey(elsewhere));
     }
@@ -97,7 +103,7 @@ class OpenAiCompatibleLlmProviderProfileTest {
     @Test
     void aBlankProfileKeyIsIgnoredRatherThanSentAsEmpty() {
         LlmProfile blank = new LlmProfile("answer", Optional.empty(), Optional.empty(),
-                Optional.empty(), Optional.empty(), Optional.of("   "));
+                Optional.empty(), Optional.empty(), Optional.of("   "), Optional.empty());
 
         assertEquals("provider-key", provider().resolveKey(blank));
     }

@@ -15,6 +15,7 @@ import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import io.personalassistant.ingestion.connector.google.GoogleApiException;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
@@ -135,7 +136,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public void verifyConnection(Connection connection) {
-        String token = tokens.bearer(connection);
+        GoogleAuth token = tokens.authFor(connection);
         JsonNode about = api.about(token);
         if (!about.path("user").hasNonNull("emailAddress")) {
             throw new IllegalArgumentException(
@@ -151,7 +152,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public List<SourceIterable> discover(Knowledge knowledge) {
-        String token = tokens.bearer(connections.resolve(knowledge));
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
         List<String> roots = configuredFolderIds(knowledge);
 
         List<SourceIterable> iterables = new ArrayList<>();
@@ -176,7 +177,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         return iterables;
     }
 
-    private List<Folder> listSubfolders(String token, String parentId) {
+    private List<Folder> listSubfolders(GoogleAuth token, String parentId) {
         String query = "'" + parentId + "' in parents and trashed=false and mimeType='" + FOLDER_MIME + "'";
         List<Folder> folders = new ArrayList<>();
         String pageToken = null;
@@ -196,7 +197,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         if (folderId == null) {
             return Page.end();
         }
-        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        GoogleAuth token = tokens.authFor(connections.resolve(ctx.knowledge()));
         String query = childrenQuery(folderId.toString()) + windowClause(window);
         // A forward (lower-bounded) window lists oldest-first so the high-water advances cleanly; a
         // backfill window lists newest-first. Either way the base drains the whole window, so the order
@@ -232,7 +233,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     // ---- file -> RawItem ----------------------------------------------------------------------
 
-    private RawItem toRawItem(String token, JsonNode f) {
+    private RawItem toRawItem(GoogleAuth token, JsonNode f) {
         String id = f.path("id").asText();
         String name = f.path("name").asText(id);
         String mimeType = f.path("mimeType").asText("application/octet-stream");
@@ -261,7 +262,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     }
 
     /** Google-native doc: export to text and carry inline. Unsupported native types are skipped. */
-    private RawItem nativeDoc(String token, String id, String name, String mimeType, String uri,
+    private RawItem nativeDoc(GoogleAuth token, String id, String name, String mimeType, String uri,
                               String checksum, Instant modifiedAt, Map<String, Object> raw,
                               Map<String, Object> metadata) {
         String exportMime = EXPORT_AS.get(mimeType);
@@ -275,7 +276,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     }
 
     /** Regular file: download bytes to local scratch and reference by fileRef (Tika reads it). */
-    private RawItem binaryFile(String token, JsonNode f, String id, String name, String mimeType,
+    private RawItem binaryFile(GoogleAuth token, JsonNode f, String id, String name, String mimeType,
                                String uri, String checksum, Instant modifiedAt,
                                Map<String, Object> raw, Map<String, Object> metadata) {
         long size = f.path("size").asLong(-1);

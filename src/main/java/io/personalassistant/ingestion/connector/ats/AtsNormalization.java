@@ -326,6 +326,38 @@ public final class AtsNormalization {
         return false;
     }
 
+    /**
+     * A stamp over everything a posting contributes to the index, for boards whose published
+     * timestamp cannot be used as the change signal (invariant 3).
+     *
+     * <p>Two different failures made this necessary, and they point in opposite directions:
+     *
+     * <ul>
+     *   <li><strong>Greenhouse's {@code updated_at} moves in bulk.</strong> Measured live: 178 of
+     *       GitLab's 227 postings share one {@code updated_at} to the second, and 233 of Okta's 313 do
+     *       — no recruiter edits 178 descriptions in the same second. Trusting it re-embeds most of a
+     *       board at once for a change that never touched the text.</li>
+     *   <li><strong>Ashby publishes no {@code updatedAt} at all</strong> — the field is
+     *       {@code publishedAt}. Reading the absent one produced a constant, so an edited Ashby posting
+     *       was never re-indexed.</li>
+     * </ul>
+     *
+     * <p>Covers title and location as well as the body, because those are indexed too: a role
+     * relocated from Bengaluru to Dublin has changed for a reader even if its description has not.
+     * Nulls are folded in as empty so the stamp stays stable when an optional field is absent.
+     *
+     * <p>{@code String.hashCode} is deliberate. This is compared only against the previous stamp for
+     * <em>the same posting</em>, so the question is whether an edit collides with its own predecessor,
+     * not whether any two postings collide — and it keeps the stamp short enough to read in a document.
+     */
+    public static String changeStamp(String... parts) {
+        StringBuilder joined = new StringBuilder();
+        for (String part : parts) {
+            joined.append(part == null ? "" : part).append('\u0000');
+        }
+        return Integer.toHexString(joined.toString().hashCode());
+    }
+
     /** Parse an ISO-8601 timestamp leniently; boards vary and a bad date must not fail a whole page. */
     public static Instant instantOrNull(String value) {
         if (value == null || value.isBlank()) {

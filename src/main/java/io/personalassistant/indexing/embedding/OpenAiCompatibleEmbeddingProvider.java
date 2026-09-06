@@ -6,12 +6,16 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimit;
+import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Embedding;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -104,10 +108,15 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     boolean taskTypeEnabled;
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
     private final AtomicBoolean configLogged = new AtomicBoolean();
+    private final OutboundHttp http;
+    private final RateLimitPolicies policies;
+
+    @Inject
+    public OpenAiCompatibleEmbeddingProvider(OutboundHttp http, RateLimitPolicies policies) {
+        this.http = http;
+        this.policies = policies;
+    }
 
     @Override
     public String providerId() {
@@ -136,15 +145,21 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
      */
     @Override
     public Embedding embedQuery(String text) {
-        return embed(List.of(text == null ? "" : text), QUERY_TASK).get(0);
+        return embed(List.of(text == null ? "" : text), QUERY_TASK, RateLimitMode.FAIL_FAST).get(0);
     }
 
     @Override
     public List<Embedding> embedAll(List<String> texts) {
-        return embed(texts, DOCUMENT_TASK);
+        return embed(texts, DOCUMENT_TASK, RateLimitMode.WAIT);
     }
 
-    private List<Embedding> embed(List<String> texts, String taskType) {
+    /**
+     * The two entry points differ in more than the task type: {@code embedQuery} is only ever reached
+     * from a user's search request, and {@code embedAll} only from the indexing runner. That existing
+     * split is exactly the rate-limit boundary, so a throttled backfill slows down while a throttled
+     * search still answers — without a limit ever having to be threaded through the callers.
+     */
+    private List<Embedding> embed(List<String> texts, String taskType, RateLimitMode mode) {
         logConfigOnce();
         try {
             ObjectNode body = mapper.createObjectNode();
@@ -162,28 +177,16 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 input.add(t == null ? "" : t);
             }
 
-            HttpRequest.Builder request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl.replaceAll("/+$", "") + "/embeddings"))
-                    .timeout(Duration.ofSeconds(timeoutSeconds))
+            RateLimit limit = policies.forEmbedding(providerId(), mode);
+            HttpCall call = HttpCall
+                    .post(baseUrl.replaceAll("/+$", "") + "/embeddings",
+                            mapper.writeValueAsString(body), Duration.ofSeconds(timeoutSeconds), limit)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            String key = ConfigText.orNull(apiKey);
-            if (key != null) {
-                request.header("Authorization", "Bearer " + key);
-            }
+                    .header("Authorization",
+                            ConfigText.isSet(apiKey) ? "Bearer " + ConfigText.orNull(apiKey) : null);
 
             LOG.fine(() -> "Embedding request: " + texts.size() + " input(s) -> " + configSummary());
-            HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2) {
-                // The resolved config travels with the error on purpose: vendors report a missing key
-                // as things that read like other faults (Gemini answers an unauthenticated call with
-                // 404 "Requested entity was not found", i.e. exactly like a bad model id), so the
-                // status alone sends you looking in the wrong place.
-                throw new IllegalStateException("Embedding API " + response.statusCode() + ": "
-                        + snippet(response.body()) + " [" + configSummary() + "]");
-            }
-
-            JsonNode data = mapper.readTree(response.body()).path("data");
+            JsonNode data = http.json(call).path("data");
             if (!data.isArray() || data.size() != texts.size()) {
                 throw new IllegalStateException("Embedding API returned " + data.size()
                         + " vectors for " + texts.size() + " inputs");
@@ -229,6 +232,11 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 out.add(ordered[i]);
             }
             return out;
+        } catch (RateLimitedException e) {
+            throw e;
+        } catch (OutboundHttpException e) {
+            throw new IllegalStateException("Embedding API " + e.status() + ": " + e.bodySnippet()
+                    + " [" + configSummary() + "]", e);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -281,10 +289,4 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         return v;
     }
 
-    private static String snippet(String body) {
-        if (body == null) {
-            return "";
-        }
-        return body.length() <= 500 ? body : body.substring(0, 500) + "…";
-    }
 }

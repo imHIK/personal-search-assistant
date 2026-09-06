@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
-import type { SourceType } from '@/api/types'
+import type { RateLimitPolicy, SourceType } from '@/api/types'
 import { SchemaForm, type FormValues } from '@/components/SchemaForm'
 import { Technical } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
@@ -16,6 +16,7 @@ import { connectorFor, connectorsNeedingAccounts } from '@/config/connectors'
 import { initialValues, pruneEmpty, type FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnection, useConnectionMutations } from '@/hooks/queries'
+import { RateLimitFields } from './RateLimitFields'
 
 /**
  * Create or edit an account. Both modes render the same descriptor-driven form — the only
@@ -38,6 +39,7 @@ export function AccountFormPage() {
   const [makeDefault, setMakeDefault] = useState(false)
   const [auth, setAuth] = useState<FormValues>({})
   const [config, setConfig] = useState<FormValues>({})
+  const [rateLimit, setRateLimit] = useState<RateLimitPolicy>({ rules: [] })
   const [nameError, setNameError] = useState<string>()
 
   const descriptor = connectorFor(isEdit && existing ? existing.type : type)
@@ -52,6 +54,10 @@ export function AccountFormPage() {
     const d = connectorFor(existing.type)
     setAuth(initialValues(d.authFields, existing.auth as Record<string, unknown>))
     setConfig(initialValues(d.configFields, existing.config as Record<string, unknown>))
+    // Rebuilt rather than assigned: the response also carries a derived `unlimited` flag (Jackson
+    // reads the record's isUnlimited() as a getter), and echoing unknown keys back on PATCH is
+    // sloppy even though the server tolerates them.
+    setRateLimit({ rules: existing.rateLimit?.rules ?? [] })
   }, [existing])
 
   // Reset the credential fields when the type changes on a new account — the field set differs.
@@ -73,10 +79,13 @@ export function AccountFormPage() {
     }
     setNameError(undefined)
 
+    // Sent on every save, empty list included: absent means "unchanged" server-side, so an empty
+    // list is the only way to express that the user removed the limit they had.
     const body = {
       name: name.trim(),
       auth: pruneEmpty(auth),
       config: pruneEmpty(config),
+      rateLimit,
     }
 
     if (isEdit && id) {
@@ -201,6 +210,23 @@ export function AccountFormPage() {
             </CardBody>
           </Card>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{labels.accounts.rateLimitTitle}</CardTitle>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+              {labels.accounts.rateLimitHint}
+            </p>
+            <RateLimitFields value={rateLimit} onChange={setRateLimit} disabled={pending} />
+            {rateLimit.rules.length > 0 && (
+              <p className="text-xs leading-relaxed text-[var(--text-subtle)]">
+                {labels.accounts.rateLimitWarning}
+              </p>
+            )}
+          </CardBody>
+        </Card>
 
         {saveError && (
           <ErrorState

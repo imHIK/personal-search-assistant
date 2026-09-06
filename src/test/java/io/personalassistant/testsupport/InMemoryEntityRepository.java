@@ -222,7 +222,7 @@ public class InMemoryEntityRepository implements EntityRepository {
                 e.title(), e.uri(), e.checksum(),
                 e.index() == null ? Entity.IndexInfo.empty() : e.index(),
                 e.retry() == null ? 0 : e.retry().count(),
-                e.needsReindex(), e.updatedAt());
+                e.needsReindex(), e.createdAt(), e.updatedAt());
     }
 
     @Override

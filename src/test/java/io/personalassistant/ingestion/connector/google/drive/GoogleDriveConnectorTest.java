@@ -19,6 +19,7 @@ import io.personalassistant.ingestion.connector.GrabResult;
 import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import io.personalassistant.testsupport.TestData;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,7 +35,7 @@ import org.junit.jupiter.api.io.TempDir;
 class GoogleDriveConnectorTest {
 
     private final FakeDriveApi api = new FakeDriveApi();
-    private final GoogleAccessTokens tokens = conn -> "test-token";
+    private final GoogleAccessTokens tokens = conn -> GoogleAuth.unlimited("test-token");
     private final Connection connection = TestData.connection("conn_drive", SourceType.GOOGLE_DRIVE, true,
             Map.of("accessToken", "test-token"));
     private final ConnectionResolver connections = kn -> connection;

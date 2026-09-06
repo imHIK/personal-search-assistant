@@ -196,8 +196,8 @@ class DefaultKnowledgeServiceListingTest {
         Cursor base = TestData.cursor(kn.id(), "a_iter", CursorDirection.BACKWARD, SourceType.SLACK);
         Instant ranAt = Instant.parse("2026-01-01T00:00:00Z");
         cursors.insertIfAbsent(new Cursor(base.id(), base.knowledgeId(), base.iterableId(),
-                base.attributes(), base.direction(), base.position(), base.status(), base.lease(),
-                new Cursor.Retry(2, "boom"), new Cursor.Stats(ranAt, 17), base.scope()));
+                base.iterableName(), base.attributes(), base.direction(), base.position(), base.status(), base.lease(),
+                new Cursor.Retry(2, "boom", null), new Cursor.Stats(ranAt, 17), base.scope()));
 
         Cursor listed = service.listCursors(kn.id()).get(0);
 

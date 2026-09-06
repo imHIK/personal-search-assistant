@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -81,7 +82,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String handle, List<String> locationHints) {
+    public List<RawItem> fetch(String handle, BoardFilter filter) {
         List<RawItem> items = new ArrayList<>();
         int offset = 0;
         for (int page = 0; page < MAX_PAGES; page++) {
@@ -92,8 +93,11 @@ public class SmartRecruitersPlatform implements BoardPlatform {
             }
             for (JsonNode summary : content) {
                 // Filtered BEFORE the detail call — that is the whole point of doing it here rather
-                // than leaving it all to the connector.
-                if (!AtsNormalization.matchesLocation(location(summary), locationHints)) {
+                // than leaving it all to the connector. Title first: it is the cheaper test and the
+                // one that discriminates hardest, since a board's non-engineering roles outnumber its
+                // out-of-region ones on most of these companies.
+                if (!filter.matchesTitle(summary.path("name").asText(null))
+                        || !AtsNormalization.matchesLocation(location(summary), filter.locations())) {
                     continue;
                 }
                 RawItem item = toItem(handle, summary);

@@ -18,7 +18,7 @@ resume from where it stopped.
 | Local filesystem | `LOCAL_FS` | `localfs.LocalFsConnector` | none | root + one per sub-directory |
 | Gmail | `GMAIL` | `google.gmail.GmailConnector` | required (OAuth) | all-mail, or one per configured label |
 | Google Drive | `GOOGLE_DRIVE` | `google.drive.GoogleDriveConnector` | required (OAuth) | one per folder (tree walked at discovery) |
-| Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Workday |
+| Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Workday / Oracle HCM |
 
 ## Connections (credentials, separated from knowledges)
 
@@ -38,10 +38,65 @@ knowledges at whichever they want, without duplicating credentials per knowledge
   source like `LOCAL_FS` never needs one; credentialed connectors override it to `true`.
 - **Verified once, at connect time.** `SourceConnector.verifyConnection(Connection)` validates the
   credentials when the connection is created/edited (Gmail hits `getProfile`, Drive hits `about`) —
-  not on every knowledge or every grab.
+  not on every knowledge or every grab. A connector is free to raise its own transport type
+  (`GoogleApiException`, `AtsApiException`, `RateLimitedException`); `DefaultConnectionService` funnels
+  all of them into `IllegalArgumentException`, so a rejected create/edit is a **400 whose JSON body
+  carries the reason** rather than an opaque 500.
+- **Errors carry their reason.** Resources build failure responses through `api.resource.ApiErrors`,
+  which attaches a `{"message": ...}` JSON body. Throwing `new BadRequestException("...")` directly
+  does *not*: RESTEasy Reactive keeps that text on the exception and sends `400` with
+  `content-length: 0`, which is what left the console with nothing to display.
 - **Lifecycle & integrity.** `ConnectionService` assigns/re-points the per-type default, blocks
   deleting a connection still bound by a knowledge, and promotes a survivor when the default is
   removed. REST surface: `POST/GET/PATCH/DELETE /api/connections`, plus `POST /api/connections/{id}/default`.
+
+### Rate limits (the one field the core reads)
+
+`auth` and `config` are opaque, but `Connection.rateLimit` is not: the outbound HTTP layer reads it on
+every call. That is why it is a first-class component rather than a key inside a blob.
+
+```jsonc
+"rateLimit": { "rules": [ { "permits": 10, "windowSeconds": 1 },
+                          { "permits": 500, "windowSeconds": 60 } ] }
+```
+
+A call must satisfy **every** rule, and is recorded in each only if all of them have room — so a
+call cannot deplete the per-second window while stalled on the daily one. Each rule is a *rolling*
+window holding `permits` admissions, which is why there is no separate burst setting: a key idle for a
+window admits `permits` back-to-back, then nothing until those calls age out. Resolution is two
+tiers: the account's own rules win, otherwise `app.ratelimit.connector.<SOURCE_TYPE>.rules`, otherwise
+unlimited — which is what every connection has until somebody sets one.
+
+Two consequences worth knowing:
+
+- **Absent ≠ empty on PATCH.** A null `rateLimit` means "leave it unchanged", like every other PATCH
+  field. Removing a limit takes an explicit `{"rateLimit": {"rules": []}}`.
+- **Being throttled defers work, it does not fail it.** Background calls wait up to
+  `app.ratelimit.max-wait-seconds`; past that the runner records the reopening instant and picks the
+  work up later, counted against `app.ratelimit.max-deferrals` rather than the ordinary retry limit.
+  Interactive calls (a search's query embedding, an answer) fail fast instead — see `docs/providers.md`.
+- **A throttled ingestion cursor is visible.** It rests `RATE_LIMITED` with that instant as
+  `retry.nextAttemptAt` and drops out of the claim batch until it passes, so the console can say
+  "waiting on a rate limit" instead of showing a healthy-looking queued stream. Only
+  `POST /api/index/knowledge/{id}/retry-failed` shortens a hold — worth doing after raising the
+  account's rules, since the instant was computed against the old ones.
+- **A server's `Retry-After` is clamped** to `app.ratelimit.max-penalty-seconds` (6 h) before it
+  becomes a pause. The header is remote input and the instant it produces is load-bearing; if the
+  server really meant longer, the next call earns another `429` and another pause.
+
+Boards have no `Connection`, so their bucket is the platform and their rules come from
+`app.ratelimit.job-boards.rules`.
+
+> **Setting a board limit also slows the company lookup.** `POST /api/connectors/job-boards/lookup` is
+> a synchronous, user-facing call, and it shares the `board:<platform>` bucket with ingestion. Because
+> board calls run in `WAIT` mode, a lookup made with no tokens left waits rather than failing —
+> measured at ~28 s per call against a deliberately harsh `2/1m`, up to `app.ratelimit.max-wait-seconds`.
+> That is the right trade for a sync and the wrong one for somebody typing a company name.
+>
+> The mode cannot currently be split per path here the way it is for embeddings: `countPostings`
+> (lookup) and `fetch` (ingest) come out at the same `*Api` method, so the adapter cannot tell which
+> caller it is serving. Ships blank/unlimited, so nothing waits until an operator sets a limit — but if
+> you set one, size it against the lookup's latency, not just the sync's.
 
 ### Google auth
 
@@ -160,6 +215,22 @@ It exists because **reach here is a function of how many companies are named**, 
 constantly and a name that resolves to nothing is invisible otherwise — it would be a line in the log of
 a knowledge that was already created. `found: false` is a normal answer, not an error.
 
+The lookup answers "does this name work?", but it cannot answer "what should I type?" — so the console
+also ships a catalog of verified handles (`frontend/src/config/companies.ts`) rendered as a checkbox
+list by the descriptor's `picklist` field kind, with a free-text row beside it for anything not in the
+catalog. Entries are stored as **bare handles, not pinned `platform:handle`**, so a company that
+migrates ATS keeps resolving; the platform shown next to each name is display only. Every catalog entry
+must be verified through this endpoint before it is added — an unverified handle there looks
+authoritative and is worse than no catalog.
+
+Which of a real 126-company watchlist reached a board, which did not, and the manual step each
+remaining one needs is worked out in [`job-board-companies.md`](./job-board-companies.md).
+
+`locations` uses the same control against `frontend/src/config/locations.ts`. Because
+`matchesLocation` is a lowercased **substring** test, a city with two accepted spellings needs both
+terms — "bengaluru" does not contain "bangalore" — so those rows store a group of values behind one
+tick rather than a single term.
+
 The counts are the whole board, before `locations`. That is deliberately the pre-filter number: it is
 what the connector will actually fetch, so it says what a company costs, and the Indian share is roughly
 a tenth of it.
@@ -177,7 +248,8 @@ resolution probes every platform and a miss is the normal outcome for all but on
 default method over it.
 
 It returns a **count**, not a boolean, because every platform's existence check already knew one —
-Greenhouse, Lever and Ashby from the listing size, SmartRecruiters from `totalFound`, Workday from
+Greenhouse, Lever and Ashby from the listing size, SmartRecruiters from `totalFound`, Oracle HCM from
+`TotalJobsCount`, Workday from
 `total`. Throwing it away and re-fetching the board to answer "how big is it?" would double the
 requests for a number already in hand, which is what makes the lookup endpoint below cheap.
 
@@ -187,7 +259,7 @@ Every supported platform returns the entire current board in one request — no 
 continuation token, no meaningful pagination — so `JobBoardsConnector` implements `SourceConnector`
 directly, as `LocalFsConnector` does. The seed `TimeWindow` is ignored and every grab returns one page
 with `hasMore=false`. The expensive half of the machinery still works: change detection skips any
-posting whose checksum is unchanged and already `INDEXED`.
+posting whose checksum is unchanged, unless it is `FAILED` or `DELETED`.
 
 Backward cursors are not supported — a job board has no history worth walking. A closed posting simply
 stops appearing; boards send no tombstone, which is why this connector opts into a 14-day retention
@@ -195,13 +267,25 @@ window against a 3-hour poll.
 
 Per-platform quirks:
 
-- **Greenhouse** — `?content=true` makes one call sufficient. `updated_at` is the change signal.
+- **Greenhouse** — `?content=true` makes one call sufficient. **`updated_at` is *not* the change
+  signal**, despite being the obvious candidate: it moves in bulk. Measured live, 178 of GitLab's 227
+  postings share one `updated_at` to the second and 233 of Okta's 313 do, so trusting it re-embedded
+  three quarters of a board for a change that never touched the text. The checksum is
+  `AtsNormalization.changeStamp(title, location, content)` instead.
 - **Lever** — publishes **no update timestamp**, only `createdAt`. A checksum from `createdAt` alone
   would never move, so an edited posting would be skipped forever (an invariant-3 violation). The
   checksum hashes the body too.
 - **Ashby** — the richest: states `isRemote` structurally, publishes real pay bands with
   `includeCompensation`, and is the only one that may carry a close date, which becomes
-  `Entity.expiresAt` and beats the knowledge-level retention window.
+  `Entity.expiresAt` and beats the knowledge-level retention window. It publishes **`publishedAt` and
+  no `updatedAt`**; reading the absent field made the checksum a constant, so an edited posting was
+  never re-indexed — an invariant-3 violation that survived because the test fixture invented the
+  field. It uses `changeStamp` too.
+- **Workday, Oracle HCM, SmartRecruiters, Lever** — all hash the body into the checksum because none
+  publishes a timestamp that moves on an edit. Note they hash the **body only**, where Greenhouse and
+  Ashby now stamp title and location too; a role relocated without a description change is therefore
+  still missed on those four. Aligning them means one forced re-index of every posting they hold, so
+  it is deliberately not bundled here.
 - **SmartRecruiters** — the only platform that pays **per posting**, and the only one that reaches
   Swiggy (71 postings, 70 in India) and Freshworks. Two consequences below.
 
@@ -210,6 +294,10 @@ Per-platform quirks:
 Its listing carries metadata only — no description — so every posting needs a second call. A board of
 N postings therefore costs `1 + N` requests where Greenhouse costs 1, and change detection cannot help:
 the runner only skips a posting *after* the connector has produced a `RawItem`, which requires the text.
+
+This matters twice over now that calls are rate limited: those `1 + N` requests all charge the same
+`board:smartrecruiters` bucket, so a tight `app.ratelimit.job-boards.rules` slows a per-posting
+platform far more than a snapshot one.
 
 Two things keep it bounded:
 
@@ -231,7 +319,7 @@ Two API quirks worth knowing:
   move on an edit, so — as with Lever — the checksum hashes the body, or an edited posting would be
   skipped forever (invariant 3).
 
-#### Workday is addressed by a triple, and cannot use the hint
+#### Workday is addressed by a triple, and queries rather than filters
 
 A Workday site is a `tenant/site/wd` triple (`adobe/external_experienced/wd5`) or the career-site URL,
 and **none of the three parts is guessable** — 13 of 22 blind attempts failed on companies that
@@ -243,80 +331,115 @@ companies for no possible benefit.
 Search is a `POST` with the paging window in the body — the reason `AtsHttp` has `postJson` — and pages
 at 20 against sites holding several hundred (Adobe: 742).
 
-**It deliberately ignores the location hint**, unlike SmartRecruiters. Its search result is
-systematically less complete than its detail: a bare city with no country (`"Bengaluru"`), and for a
-multi-site role a *count* with no place at all (`"5 Locations"`). Filtering on that would drop a
-Bengaluru role whenever the filter names "India", and drop every multi-site role outright — the same
-silent miss already measured on Stripe. So everything is fetched and the connector filters the full
-locations, which is why the detail's `location` + `additionalLocations` + `country.descriptor` are
-joined into one string: without the country appended, a filter naming "India" would never match a role
-in Bengaluru.
+**The location hint is sent as a query, never applied as a filter** — and the distinction is the whole
+design. Workday's search *result* is systematically less complete than its detail: a bare city with no
+country (`"Bengaluru"`), and for a multi-site role a *count* with no place at all (`"5 Locations"`).
+Filtering on that would drop a Bengaluru role whenever the filter names "India", and drop every
+multi-site role outright — the same silent miss already measured on Stripe. But `searchText` runs
+against Workday's own index, which reads the whole record, so *asking* finds the multi-site role that
+*filtering* would have thrown away.
 
-That makes it the most expensive platform here — `1 + N` over the *whole* site, where SmartRecruiters
-pays only for what survives the hint. Add a Workday site deliberately. What the location filter still
-bounds is everything downstream: entities, chunks and embeddings.
+Measured on Lowe's (`lowes/LWS_External_CS/wd5`): **12,424 postings for a blank query, 48 for
+`"Bengaluru"`**. That is the difference between ~12,400 requests a poll and ~50, and it is what stopped
+this being the most expensive platform here.
+
+Two rules follow:
+
+- **One request per term, unioned by `externalPath`.** The terms are alternatives (`bengaluru` OR
+  `bangalore`) and Workday reads a multi-word query conjunctively, so a joined query matches almost
+  nothing — on Lowe's the two spellings answer 48 and 3 postings and overlap not at all. The union
+  happens before mapping, so a posting matched by two terms still costs one detail call.
+- **The query is a prefilter, not the authority.** `searchText` matches description text too, so it
+  returns roles that are not in the named place. `JobBoardsConnector.grab` still runs
+  `matchesLocation` over the result, which is also why the detail's `location` +
+  `additionalLocations` + `country.descriptor` are joined into one string: without the country
+  appended, a filter naming "India" would never match a role in Bengaluru.
+
+A site added with **no** locations still walks the whole board, and for a large tenant that is minutes
+per poll. Set locations, or a slow schedule, or both. What the location list bounds beyond the fetch is
+unchanged: entities, chunks and embeddings.
 
 `postedOn` is prose ("Posted Today"), so `startDate` is the only usable date, and as with Lever and
 SmartRecruiters the checksum hashes the body.
 
+#### Oracle HCM is addressed by a pair, and reaches a whole cluster at once
 
-### Filtering by location (`inputs.locations`)
+Oracle Recruiting Cloud (`oraclehcm`) exists because of what the other five *cannot* reach. Probing a
+real 126-company watchlist, the employers that resolved nowhere split into "runs its own careers stack"
+and "runs a hosted ATS nothing here reads" — and the second group was dominated by this one platform:
+BNY Mellon, JPMorgan Chase and Kotak Mahindra confirmed, with Akamai and American Express on the same
+UI behind vanity domains. One bean reaches all of them, which is why it was worth building ahead of a
+per-employer connector for Amazon or Microsoft.
 
-Optional list of match terms; empty keeps everything. Applied in `JobBoardsConnector.grab()` rather
-than in the platform's `fetch`, because none of these APIs takes a location parameter — the whole board arrives
-either way and the saving is entirely downstream, in the upsert, parse, chunk and **embed** that every
-surviving posting pays for. Matching is case-insensitive substring against `metadata.location`.
+A site is a `host/siteNumber` pair (`eofe.fa.us2.oraclecloud.com/BNY-Careers`) or the career-site URL,
+and like Workday **neither part is guessable**: the host is a per-customer Fusion pod whose prefix is
+not the company name and whose region segment is sometimes absent (`jpmc.fa.oraclecloud.com`), and the
+site number is an arbitrary slug (`CX_1`, `CX_1001`, `BNY-Careers`). So `OracleHcmSite.parse` returning
+empty is what tells the connector a bare name is not an Oracle site, and `hasBoard` answers `false`
+without a network call.
 
-It matters mostly for cost. Measured on the live boards: Databricks carries **857 postings for 92
-Indian ones (11%)**, Stripe **592 for 36 (6%)**. Without the filter, roughly nine tenths of everything
-ingested is embedded for a country the user will never apply to — and embeddings are the scarcest
-resource in the pipeline.
+**A vanity domain is deliberately rejected.** Employers front the pod with their own hostname
+(`jobs.akamai.com`, `careers.americanexpress.com`); those serve the UI but **not** the REST API, so
+accepting one would produce a site that resolves and then fails every fetch. The underlying pod host
+has to be read off the page.
 
-Two behaviours worth knowing:
+It pays **per posting**, like SmartRecruiters and more so: the listing carries no description at all —
+`ShortDescriptionStr` is empty and the qualification fields are null — so every requisition kept costs
+a second call. The location terms are therefore sent as Oracle's `keyword` finder, one request per
+term, unioned by requisition id. Measured on BNY's site: **1,386 requisitions blank, 138 for `"Pune"`**.
+Without that prefilter JPMorgan's 7,325 requisitions would be 7,326 requests a poll.
 
-- **A posting with no location survives.** Boards leave the field blank often enough that dropping
-  those would lose real roles on a missing value, and nothing distinguishes an irrelevant location from
-  an unstated one. Same rule as `IngestionJob.connectionUnusable`: any doubt runs it. Tombstones are
-  never filtered either — dropping one would strand the entity it exists to remove.
-- **The country name alone is not enough.** 27 of Stripe's 36 Indian roles are filed as plain
-  `Bengaluru` with no country, so `["India"]` keeps 3 of 36 — a 92% silent miss. List the cities. And
-  note that `Remote` is blunt: it matches `Remote - US` too, and adding it to Stripe pulled in ~100
-  non-Indian roles.
+Two quirks: the search envelope nests one level deeper than the others (`items[0].requisitionList`,
+with the count at `items[0].TotalJobsCount`), and the detail finder takes **quoted** values
+(`ById;Id="69848",siteNumber="BNY-Careers"`) where the search finder does not. As with Lever,
+SmartRecruiters and Workday, no update timestamp is published — `ExternalPostedStartDate` does not move
+on an edit — so the checksum hashes the body.
 
-`membershipSignature` covers `locations` and deliberately excludes `companies`. A company is a
-discovery-set dimension — each is its own iterable, so adding one is handled by discover-reconcile and
-including it would reset every surviving company's cursor on an unrelated edit. `locations` is the
-opposite: it moves the membership boundary *inside* each iterable, exactly like `GmailConnector`'s
-query, so widening it must re-walk the boards or newly-matching postings are silently never picked up.
 
-Compensation parsing handles Indian notation (Indian digit grouping, `LPA`, lakh, crore) as well as
-the western forms, and always records the currency it read — `compMin`/`compMax` are plain numbers in
-the index, so a corpus mixing INR and USD would make one numeric filter mean two things. Every match
-must be anchored by a currency symbol or a magnitude unit: measured on live boards, an unanchored
-pattern read "6-12 months" as six to twelve million and invented a salary band on postings that never
-mentioned pay. Expect null far more often than not — see `docs/job-discovery.md` for the measured rate.
+### Filtering what gets kept (`BoardFilter`)
 
-Normalisation lives in `ats.AtsNormalization` and is shared, because everything *derived* from the
-per-board JSON must be computed identically — most of all `dedupeKey`
-(`company|title|location`, normalised), since the same role only collapses across sources if both
-sides build the key the same way. The derivations are deliberately conservative: seniority, remoteness
-and compensation return null/false rather than guessing, because confidently-wrong metadata makes
-filters silently exclude good matches. Where a board states a fact structurally it wins over any
-inference — Ashby's `isRemote` and its `includeCompensation` pay bands are used directly.
+Four independent dimensions, read from `inputs` and carried as one `BoardFilter`: `locations`,
+`titleInclude`, `titleExclude`, `maxAgeDays`, `includeRemote`. Empty means *no opinion*, never *match
+nothing*.
 
-Per-board quirks:
+**Why it matters more than it looks.** Everything kept is parsed, chunked and **embedded**, and hosted
+embedding quotas are counted per chunk. Measured across the 71 boards in the console's catalog:
 
-- **Greenhouse** — `?content=true` is what makes one call sufficient; without it the descriptions need
-  a second request per posting. `updated_at` is the change signal.
-- **Lever** — publishes **no update timestamp**, only `createdAt`. A checksum built from `createdAt`
-  alone would never move, so an edited posting would be skipped forever (an invariant-3 violation).
-  The checksum therefore hashes the body as well.
-- **Ashby** — the richest of the three, and the only one that can state a close date; when it does,
-  that becomes `Entity.expiresAt` and beats the knowledge-level retention window.
+| filter | postings | chunks |
+|---|---|---|
+| none | 57,389 | ~355,000 |
+| location terms (India cities) | 5,124 | ~34,000 |
+| + a title include/exclude pair | 1,083 | ~7,400 |
 
-## Known limitations
+`title` is the strongest lever because it is the one useful field **every platform puts in its
+listing**. So a title filter removes the per-posting *detail call* as well as the embedding — Citi goes
+from 896 detail requests a poll to 69 — which a location filter often cannot, because a Workday listing
+may say only `"5 Locations"`.
 
-Both Google connectors are list-based, so **source-side deletions are not yet tombstoned** — a
-message/file removed after ingestion stays searchable until a re-index. Gmail's push (`watch`) and
-Drive's Changes feed would make both incremental *and* deletion-aware; they slot in behind the same
-forward-cursor/grab contract when needed.
+**Applied in two places, from one object.** `BoardPlatform.fetch` takes the filter as a *hint*: the
+per-posting platforms (SmartRecruiters, Oracle HCM) test `matchesTitle` on the listing before paying
+for a detail call, and Workday and Oracle additionally send the place terms as a server-side query.
+`JobBoardsConnector.grab` then re-applies the whole filter authoritatively, because a platform is free
+to ignore the hint. Both sides call the same `BoardFilter` methods; two copies of the rules would drift,
+and a platform filtering harder than the connector would lose postings nobody could account for.
+
+Three rules worth knowing:
+
+- **Exclude beats include.** "Software Engineering Manager" matches an include of `software engineer`
+  and an exclude of `manager`; the exclude wins, or the exclude list says nothing.
+- **A missing value keeps the posting.** No location, no posted date — any doubt runs it, matching
+  `IngestionJob.connectionUnusable`. Boards leave both blank often enough that the alternative loses
+  real roles on the strength of an absent field. A *title* is always present, so title terms are exact.
+- **`includeRemote` is an OR with the place terms**, not a filter of its own: a stated-remote role
+  satisfies `locations` however it is filed, but still has to pass the title and age tests.
+
+The country name alone is usually not enough for `locations` — most boards file a role as `"Bengaluru"`
+with no country, so a term list should name cities. And a narrow include list has a real recall cost: on
+the measured corpus a backend-flavoured list dropped 1,025 clearly technical roles, including Adobe's
+`Computer Scientist` and all 57 of Samsung's silicon roles.
+
+`membershipSignature` covers **every** filter dimension and still excludes `companies`. Each dimension
+is a within-iterable membership boundary — tightening one changes which postings of a board survive,
+which is a §3.2 re-walk. Leaving one out would mean editing it never re-walks, so the board keeps
+whatever it already had.
+

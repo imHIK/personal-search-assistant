@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import io.personalassistant.ingestion.connector.ats.BoardPlatform;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -54,7 +55,7 @@ public class LeverPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, List<String> locationHints) {
+    public List<RawItem> fetch(String boardId, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode postings = api.listPostings(boardId);

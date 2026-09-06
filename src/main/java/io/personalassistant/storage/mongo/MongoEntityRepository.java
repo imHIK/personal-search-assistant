@@ -357,7 +357,7 @@ public class MongoEntityRepository implements EntityRepository {
                 // reads them. _id comes back implicitly.
                 .projection(Projections.include("knowledgeId", "externalId", "entityType", "status",
                         "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
-                        "needsReindex", "updatedAt"))
+                        "needsReindex", "createdAt", "updatedAt"))
                 // _id is the tiebreak so two entities touched in the same millisecond can't swap
                 // places between pages. Served by the (knowledgeId, updatedAt, _id) compound index.
                 .sort(orderBy(descending("updatedAt"), ascending("_id")))
@@ -472,6 +472,7 @@ public class MongoEntityRepository implements EntityRepository {
                         BsonSupport.instant(idx.get("indexedAt")), idx.getString("error")),
                 retry == null ? 0 : intValue(retry.get("count")),
                 Boolean.TRUE.equals(d.getBoolean("needsReindex")),
+                BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")));
     }
 

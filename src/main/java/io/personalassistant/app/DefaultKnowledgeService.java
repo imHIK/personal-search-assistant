@@ -271,6 +271,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
             DirCounts created = createCursors(held, iterables);
             DirCounts revived = reviveReappearedIterables(held, iterables);
             DirCounts parked = parkDisappearedIterables(held, iterables);
+            refreshIterableNames(held, iterables);
 
             // 3.2 Within-iterable membership re-walk when the signature moved (design §3.2). Bump the
             //     generation and persist it BEFORE resetting cursors, so the async re-walk stamps
@@ -454,6 +455,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         DirCounts created = createCursors(kn, iterables);
         DirCounts revived = reviveReappearedIterables(kn, iterables);
         DirCounts retired = retireDeletedIterables(kn, iterables);
+        refreshIterableNames(kn, iterables);
 
         recordDiscovery(kn, DiscoveryTrigger.RECONCILE, iterables.size(), created, revived, retired);
 
@@ -462,6 +464,23 @@ public class DefaultKnowledgeService implements KnowledgeService {
                     + revived.total() + " revived, " + retired.total() + " retired cursor(s)");
         }
         return created.total();
+    }
+
+    /**
+     * Re-snapshot the display name of every live iterable onto its cursors. Names are cosmetic, so
+     * this is a plain unfenced write on any status — losing a race with a worker costs nothing, and
+     * the next pass corrects it anyway. It exists for two cases: a source-side rename (a Drive folder
+     * or Gmail label), and cursors written before names were stored at all, which it backfills.
+     */
+    private void refreshIterableNames(Knowledge kn, List<SourceIterable> iterables) {
+        Map<String, String> names = new HashMap<>();
+        iterables.forEach(it -> names.put(it.iterableId(), it.displayName()));
+        for (Cursor c : cursors.findByKnowledge(kn.id())) {
+            String name = names.get(c.iterableId());
+            if (name != null && !name.equals(c.iterableName())) {
+                cursors.rename(c.id(), name);
+            }
+        }
     }
 
     /** Revive cursors retired for an iterable that has since reappeared, refreshing their attributes. */
@@ -613,6 +632,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 Ids.cursorFor(kn.id(), iterable.iterableId(), direction.name()),
                 kn.id(),
                 iterable.iterableId(),
+                iterable.displayName(), // what the console shows in place of the id
                 iterable.attributes(), // snapshot the grab() inputs so the runner needn't re-discover
                 direction,
                 CursorPosition.start(),

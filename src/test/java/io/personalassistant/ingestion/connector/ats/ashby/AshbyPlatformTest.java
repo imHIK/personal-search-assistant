@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.ashby;
 
 import io.personalassistant.domain.model.RawItem;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
@@ -10,13 +11,13 @@ class AshbyPlatformTest {
 
     private static final String BOARD = """
             {"jobs":[
-              {"id":"job-1","title":"Software Engineer","updatedAt":"2026-08-10T00:00:00Z",
+              {"id":"job-1","title":"Software Engineer",
                "publishedAt":"2026-08-01T00:00:00Z","location":"Anywhere","isRemote":true,
                "applyUrl":"https://jobs.ashbyhq.com/acme/job-1","team":"Core",
                "descriptionHtml":"<p>Ship product. Pay is discussed later.</p>",
                "compensation":{"summaryComponents":[
                   {"compensationType":"Salary","minValue":160000,"maxValue":200000,"currencyCode":"USD"}]}},
-              {"id":"job-2","title":"Recruiter","updatedAt":"2026-08-11T00:00:00Z",
+              {"id":"job-2","title":"Recruiter","publishedAt":"2026-08-02T00:00:00Z",
                "location":"London","isRemote":false,"closedAt":"2026-09-01T00:00:00Z",
                "applyUrl":"https://jobs.ashbyhq.com/acme/job-2",
                "descriptionPlain":"Hire people."}
@@ -26,7 +27,7 @@ class AshbyPlatformTest {
             new AshbyPlatform(new FakeAshbyApi().withBoard("acme", BOARD));
 
     private List<RawItem> grab() {
-        return platform.fetch("acme", List.of());
+        return platform.fetch("acme", BoardFilter.ofLocations(List.of()));
     }
 
     @Test
@@ -68,5 +69,28 @@ class AshbyPlatformTest {
     void leavesSeniorityUnsetWhenTheTitleCarriesNoMarker() {
         // "Software Engineer" is genuinely ambiguous; guessing a band would corrupt seniority filters.
         Assertions.assertNull(grab().get(0).metadata().get("seniority"));
+    }
+
+    @Test
+    void theChecksumMovesWhenSomethingIndexedChanges() {
+        // This was broken and invisible: Ashby's posting API has no updatedAt — the field this read
+        // does not exist — so the checksum was a constant and an edited posting was never re-indexed,
+        // violating invariant 3. The fixture used to invent the field, which is why nothing caught it.
+        String before = grab().get(0).checksum();
+
+        for (String edit : List.of(
+                BOARD.replace("Ship product.", "Ship product with Kafka."),
+                BOARD.replace("Software Engineer", "Staff Software Engineer"),
+                BOARD.replace("\"location\":\"Anywhere\"", "\"location\":\"Bengaluru, India\""))) {
+            String after = new AshbyPlatform(new FakeAshbyApi().withBoard("acme", edit))
+                    .fetch("acme", BoardFilter.NONE).get(0).checksum();
+            Assertions.assertNotEquals(before, after, edit);
+        }
+    }
+
+    @Test
+    void publishedAtIsCarriedAsTheItemTimestamp() {
+        // It is the only date Ashby publishes, and the age filter falls back to it.
+        Assertions.assertEquals(Instant.parse("2026-08-01T00:00:00Z"), grab().get(0).modifiedAt());
     }
 }

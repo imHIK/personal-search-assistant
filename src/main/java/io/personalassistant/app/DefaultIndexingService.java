@@ -57,7 +57,8 @@ public class DefaultIndexingService implements IndexingService {
     public RetryTrigger retryFailed(String knowledgeId) {
         // Both halves, because both stages dead-letter independently: a cursor can exhaust its
         // retries fetching while entities fail to index, and a user asking to "retry what failed"
-        // means all of it.
+        // means all of it. The cursor half also lifts rate-limit holds, which is the console's only
+        // way to act on a RATE_LIMITED cursor after raising the account's quota.
         return new RetryTrigger(knowledgeId,
                 cursors.retryFailedByKnowledge(knowledgeId),
                 entities.retryFailedByKnowledge(knowledgeId));

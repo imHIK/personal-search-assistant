@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.connector.ats.smartrecruiters;
 
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.ingestion.connector.ats.AtsApiException;
+import io.personalassistant.ingestion.connector.ats.BoardFilter;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,11 @@ class SmartRecruitersPlatformTest {
     }
 
     private static List<RawItem> fetch(FakeSmartRecruitersApi api, List<String> hints) {
-        return new SmartRecruitersPlatform(api).fetch("Acme", hints);
+        return fetch(api, BoardFilter.ofLocations(hints));
+    }
+
+    private static List<RawItem> fetch(FakeSmartRecruitersApi api, BoardFilter filter) {
+        return new SmartRecruitersPlatform(api).fetch("Acme", filter);
     }
 
     @Test
@@ -93,7 +98,7 @@ class SmartRecruitersPlatformTest {
             api.withPosting("Big", "id-" + i, "Engineer " + i, "Bengaluru, India", "<p>Work.</p>");
         }
 
-        Assertions.assertEquals(250, new SmartRecruitersPlatform(api).fetch("Big", List.of()).size());
+        Assertions.assertEquals(250, new SmartRecruitersPlatform(api).fetch("Big", BoardFilter.ofLocations(List.of())).size());
     }
 
     // ---- resolution ----------------------------------------------------------------------------

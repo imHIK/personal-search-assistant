@@ -116,7 +116,11 @@ Indexes:
 > **Listing reads a projection.** `EntityRepository.findByKnowledge` returns `EntitySummary`, not
 > `Entity` — `raw` and `content.text` are the bulk of the document and a table view needs neither.
 > The sort key is `updatedAt`, and `stampLastSeen` deliberately does *not* bump it, so a membership
-> re-walk doesn't reshuffle the browser. Offset paging can still drift a page boundary if the
+> re-walk doesn't reshuffle the browser. `updatedAt` is the row's last write from *either* stage and
+> most of its movement is the indexer's own bookkeeping — a claim, a retry, a deferral — so it is a
+> sort key, not a content date. The projection carries `createdAt` alongside it for that: it is
+> `setOnInsert` only, so it is the only honest answer to "when did this arrive", and it is what the
+> console shows as an item's *added* time. Offset paging can still drift a page boundary if the
 > indexing job touches entities mid-scan; a refresh re-reads, which is fine for a console.
 
 > **`expiresAt` is ingestion-owned and usually null.** It is written by `upsert` only when the source
@@ -132,8 +136,14 @@ Indexes:
 
 > **`checksum` is the only change signal.** A connector must make it change whenever the item
 > changes (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail:
-> `gmail:<id>;hist:<historyId>`). An unchanged checksum on an `INDEXED` entity is skipped entirely —
-> no parse, no embed, no OpenSearch write.
+> `gmail:<id>;hist:<historyId>`). An unchanged checksum is skipped entirely — no parse, no embed, no
+> OpenSearch write — unless the entity is `FAILED` or `DELETED`, the two statuses where a re-walk is a
+> deliberate way back in.
+>
+> The skip covers `INGESTED` and `INDEXING`, not just `INDEXED`, because `upsert` owns the indexing
+> queue reset: it zeroes `retry` and clears `retry.nextAttemptAt`. Re-upserting an entity that is merely
+> still queued would therefore throw away a rate-limit deferral's reopening instant on every poll, make
+> the entity immediately claimable, and have it parsed and chunked again for nothing.
 
 ---
 
@@ -146,18 +156,35 @@ sub-stream. The id is *derived* from that triple, so discovery and re-arm are id
   "_id": "cur_kn_8f3a...:folder:/home/me/Documents:FORWARD",
   "knowledgeId": "kn_8f3a...",
   "iterableId": "folder:/home/me/Documents",
+  "iterableName": "Documents",          // discover()'s display name — what the console shows
   "attributes": { },                    // connector-supplied iterable metadata
   "direction": "FORWARD",               // CursorDirection — FORWARD | BACKWARD
   "position": { "lastModifiedMillis": 1718877600000, "path": "…" },  // free-form, connector-owned
   "status": "AVAILABLE",                // CursorStatus
   "lease":  { "owner": "worker-1", "expiresAt": "…" },
-  "retry":  { "count": 0, "lastError": null },
+  "retry":  { "count": 0, "lastError": null, "nextAttemptAt": null },
   "stats":  { "lastRunAt": "…", "fetched": 1240 },
   "scope":  { "connectorType": "LOCAL_FS" }
 }
 ```
 
-Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1, status: 1 }`.
+Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1, status: 1 }`,
+`{ retry.nextAttemptAt: 1 }`.
+
+> **Rate-limit holds.** `retry.nextAttemptAt` is set only alongside `status: "RATE_LIMITED"`: it is
+> when the limiter says the source's quota reopens, and the claim filter skips the cursor until then.
+> Nothing writes the status back — the instant simply stops excluding the row, so the timestamp is
+> the single source of truth. Note the deliberate difference from `entities`, where a null
+> `retry.nextAttemptAt` means "no backoff, claim it": on a `RATE_LIMITED` cursor a null matches
+> nothing, so every reset (`release`, `retryFailedByKnowledge`, `revive`, `resetToStart`) clears the
+> whole `retry` block rather than leaving a stale instant behind.
+
+> **`iterableName` is cosmetic and refreshed, not fenced.** It is snapshotted from
+> `SourceIterable.displayName()` when the cursor is created and re-written by the reconcile pass
+> (`rename`, an unfenced single-field update on any status) whenever `discover` reports a different
+> name. That is what backfills cursors written before the field existed and what follows a renamed
+> Drive folder or Gmail label. It is null on a legacy cursor until the next reconcile, so the console
+> keeps its id-shortening fallback.
 
 > **Lease fencing.** `advancePosition` / `release` / `recordFailure` are compare-and-set on
 > `lease.owner` **and** not-expired. A worker whose lease expired gets `false` back and must stop
@@ -181,6 +208,11 @@ so re-authenticating one account doesn't mean editing every knowledge that uses 
   "type": "GMAIL",                      // SourceType
   "auth":   { "refreshToken": "…", "accessToken": "…", "expiresAt": "…" },
   "config": { },
+  // Outbound call ceilings for this account. Absent (or an empty rules array) means the
+  // app.ratelimit.* default applies. A call must satisfy every rule; each is a token bucket
+  // whose capacity is `permits`, so there is no separate burst field.
+  "rateLimit": { "rules": [ { "permits": 10, "windowSeconds": 1 },
+                            { "permits": 500, "windowSeconds": 60 } ] },
   "isDefault": true,                    // at most one default per type
   "status": "ACTIVE",                   // ConnectionStatus
   "lastError": null,
@@ -189,7 +221,8 @@ so re-authenticating one account doesn't mean editing every knowledge that uses 
 }
 ```
 
-Indexes: `{ type: 1 }`, `{ type: 1, isDefault: 1 }`.
+Indexes: `{ type: 1 }`, `{ type: 1, isDefault: 1 }`. `rateLimit` is deliberately unindexed — it is
+only ever read alongside the connection that carries it, never queried on.
 
 > Resolved by `ConnectionResolver`: a knowledge's explicit `connectorDetails.connectionId` wins,
 > otherwise the default for its `SourceType`. `DefaultGoogleAccessTokens` writes refreshed tokens

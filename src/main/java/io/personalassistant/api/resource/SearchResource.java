@@ -4,7 +4,6 @@ import io.personalassistant.api.dto.SearchRequestDto;
 import io.personalassistant.api.dto.SearchResponseDto;
 import io.personalassistant.domain.service.SearchService;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -34,7 +33,7 @@ public class SearchResource {
             var response = searchService.search(request.toDomain());
             return SearchResponseDto.from(response);
         } catch (IllegalArgumentException e) {          // blank query / unknown mode
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 }
