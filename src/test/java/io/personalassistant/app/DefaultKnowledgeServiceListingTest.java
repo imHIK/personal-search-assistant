@@ -53,8 +53,9 @@ class DefaultKnowledgeServiceListingTest {
         StubConnector connector = new StubConnector(SourceType.SLACK,
                 List.of(new SourceIterable("chan_a", "A", Map.of())));
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
+        SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors, entities,
-                new SingleConnectorRegistry(connector), connections, index, discovery);
+                registry, connections, index, discovery, new RefetchPolicy(registry));
     }
 
     /** Persist a knowledge directly — these tests exercise reads, not the activation path. */
@@ -69,7 +70,7 @@ class DefaultKnowledgeServiceListingTest {
         return new Entity(id, knowledgeId, "chan_a", EntityType.MESSAGE, "ext_" + id,
                 Map.of(), Entity.Content.ofText("body"),
                 Map.of("title", "Title " + id, "uri", "test://" + id),
-                "sha256:" + id, status, false, Entity.IndexInfo.empty(), null,
+                "sha256:" + id, status, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), updatedAt, updatedAt, null, 0L);
     }
 

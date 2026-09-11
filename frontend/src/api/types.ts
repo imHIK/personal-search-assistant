@@ -326,10 +326,20 @@ export interface Digest {
   nextRunAt: string | null
   createdAt: string | null
   updatedAt: string | null
+  /**
+   * When the already-seen set was last cleared. Read-only — set by the reset action, not by an edit,
+   * so changing a digest never silently makes it re-report its whole window.
+   */
+  historyResetAt: string | null
 }
 
 export type CreateDigestBody = Pick<Digest, 'name'> &
-  Partial<Omit<Digest, 'id' | 'name' | 'nextRunAt' | 'createdAt' | 'updatedAt'>>
+  Partial<Omit<Digest, 'id' | 'name' | 'nextRunAt' | 'createdAt' | 'updatedAt' | 'historyResetAt'>>
+
+/** Every field is optional: absent means "leave alone", which is what keeps an edit non-destructive. */
+export type PatchDigestBody = Partial<
+  Omit<Digest, 'id' | 'nextRunAt' | 'createdAt' | 'updatedAt' | 'historyResetAt'>
+>
 
 export interface DigestRunItem {
   entityId: string
@@ -338,6 +348,12 @@ export interface DigestRunItem {
   uri: string | null
   score: number
   snippet: string | null
+  /**
+   * What the digest's task said about this item, keyed by whatever the task asked the model to
+   * record. Open on purpose — the keys come from user-written tasks, so no component may branch on
+   * them; `config/annotations.ts` decides how a key is presented.
+   */
+  annotations: Record<string, string | number | boolean>
 }
 
 export interface DigestRun {
@@ -345,8 +361,22 @@ export interface DigestRun {
   digestId: string
   ranAt: string
   items: DigestRunItem[]
-  /** The LLM task's reply, or null when the digest names no task. */
+  /** The LLM task's reply, verbatim, or null when the digest names no task. */
   taskOutput: string | null
+  /** Results the search returned before already-seen ones were dropped. */
+  candidates: number
+  /**
+   * How many of those were dropped as already reported. With `candidates` this separates "nothing
+   * matched" from "everything matched was already seen" — two very different empty runs.
+   */
+  suppressed: number
+  /**
+   * What the same search finds with the look-back window removed, counted only when the windowed
+   * search found nothing. The window filters on when a chunk was *indexed*, so a source ingested
+   * once and then left alone falls out of a short window and stays out — this is what separates
+   * "widen the look-back" from "your query matches nothing".
+   */
+  outsideWindow: number
   /** Why the run failed. A failed run is still recorded, so a broken digest is visible. */
   error: string | null
 }
@@ -360,4 +390,67 @@ export interface CompanyLookup {
   /** Postings on that board, before any location filter. */
   postings: number
   found: boolean
+}
+
+// ---- Tasks ----------------------------------------------------------------------------------
+
+/** How a task's prompt is put together. */
+export type TaskMode = 'SIMPLE' | 'RAW'
+
+/** Whether a task replies with one summary of the batch or a note on each result. */
+export type TaskOutput = 'SUMMARY' | 'PER_ITEM'
+
+/** Whether the model judges the matching passage or the whole document. */
+export type TaskSourceText = 'CHUNK' | 'ENTITY'
+
+export type TaskFieldType = 'NUMBER' | 'TEXT'
+
+/** One thing a PER_ITEM task records about each result. Becomes an annotation on the run item. */
+export interface TaskField {
+  name: string
+  type: TaskFieldType
+  description: string
+  /** When true the model may answer null, and the field is then simply not shown. */
+  optional: boolean
+}
+
+/**
+ * A row of the task library. Built-in tasks ship inside the app and are read-only — two of them are
+ * what search itself runs — so the console offers Duplicate rather than Edit for those.
+ */
+export interface Task {
+  id: string
+  name: string
+  description: string
+  builtIn: boolean
+  /** What in the app depends on this task, e.g. ["search"]. Empty for a task only digests use. */
+  usedBy: string[]
+  usableInDigest: boolean
+  /** Null on a built-in task: its prompt is not exposed as editable fields. */
+  mode: TaskMode | null
+  instruction: string | null
+  output: TaskOutput | null
+  fields: TaskField[] | null
+  system: string | null
+  user: string | null
+  llmProfile: string | null
+  sourceText: TaskSourceText | null
+  contextChars: number | null
+  maxSources: number | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export type TaskBody = Partial<
+  Omit<Task, 'id' | 'builtIn' | 'usedBy' | 'usableInDigest' | 'createdAt' | 'updatedAt'>
+> &
+  Pick<Task, 'name'>
+
+/** The thin entity read used to show a document's title where only its id is held. */
+export interface EntitySummary {
+  id: string
+  knowledgeId: string
+  title: string | null
+  uri: string | null
+  status: string | null
 }

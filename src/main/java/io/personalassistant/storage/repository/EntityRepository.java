@@ -85,6 +85,37 @@ public interface EntityRepository {
                        int retryCount, Instant nextAttemptAt);
 
     /**
+     * Dead-letter an entity whose stored content reference no longer resolves, and mark it for
+     * re-fetching. One fenced write rather than {@link #markFailed} plus a flag, because markFailed
+     * drops the lease and would fence the second call out.
+     *
+     * <p>Terminal immediately — no retry budget is consumed or granted — because a staged file that
+     * has been purged does not come back, so the retry ladder would only postpone an actionable dead
+     * letter by {@code retry-limit × backoff}. The {@code needsRefetch} it sets is the recovery
+     * route: the next walk that re-lists the item re-materializes it despite an unchanged checksum.
+     *
+     * @return {@code true} if the caller still held the lease
+     */
+    boolean markContentMissing(String id, String owner, String error);
+
+    /**
+     * Flag every file-backed entity of a knowledge as needing its content fetched again, for
+     * connectors whose {@code fileRef} is a staged copy rather than the source file.
+     *
+     * <p>Pairs with rewinding the knowledge's cursors: the flag alone changes nothing, because an
+     * unchanged item never reaches the walk's materialize step, and a rewind alone changes nothing,
+     * because the checksum still matches. Together they make the ordinary ingestion walk refresh the
+     * content — which keeps re-fetching inside the existing lease, permit and rate-limit machinery
+     * instead of issuing one API call per entity from an HTTP thread.
+     *
+     * <p>Entities with inline text are skipped: their content is in this collection and is not at
+     * risk. {@code DELETED} is excluded.
+     *
+     * @return how many entities were flagged
+     */
+    int flagNeedsRefetchByKnowledge(String knowledgeId);
+
+    /**
      * Flag an entity for re-indexing without re-fetching (e.g. after a config/model bump), and — if
      * it was dead-lettered — revive it with a fresh retry budget. This is the documented exit from
      * terminal {@code FAILED}. Deliberately leaves any live lease alone: an entity a worker is

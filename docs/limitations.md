@@ -282,9 +282,14 @@ not a tweak, and query-time grouping covers the case that actually shows up in a
 
 **Area:** Digests · `digestRuns`
 
-**What:** Every run is kept forever. Nothing prunes the collection, and the already-seen set is
-computed by reading a digest's whole history on each run — so a daily digest accumulates a run
-document per day indefinitely, and its newness check gets slower as it ages.
+**What:** Every run is kept forever. Nothing prunes the collection, so a daily digest accumulates a
+run document per day indefinitely.
+
+The newness check is now bounded below by the digest's `historyResetAt` when one is set
+(`reportedEntityIds(digestId, since)`), and the `(digestId, ranAt)` index covers that read — so the
+worse half of this, a check that slows as the digest ages, is relieved for any digest whose history
+has been reset. A digest that has never been reset still reads its whole history, and nothing prunes
+`digestRuns` either way.
 
 The read is projected to entity ids alone, so this is a slow drift rather than a cliff: a year of daily
 runs at topK 10 is ~3,650 ids. It will not be felt soon; it will be felt eventually.
@@ -325,3 +330,82 @@ allowance. The `RateLimiter` port exists precisely so this can be swapped withou
 **Candidate approach:** a Redis-backed `RateLimiter` (a Lua sorted-set window, or `INCR` plus `EXPIRE`
 if the fixed-window approximation is acceptable), introduced at the same time as the Redis `PermitService` the concurrency side already
 anticipates — they share the same trigger and should not be done separately.
+
+---
+
+## L10 — Nothing measures or caps what a task costs
+
+**Area:** Tasks · digests (`DefaultDigestService`, `TaskLibrary`)
+
+**What:** A digest's task runs on every scheduled run, over up to `maxSources` results, with no
+accounting. The console warns that this is a recurring cost and `llmProfile` is offered per task so a
+cheap model can be chosen, but nothing records spend, caps it, or notices that a task got expensive.
+A daily digest over ten whole documents is a daily bill nobody is shown.
+
+This mattered less when the only task was `job-fit` on the `lite` profile. It matters more now that
+tasks are user-written and a digest can be pointed at any of them.
+
+**Impact:** Low today, and grows with use.
+
+**Workaround:** Pause the digest, lower `maxSources`, or point the task at a cheaper profile.
+
+---
+
+## L11 — A staged file outlives nothing; losing it dead-letters the entity
+
+> **Closed.** Re-index now goes back to the source for content whose stored reference is a staged
+> copy. What follows records the problem and the shape of the fix; the behaviour is documented in
+> [`indexing-implementation.md`](./indexing-implementation.md) §5 and [`connectors.md`](./connectors.md) §6.
+
+**Area:** Ingestion · content staging (`GoogleDriveConnector.materialize`) and re-index
+(`IndexingRunner.extract`, `DefaultIndexingService`)
+
+**What it was:** A binary Drive file is stored on the entity as `content.fileRef` — a *path* into the
+scratch dir, which defaults to `${java.io.tmpdir}/psa-drive`. `IndexingRunner.extract` re-opens that
+path on every index pass, because a re-index was source-free by design. So bytes fetched once at
+ingestion time had to survive indefinitely, in a directory the OS is entitled to empty: macOS purges
+per-user `$TMPDIR` entries untouched for ~3 days, and any restart on ephemeral storage does the same.
+
+When they were gone, indexing threw `IllegalStateException: Failed to read file …`, was retried
+`app.indexing.retry-limit` times and then dead-lettered — an error naming a temp path, on an entity
+whose source had not changed. It could not heal itself: ingestion *would* re-fetch (a `FAILED` entity
+falls through the checksum skip), but the forward cursor's high-water floor means an unmodified file
+is never re-listed, so no walk ever reached it. Because `/reindex` is also how existing entities opt
+into a chunking or embedding-model change (invariant 6), the first such change dead-lettered every
+staged file in the knowledge at once.
+
+**The fix.** A connector declares a `ReindexMode` — `REINDEX_ONLY` when its stored content is durable
+(inline text in Mongo, a `LOCAL_FS` path to the user's own file), `FETCH_AND_REINDEX` when it is a
+staged copy (`GOOGLE_DRIVE`). Re-index reads that declaration, so the caller still asks only for "make
+this current again"; `app.indexing.refetch-on-reindex` (`auto` / `always` / `never`) overrides it.
+
+Two routes, because the two scales want different machinery:
+
+- **One entity** — `SourceConnector.fetchOne(knowledge, entity)` re-lists the item by its external id
+  and the result is materialized and upserted synchronously. A walk pages through a source and cannot
+  be asked for one known id, so this is the only way to reach a single entity. Implemented for
+  `GOOGLE_DRIVE` (`files.get`), `LOCAL_FS` (a re-stat) and `GMAIL` (`messages.get`); each reuses the
+  connector's own listing-row mapping, so the re-listed item is what a walk would have produced —
+  including the checksum, which is what stops the next poll seeing a phantom change. Empty means gone
+  at the source, and the entity is tombstoned.
+- **A whole knowledge** — `Entity.needsRefetch` is flagged on every file-backed entity and the
+  knowledge's cursors are rewound, so the ordinary ingestion walk refreshes them inside the lease,
+  permit and rate-limit machinery it already has. The flag is the escape from the checksum skip
+  (invariant 3): unchanged at the source is exactly the case it has to override. Flag before rewind,
+  or a cursor that starts walking first re-skips the items. `RETIRED` cursors are left parked, and a
+  `BACKWARD` cursor is rewound only when backfill is still enabled or it has already `EXHAUSTED`.
+
+The membership re-walk of a knowledge edit takes the same flag: it is the one moment the whole corpus
+passes back through ingestion, so it is also the cheapest chance to refresh staged copies.
+
+**And the dead letter heals.** `IndexingRunner` now distinguishes a missing file (`NoSuchFileException`)
+from an unreadable one. A missing staged copy is terminal on the first attempt — no backoff can make
+the file reappear, so the ladder only delays an actionable signal by `retry-limit × backoff` — and the
+same write sets `needsRefetch`, so the next walk that re-lists the item re-materializes it.
+
+**Residual:** a knowledge re-index of a Drive corpus re-downloads every staged file, which is real API
+and time cost; it is logged, and `refetch-on-reindex=never` opts out. Entities whose iterable is
+`RETIRED` are not reached by the walk (their cursors stay parked, per L2) and must be re-indexed
+individually. Setting `app.ingestion.google-drive.download-dir` to a durable directory still avoids
+the purge, at the price of an unbounded, uncollected on-disk dependency per file; parsing at ingestion
+and storing the extracted text remains the other alternative, and still drops `ParsedContent.blocks`.

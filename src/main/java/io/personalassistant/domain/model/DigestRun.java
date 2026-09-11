@@ -2,6 +2,7 @@ package io.personalassistant.domain.model;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * One execution of a {@link Digest}: what it found, and what the optional LLM task made of it.
@@ -17,7 +18,22 @@ import java.util.List;
  * @param digestId   the digest this ran
  * @param ranAt      when it ran
  * @param items      what it found, newest-first by rank
- * @param taskOutput the LLM task's reply, or null when the digest names no task
+ * @param taskOutput the LLM task's reply, verbatim, or null when the digest names no task. Kept even
+ *                   when it has been read into {@link Item#annotations} — a reply that would not parse
+ *                   is then still there to look at, which is the difference between a task that needs
+ *                   rewording and one that is simply broken
+ * @param candidates how many results the search returned <em>before</em> already-seen ones were
+ *                   dropped
+ * @param suppressed how many of those were dropped as already reported. Together with
+ *                   {@code candidates} these separate three outcomes that otherwise all look like an
+ *                   empty run: nothing matched, everything matched was already seen, and the search
+ *                   itself found nothing new. "Why is my digest quiet?" is unanswerable without them
+ * @param outsideWindow how many results the same search finds with the look-back window removed,
+ *                   counted only when the windowed search returned nothing. The window filters on
+ *                   {@code indexedAt}, so a corpus that is fully ingested and then left alone falls out
+ *                   of a short window entirely and every run afterwards is empty — permanently, and
+ *                   for a reason no counter above can express. A non-zero value here is the difference
+ *                   between "your query matches nothing" and "widen the look-back"
  * @param error      why the run failed, or null. A failed run is still recorded: a digest that has been
  *                   silently erroring for a week should be visible as such rather than just quiet
  */
@@ -27,10 +43,28 @@ public record DigestRun(
         Instant ranAt,
         List<Item> items,
         String taskOutput,
+        int candidates,
+        int suppressed,
+        int outsideWindow,
         String error) {
 
     public DigestRun {
         items = items == null ? List.of() : List.copyOf(items);
+        if (candidates < 0) {
+            candidates = 0;
+        }
+        if (suppressed < 0) {
+            suppressed = 0;
+        }
+        if (outsideWindow < 0) {
+            outsideWindow = 0;
+        }
+    }
+
+    /** Runs recorded before the counters existed, and tests that do not care about them. */
+    public DigestRun(String id, String digestId, Instant ranAt, List<Item> items, String taskOutput,
+                     String error) {
+        this(id, digestId, ranAt, items, taskOutput, items == null ? 0 : items.size(), 0, 0, error);
     }
 
     /**
@@ -45,6 +79,14 @@ public record DigestRun(
      * @param uri        where to open it
      * @param score      fused retrieval score
      * @param snippet    short display excerpt
+     * @param annotations what the digest's task said about <em>this</em> item, keyed by whatever the
+     *                   task asked the model to record — a score, a one-line reason, a caveat. Empty
+     *                   for a digest with no task, for a task that summarises the batch rather than
+     *                   describing each item, and for a reply that could not be read.
+     *                   <p>Deliberately an open map rather than named fields. The keys come from the
+     *                   task, and tasks are user-written: typing them here would mean a schema change
+     *                   for every new question someone wants asked of their results, and would make
+     *                   the console branch on which task produced a run
      */
     public record Item(
             String entityId,
@@ -52,5 +94,21 @@ public record DigestRun(
             String title,
             String uri,
             double score,
-            String snippet) {}
+            String snippet,
+            Map<String, Object> annotations) {
+
+        public Item {
+            annotations = annotations == null ? Map.of() : Map.copyOf(annotations);
+        }
+
+        /** An item as retrieval produced it, before any task has described it. */
+        public Item(String entityId, String chunkId, String title, String uri, double score,
+                    String snippet) {
+            this(entityId, chunkId, title, uri, score, snippet, Map.of());
+        }
+
+        public Item withAnnotations(Map<String, Object> values) {
+            return new Item(entityId, chunkId, title, uri, score, snippet, values);
+        }
+    }
 }

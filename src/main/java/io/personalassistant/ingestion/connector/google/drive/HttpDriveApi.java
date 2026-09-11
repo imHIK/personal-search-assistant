@@ -61,6 +61,20 @@ public class HttpDriveApi implements DriveApi {
     }
 
     @Override
+    public String fileName(GoogleAuth auth, String fileId) {
+        JsonNode node = http.getJson(base() + "/files/" + enc(fileId)
+                + "?fields=name&supportsAllDrives=true", auth, timeoutSeconds);
+        JsonNode name = node == null ? null : node.get("name");
+        return name == null || name.isNull() ? null : name.asText();
+    }
+
+    @Override
+    public JsonNode getFile(GoogleAuth auth, String fileId) {
+        return http.getJson(base() + "/files/" + enc(fileId) + "?fields=" + enc(FILE_FIELDS)
+                + "&supportsAllDrives=true", auth, timeoutSeconds);
+    }
+
+    @Override
     public byte[] download(GoogleAuth auth, String fileId) {
         return http.getBytes(base() + "/files/" + enc(fileId)
                 + "?alt=media&supportsAllDrives=true", auth, timeoutSeconds);

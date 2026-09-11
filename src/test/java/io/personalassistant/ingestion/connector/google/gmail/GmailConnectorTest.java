@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.CursorPosition;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.EntityType;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.GrabContext;
@@ -164,5 +166,41 @@ class GmailConnectorTest {
         assertTrue(item.checksum().startsWith("gmail:m1"));
         assertTrue(item.uri().contains("m1"));
         assertFalse(item.deleted());
+    }
+
+    @Test
+    void reIndexesFromStoredTextWithoutFetching() {
+        // Bodies are inline in Mongo, so there is no staged copy to lose.
+        assertEquals(ReindexMode.REINDEX_ONLY, connector.defaultReindexMode());
+    }
+
+    @Test
+    void fetchOneReListsAMessageExactlyAsAWalkWould() {
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.add("m9", anchor.plusSeconds(5).toEpochMilli(), List.of("INBOX"), "Hello", "a@x.com", "Body.");
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable all = connector.discover(kn).get(0);
+        RawItem walked = connector.grab(req(kn, all, CursorDirection.FORWARD, CursorPosition.start(), 10))
+                .items().get(0);
+
+        RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
+
+        assertEquals(walked.checksum(), relisted.checksum());
+        assertEquals(walked.text(), relisted.text());
+    }
+
+    @Test
+    void fetchOneReportsADeletedMessageAsGone() {
+        Knowledge kn = knowledge(Instant.now(), Map.of());
+        Entity orphan = TestData.ingestedText("ent_m", "kn_gmail", "m_gone", "body");
+
+        assertTrue(connector.fetchOne(kn, orphan).isEmpty(),
+                "a 404 is the only signal Gmail gives that a message is gone");
+    }
+
+    /** The entity the walk would have produced — all fetchOne reads is externalId. */
+    private static Entity entityFor(RawItem item) {
+        return TestData.ingestedText("ent_" + item.externalId(), "kn_gmail", item.externalId(),
+                item.text());
     }
 }

@@ -25,4 +25,13 @@ public class GoogleApiException extends RuntimeException {
     public int statusCode() {
         return statusCode;
     }
+
+    /**
+     * Whether the id simply does not resolve any more. Only the re-list paths ({@code fetchOne})
+     * treat this as an answer rather than an error — a walk never asks for a specific id, so anywhere
+     * else a 404 is a genuine fault worth retrying.
+     */
+    public boolean isNotFound() {
+        return statusCode == 404;
+    }
 }

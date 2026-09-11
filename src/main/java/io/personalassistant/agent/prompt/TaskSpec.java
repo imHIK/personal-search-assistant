@@ -31,6 +31,12 @@ package io.personalassistant.agent.prompt;
  *                     one document would otherwise repeat that document verbatim
  * @param responseFormat reply shape asked of the endpoint. {@code JSON_OBJECT} is a hint, not a
  *                     guarantee — a caller still parses defensively
+ * @param annotatesArray for a task whose JSON reply describes the sources one by one, the key of the
+ *                     array carrying those descriptions; null for a task whose reply is read whole.
+ *                     Each element names the source it describes in a {@code source} field, 1-based and
+ *                     positional in the block the prompt was given, which is how a digest joins the
+ *                     reply back onto the results it ran over. Declared per task for the same reason
+ *                     the budgets are: it is a property of this reply's shape, not of the application
  */
 public record TaskSpec(
         String id,
@@ -39,7 +45,8 @@ public record TaskSpec(
         int contextChars,
         int maxSources,
         SourceText sourceText,
-        io.personalassistant.agent.llm.LlmProvider.ResponseFormat responseFormat) {
+        io.personalassistant.agent.llm.LlmProvider.ResponseFormat responseFormat,
+        String annotatesArray) {
 
     /** Which body of text a source entry carries. */
     public enum SourceText { CHUNK, ENTITY }
@@ -47,7 +54,14 @@ public record TaskSpec(
     /** Convenience for the common answering shape: chunk text, plain-text reply. */
     public TaskSpec(String id, String promptId, String llmProfile, int contextChars, int maxSources) {
         this(id, promptId, llmProfile, contextChars, maxSources, SourceText.CHUNK,
-                io.personalassistant.agent.llm.LlmProvider.ResponseFormat.TEXT);
+                io.personalassistant.agent.llm.LlmProvider.ResponseFormat.TEXT, null);
+    }
+
+    /** Convenience for a task whose reply is read whole rather than per source. */
+    public TaskSpec(String id, String promptId, String llmProfile, int contextChars, int maxSources,
+                    SourceText sourceText,
+                    io.personalassistant.agent.llm.LlmProvider.ResponseFormat responseFormat) {
+        this(id, promptId, llmProfile, contextChars, maxSources, sourceText, responseFormat, null);
     }
 
     public TaskSpec {
@@ -76,6 +90,12 @@ public record TaskSpec(
         }
         if (responseFormat == null) {
             responseFormat = io.personalassistant.agent.llm.LlmProvider.ResponseFormat.TEXT;
+        }
+        // Blank is absent, matching every other optional text field here. A task that names an array
+        // but replies in prose simply yields no annotations; that is the caller's degraded path, not
+        // an error worth failing the catalogue over.
+        if (annotatesArray != null && annotatesArray.isBlank()) {
+            annotatesArray = null;
         }
     }
 }

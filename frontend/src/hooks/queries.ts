@@ -4,6 +4,7 @@ import { connectionsApi } from '@/api/connections'
 import { digestsApi } from '@/api/digests'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
+import { tasksApi } from '@/api/tasks'
 import type {
   Connection,
   CreateConnectionBody,
@@ -13,8 +14,10 @@ import type {
   EntityStatus,
   Knowledge,
   PatchConnectionBody,
+  PatchDigestBody,
   PatchKnowledgeBody,
   SourceType,
+  TaskBody,
 } from '@/api/types'
 import {
   HEALTH_INTERVAL_MS,
@@ -32,7 +35,15 @@ export const keys = {
     ['knowledge', id, 'entities', status ?? 'all', offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
   digests: ['digests'] as const,
-  digestRuns: (id: string) => ['digests', id, 'runs'] as const,
+  digestOne: (id: string) => ['digests', id] as const,
+  digestRuns: (id: string, limit: number, offset: number) =>
+    ['digests', id, 'runs', limit, offset] as const,
+  /** Everything under one digest's runs, for invalidating every page at once. */
+  digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
+  tasks: ['tasks'] as const,
+  taskOne: (id: string) => ['tasks', id] as const,
+  llmProfiles: ['llm-profiles'] as const,
+  entity: (id: string) => ['entities', id] as const,
   connections: ['connections'] as const,
   connectionsOfType: (type?: SourceType) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
@@ -298,12 +309,81 @@ export function useDigests() {
   return useQuery({ queryKey: keys.digests, queryFn: digestsApi.list })
 }
 
-export function useDigestRuns(id: string | undefined) {
+export function useDigest(id: string | undefined) {
   return useQuery({
-    queryKey: keys.digestRuns(id!),
-    queryFn: () => digestsApi.runs(id!),
+    queryKey: keys.digestOne(id!),
+    queryFn: () => digestsApi.get(id!),
     enabled: Boolean(id),
   })
+}
+
+export function useDigestRuns(id: string | undefined, limit = 20, offset = 0) {
+  return useQuery({
+    queryKey: keys.digestRuns(id!, limit, offset),
+    queryFn: () => digestsApi.runs(id!, limit, offset),
+    enabled: Boolean(id),
+    // A page of history stays valid while paging back and forth; only a run makes it stale.
+    placeholderData: (previous) => previous,
+  })
+}
+
+/**
+ * The task library. Rarely changes and is read on the digest form as well as its own page, so it is
+ * worth keeping around between visits.
+ */
+export function useTasks() {
+  return useQuery({ queryKey: keys.tasks, queryFn: tasksApi.list, staleTime: 60_000 })
+}
+
+export function useTask(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.taskOne(id!),
+    queryFn: () => tasksApi.get(id!),
+    enabled: Boolean(id),
+  })
+}
+
+/** Configured models. Fixed for the life of the process, so it never needs refetching. */
+export function useLlmProfiles() {
+  return useQuery({ queryKey: keys.llmProfiles, queryFn: tasksApi.llmProfiles, staleTime: Infinity })
+}
+
+/**
+ * One indexed item, for showing a title where only an entity id is held — a digest that searches by
+ * a document, say. Failures are not retried: a deleted document is a normal outcome here, and the
+ * caller falls back to showing the id.
+ */
+export function useEntity(id: string | null | undefined) {
+  return useQuery({
+    queryKey: keys.entity(id!),
+    queryFn: () => tasksApi.entity(id!),
+    enabled: Boolean(id),
+    retry: false,
+    staleTime: 300_000,
+  })
+}
+
+export function useTaskActions() {
+  const client = useQueryClient()
+  const invalidate = () => void client.invalidateQueries({ queryKey: keys.tasks })
+
+  const create = useMutation({
+    mutationFn: (body: TaskBody) => tasksApi.create(body),
+    onSuccess: invalidate,
+  })
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: TaskBody }) => tasksApi.update(id, body),
+    onSuccess: (_data, { id }) => {
+      void client.invalidateQueries({ queryKey: keys.taskOne(id) })
+      invalidate()
+    },
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => tasksApi.remove(id),
+    onSuccess: invalidate,
+  })
+
+  return { create, update, remove }
 }
 
 /** Create / enable / delete / run-now, each invalidating exactly what it affected. */
@@ -323,17 +403,35 @@ export function useDigestActions() {
   const remove = useMutation({
     mutationFn: (id: string) => digestsApi.remove(id),
     onSuccess: (_data, id) => {
-      client.removeQueries({ queryKey: keys.digestRuns(id) })
+      client.removeQueries({ queryKey: keys.digestRunsAll(id) })
+      client.removeQueries({ queryKey: keys.digestOne(id) })
       invalidate()
     },
   })
   const run = useMutation({
     mutationFn: (id: string) => digestsApi.run(id),
     onSuccess: (_data, id) => {
-      void client.invalidateQueries({ queryKey: keys.digestRuns(id) })
+      void client.invalidateQueries({ queryKey: keys.digestRunsAll(id) })
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: PatchDigestBody }) =>
+      digestsApi.update(id, body),
+    onSuccess: (_data, { id }) => {
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+  /** Clears the seen-set only — the runs stay, so the history view is unaffected. */
+  const resetHistory = useMutation({
+    mutationFn: (id: string) => digestsApi.resetHistory(id),
+    onSuccess: (_data, id) => {
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
       invalidate()
     },
   })
 
-  return { create, setEnabled, remove, run }
+  return { create, setEnabled, remove, run, update, resetHistory }
 }

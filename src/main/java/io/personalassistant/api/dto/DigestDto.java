@@ -16,6 +16,8 @@ import java.util.Map;
  * @param taskId   a prompt-catalogue task to run over the results, or null for results only
  * @param onlyNew  drop results an earlier run already reported. Defaults true — that is what makes a
  *                 digest a digest rather than a repeated search
+ * @param historyResetAt when the already-seen set was last cleared, or null. Read-only; set by
+ *                 {@code POST /api/digests/{id}/reset-history}
  */
 public record DigestDto(
         String id,
@@ -35,7 +37,8 @@ public record DigestDto(
         Boolean enabled,
         Instant nextRunAt,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        Instant historyResetAt) {
 
     /**
      * @throws IllegalArgumentException if it names neither a query nor a source document — a digest
@@ -54,7 +57,7 @@ public record DigestDto(
                 id, name, query, sourceEntityId,
                 knowledgeIds == null ? List.of() : knowledgeIds,
                 filters == null ? Map.of() : filters,
-                window,
+                DigestPatchDto.checkedWindow(window),
                 schedule(),
                 taskId,
                 topK == null ? Digest.DEFAULT_TOP_K : topK,
@@ -65,12 +68,22 @@ public record DigestDto(
                 null, null, null);
     }
 
+    /**
+     * @throws IllegalArgumentException if an interval is given but unparseable. Falling back to
+     *                                  {@code NONE} would create a digest that never runs and say 200
+     */
     private SyncSchedule schedule() {
         if (cron != null && !cron.isBlank()) {
             return SyncSchedule.ofCron(cron);
         }
+        if (interval == null || interval.isBlank()) {
+            return SyncSchedule.NONE;
+        }
         java.time.Duration parsed = io.personalassistant.common.Durations.parse(interval);
-        return parsed == null ? SyncSchedule.NONE : SyncSchedule.ofInterval(parsed);
+        if (parsed == null) {
+            throw new IllegalArgumentException("interval \"" + interval + "\" is not a duration");
+        }
+        return SyncSchedule.ofInterval(parsed);
     }
 
     public static DigestDto from(Digest d) {
@@ -78,6 +91,6 @@ public record DigestDto(
                 d.filters(), d.window(), d.schedule().cron(),
                 d.schedule().interval() == null ? null : d.schedule().interval().toString(),
                 d.taskId(), d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(), d.onlyNew(),
-                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt());
+                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt());
     }
 }

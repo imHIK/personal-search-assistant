@@ -6,7 +6,7 @@ rebuilt at any time by replaying Mongo. Database: `personal_assistant`.
 Design goals: easy incremental sync, full reprocessing from source of truth, and clean
 support for many heterogeneous sources without schema churn.
 
-Seven collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**.
+Eight collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**, **`tasks`**.
 Chunks are deliberately *not* a Mongo collection — see below. All indexes are created at startup by
 `MongoIndexInitializer` (`@Observes StartupEvent`); there is **no migration framework**, so a new
 query pattern means adding its index there.
@@ -84,6 +84,7 @@ One document per ingested item (a file, an email, a message).
   "checksum": "size:24576;mtime:1718877600000",     // the ONLY change signal
   "status": "INDEXED",                              // EntityStatus
   "needsReindex": false,
+  "needsRefetch": false,                            // stored content is a staged copy we distrust
   "index": {
     "chunkCount": 12,
     "embeddingModel": "bge-base-en-v1.5",
@@ -138,7 +139,11 @@ Indexes:
 > changes (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail:
 > `gmail:<id>;hist:<historyId>`). An unchanged checksum is skipped entirely — no parse, no embed, no
 > OpenSearch write — unless the entity is `FAILED` or `DELETED`, the two statuses where a re-walk is a
-> deliberate way back in.
+> deliberate way back in, or `needsRefetch` is set.
+>
+> `needsRefetch` is the only one of those three that is not about the source. It says the *stored*
+> content is a staged copy we no longer trust, so "unchanged at the source" is exactly the case it
+> has to override; `upsert` clears it in the same write that stores the fresh bytes.
 >
 > The skip covers `INGESTED` and `INDEXING`, not just `INDEXED`, because `upsert` owns the indexing
 > queue reset: it zeroes `retry` and clears `retry.nextAttemptAt`. Re-upserting an entity that is merely
@@ -280,7 +285,19 @@ A saved search plus a schedule, and one document per execution. Documented in
 - `digests` is indexed on `(enabled, nextRunAt)` — the scheduler's due query. A **null `nextRunAt`
   means "due now"**, so a freshly created digest runs on the next tick rather than one interval later.
 - `digestRuns` is indexed on `(digestId, ranAt desc)` and stores a **projection** of each hit — entity
-  id, chunk id, title, uri, score, snippet — never the full chunk text, which the entity already holds.
+  id, chunk id, title, uri, score, snippet, and `annotations` — never the full chunk text, which the
+  entity already holds.
+- `items[].annotations` is an **open map**: what the digest's task said about that specific result,
+  keyed by whatever the task asked the model to record. The keys come from user-written tasks, so
+  typing them would mean a schema change per question anyone wants asked.
+- A run also carries `candidates`, `suppressed` and `outsideWindow` — what the search returned, how
+  many were dropped as already reported, and (only when the search returned nothing) what the same
+  search finds with the look-back window removed. Together they separate "nothing matched" from
+  "everything matched was already seen" and from "the window is empty but the corpus is not"; all
+  three are absent on runs written before they existed and read back as `items.size()`, `0` and `0`.
+- `digests.historyResetAt` bounds the newness read: runs before it are ignored when working out what
+  has already been reported, so the seen-set can be cleared without deleting the history that is also
+  the audit trail.
 - A run is also the newness record: an item is new when it is absent from every earlier run, keyed on
   `items.entityId`. A chunk id changes when a document is re-chunked, so the entity is the only stable
   key for "the user has seen this".
@@ -288,6 +305,25 @@ A saved search plus a schedule, and one document per execution. Documented in
   been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
   anything later.
 - History is unbounded — see [L8](./limitations.md).
+
+---
+
+## Collection: `tasks`
+
+User-written LLM tasks — an instruction a digest runs over its results. Documented in
+[`tasks.md`](./tasks.md); the schema-relevant points are:
+
+- **No index is declared.** Every access is by `_id` or a full list of what is a hand-written,
+  human-sized collection, and both are already served. This is the one collection
+  `MongoIndexInitializer` deliberately says nothing about.
+- Ids carry a `task_` prefix. That is load-bearing rather than cosmetic: it is what routes a lookup to
+  this collection instead of the bundled catalogue, and so what stops a user task shadowing a built-in
+  slug like `answer`.
+- Bundled tasks are **not** here. They live in `config/prompts.json`, are validated at boot, and are
+  read-only — a malformed one must stop the application, which a runtime row cannot be held to.
+- `mode` decides which of two disjoint field sets is meaningful: `SIMPLE` uses `instruction` /
+  `output` / `fields`, `RAW` uses `system` / `user`. The unused half is stored null rather than
+  dropped, so switching modes in the console does not lose what was typed.
 
 ---
 
@@ -307,7 +343,13 @@ regenerated. The entity records only metadata *about* its chunks: `chunkCount`,
 - **Deletes**: when a connector reports an item gone, tombstone the entity, then delete
   its chunks from **OpenSearch** (chunks are not in Mongo).
 - **Reprocessing**: entities in `status = FAILED` / `INGESTED`, or with `needsReindex = true`, are
-  the work queue.
+  the indexing work queue; `needsRefetch = true` is the *ingestion* one.
+- **`needsRefetch`** says the stored `content.fileRef` is a staged copy that may no longer exist —
+  set by a knowledge re-index of a `FETCH_AND_REINDEX` connector, and by the indexer when it finds
+  the file gone. It is the only escape from the checksum skip, so the walk re-materializes the item
+  even though the source is unchanged, and `upsert` clears it in the same write. Ingestion-owned,
+  like `content` and `checksum` (field ownership, invariant 8). No index: the bulk flag is scoped to
+  one knowledge and is served by `{ knowledgeId: 1, status: 1 }`. See `limitations.md` L11.
 - **Idempotency**: chunk ids are derived (`entityId_ordinal`) so re-runs overwrite
   cleanly rather than duplicating. Indexing is a `deleteByEntity` + `indexChunks` replace.
 

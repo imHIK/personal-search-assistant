@@ -31,7 +31,7 @@ public class InMemoryEntityRepository implements EntityRepository {
                 priorIndex.embeddingModel(), priorIndex.indexedAt(), null);
         Entity stored = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
-                EntityStatus.INGESTED, false, index, null, Entity.Retry.zero(),
+                EntityStatus.INGESTED, false, false, index, null, Entity.Retry.zero(),
                 createdAt, entity.updatedAt(), entity.expiresAt(), entity.lastSeenGeneration());
         store.put(id, stored);
         return stored;
@@ -123,6 +123,30 @@ public class InMemoryEntityRepository implements EntityRepository {
         return fenced(id, owner, e -> rebuild(e, restingStatus, stillFlagged && e.needsReindex(),
                 new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(), e.index().indexedAt(), error),
                 null, new Entity.Retry(retryCount, nextAttemptAt)));
+    }
+
+    @Override
+    public boolean markContentMissing(String id, String owner, String error) {
+        // Terminal on the first attempt, with needsRefetch set — mirrors the Mongo adapter.
+        return fenced(id, owner, e -> rebuild(e, EntityStatus.FAILED, false, true,
+                new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(),
+                        e.index().indexedAt(), error),
+                null, Entity.Retry.zero()));
+    }
+
+    @Override
+    public int flagNeedsRefetchByKnowledge(String knowledgeId) {
+        int flagged = 0;
+        for (Entity e : List.copyOf(store.values())) {
+            if (!knowledgeId.equals(e.knowledgeId()) || e.status() == EntityStatus.DELETED
+                    || e.content() == null || !e.content().isFile()) {
+                continue;
+            }
+            store.put(e.id(), rebuild(e, e.status(), e.needsReindex(), true, e.index(), e.lease(),
+                    e.retry()));
+            flagged++;
+        }
+        return flagged;
     }
 
     @Override
@@ -314,8 +338,14 @@ public class InMemoryEntityRepository implements EntityRepository {
 
     private static Entity rebuild(Entity e, EntityStatus status, boolean needsReindex,
                                   Entity.IndexInfo index, Entity.Lease lease, Entity.Retry retry) {
+        return rebuild(e, status, needsReindex, e.needsRefetch(), index, lease, retry);
+    }
+
+    private static Entity rebuild(Entity e, EntityStatus status, boolean needsReindex,
+                                  boolean needsRefetch, Entity.IndexInfo index, Entity.Lease lease,
+                                  Entity.Retry retry) {
         return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
-                e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, index, lease,
-                retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration());
+                e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, needsRefetch,
+                index, lease, retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration());
     }
 }

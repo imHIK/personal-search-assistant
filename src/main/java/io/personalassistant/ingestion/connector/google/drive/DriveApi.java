@@ -27,6 +27,28 @@ public interface DriveApi {
      */
     JsonNode listFiles(GoogleAuth auth, String query, String orderBy, String pageToken, int pageSize);
 
+    /**
+     * {@code files.get?fields=name}: the display name of one file or folder.
+     *
+     * <p>Exists for the folder ids a user configures by hand. Everything else the connector sees comes
+     * from a listing, which carries names already; a configured root does not, and the console was
+     * left showing the raw Drive id as the folder's name.
+     *
+     * @return the name, or null when the id cannot be read — a missing label is not worth failing
+     *         discovery over
+     */
+    String fileName(GoogleAuth auth, String fileId);
+
+    /**
+     * {@code files.get}: one file's metadata, in the same field set a listing row carries — so the
+     * connector maps it with exactly the code it maps a listing with, and the re-listed item is
+     * indistinguishable from the walked one (same checksum rule above all). Unlike the list query,
+     * this returns trashed files too, so {@code trashed} is part of that field set.
+     *
+     * @return the file node, or null when the id no longer resolves
+     */
+    JsonNode getFile(GoogleAuth auth, String fileId);
+
     /** {@code files.get?alt=media}: raw bytes of a binary (non-Google-native) file. */
     byte[] download(GoogleAuth auth, String fileId);
 

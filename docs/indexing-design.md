@@ -13,8 +13,10 @@ aligns vocabulary with the existing codebase. Open decisions are marked **[DECID
    blocks the other.
 2. **Mongo is the source of truth; OpenSearch is rebuildable.** We persist the **raw
    source payload** on each entity and transform it into text + metadata at *indexing*
-   time. Re-indexing (new chunking config, new embedding model) must never require
-   re-fetching from the source.
+   time. Re-indexing (new chunking config, new embedding model) should not require
+   re-fetching from the source — and does not, wherever the stored content is durable.
+   The exception is a `fileRef` that names a staged *copy* rather than the source file;
+   see "Re-index and re-fetch" below.
 3. **At-least-once, idempotent.** Always *persist entities, then advance the cursor*.
    Upserts are keyed so a replay overwrites rather than duplicates.
 4. **Everything is resumable.** Cursors, leases, and per-entity status make any stage
@@ -261,11 +263,21 @@ retained `raw` content / `fileRef`) is the source of truth; chunks can always be
 from it. Mongo only records *about* the chunks on the entity (`chunkCount`, `embeddingModel`,
 `indexedAt`) — not the chunks themselves.
 
-### Re-index without re-fetch
-Because `raw` + `fileRef` are retained, bumping the chunking config or embedding model just
-means flagging entities `needsReindex = true` and letting this job run again — **no source
-calls**. A full OpenSearch rebuild is likewise just this stage re-run over all entities
-(re-chunk + re-embed). Chunks carry `embeddingModel`, so a model mismatch is detectable.
+### Re-index and re-fetch
+Because `raw` + `fileRef` are retained, bumping the chunking config or embedding model
+normally just means flagging entities `needsReindex = true` and letting this job run again —
+**no source calls**. A full OpenSearch rebuild is likewise just this stage re-run over all
+entities (re-chunk + re-embed). Chunks carry `embeddingModel`, so a model mismatch is
+detectable.
+
+A `fileRef` is only as durable as the file it names, and that is where the rule has an
+exception. `LOCAL_FS` points at the user's own file, which lasts as long as the entity does;
+Drive points at a copy staged in a scratch dir the OS is entitled to empty. A connector
+therefore declares a `ReindexMode`, and for `FETCH_AND_REINDEX` the content is fetched again
+before this job runs — per entity via `SourceConnector.fetchOne`, or knowledge-wide by
+flagging `needsRefetch` and rewinding the cursors so the ingestion walk re-materializes it.
+The caller asks only for a re-index either way. See L11 in `limitations.md` and
+`indexing-implementation.md` §5.
 
 ### Embeddings
 - Batch chunk texts per embedding call (throughput).

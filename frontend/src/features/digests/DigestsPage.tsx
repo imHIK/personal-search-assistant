@@ -1,25 +1,32 @@
-import { AlertTriangle, CalendarClock, Play, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, CalendarClock, ChevronRight, Play, Plus } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Digest } from '@/api/types'
-import { Technical } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
 import { Toggle } from '@/components/ui/Toggle'
+import { formatDigestInterval, formatDigestWindow } from '@/config/constants'
 import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { useDigestActions, useDigestRuns, useDigests } from '@/hooks/queries'
-import { relativeTime } from '@/lib/utils'
-import { NewDigestForm } from './NewDigestForm'
+import { cn, relativeTime } from '@/lib/utils'
+import { DigestForm } from './DigestForm'
+import { runOutcome } from './RunView'
 
+/**
+ * Every digest, one card each.
+ *
+ * The cards used to carry the latest run's whole item list, because there was nowhere else to put it.
+ * With a detail page they carry only the outcome, and the results live one click away where there is
+ * room for them and for every earlier run.
+ */
 export function DigestsPage() {
   const { data, isLoading, error, refetch } = useDigests()
-  const { create, setEnabled, remove, run } = useDigestActions()
+  const { create } = useDigestActions()
   const [adding, setAdding] = useState(false)
-  const [pendingRemoval, setPendingRemoval] = useState<Digest | null>(null)
 
   return (
     <>
@@ -38,10 +45,11 @@ export function DigestsPage() {
 
       {adding && (
         <div className="mb-5">
-          <NewDigestForm
+          <DigestForm
             pending={create.isPending}
+            submitLabel={labels.digests.create}
             onCancel={() => setAdding(false)}
-            onCreate={(body) =>
+            onSubmit={(body) =>
               create.mutate(body, {
                 onSuccess: () => setAdding(false),
                 onError: (cause) =>
@@ -75,129 +83,81 @@ export function DigestsPage() {
       ) : (
         <div className="space-y-3">
           {data.map((digest) => (
-            <DigestCard
-              key={digest.id}
-              digest={digest}
-              running={run.isPending && run.variables === digest.id}
-              onRun={() => run.mutate(digest.id)}
-              onToggle={(enabled) => setEnabled.mutate({ id: digest.id, enabled })}
-              onRemove={() => setPendingRemoval(digest)}
-            />
+            <DigestCard key={digest.id} digest={digest} />
           ))}
         </div>
       )}
-
-      <ConfirmDialog
-        open={pendingRemoval !== null}
-        onOpenChange={(open) => !open && setPendingRemoval(null)}
-        title={labels.digests.removeConfirm}
-        description={labels.digests.removeBody}
-        confirmLabel={labels.digests.remove}
-        loading={remove.isPending}
-        onConfirm={() => {
-          if (pendingRemoval) remove.mutate(pendingRemoval.id)
-          setPendingRemoval(null)
-        }}
-      />
     </>
   )
 }
 
-interface CardProps {
-  digest: Digest
-  running: boolean
-  onRun: () => void
-  onToggle: (enabled: boolean) => void
-  onRemove: () => void
-}
-
-function DigestCard({ digest, running, onRun, onToggle, onRemove }: CardProps) {
-  const { data: runs } = useDigestRuns(digest.id)
+function DigestCard({ digest }: { digest: Digest }) {
+  const { setEnabled, run } = useDigestActions()
+  const { data: runs } = useDigestRuns(digest.id, 1, 0)
   const latest = runs?.[0]
+  const outcome = latest ? runOutcome(latest, digest) : null
+  const running = run.isPending && run.variables === digest.id
 
   return (
     <Card className="p-4">
       <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-medium">{digest.name}</h3>
+        <Link to={`/digests/${digest.id}`} className="group min-w-0 flex-1">
+          <h3 className="flex items-center gap-1 truncate text-sm font-medium group-hover:text-[var(--accent)]">
+            {digest.name}
+            <ChevronRight className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+          </h3>
           <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
-            {digest.sourceEntityId
-              ? `Like ${digest.sourceEntityId}`
-              : (digest.query ?? '')}
-            {digest.interval && ` · every ${digest.interval}`}
-            {digest.window && ` · looking back ${digest.window}`}
+            {digest.sourceEntityId ? labels.digests.searchesLike : (digest.query ?? '')}
+            {digest.interval && ` · ${formatDigestInterval(digest.interval)}`}
+            {/* The window labels already read as phrases ("Last week"), so no prefix. */}
+            {digest.window && ` · ${formatDigestWindow(digest.window)}`}
           </p>
-        </div>
+        </Link>
 
         <div className="flex items-center gap-2">
           <Toggle
             checked={digest.enabled}
-            onCheckedChange={onToggle}
+            onCheckedChange={(enabled) => setEnabled.mutate({ id: digest.id, enabled })}
             label={digest.enabled ? labels.digests.pause : labels.digests.resume}
           />
-          <Button variant="ghost" size="sm" onClick={onRun} loading={running}>
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={running}
+            onClick={() => run.mutate(digest.id)}
+          >
             <Play className="size-3.5" aria-hidden />
             {running ? labels.digests.running : labels.digests.runNow}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onRemove} aria-label={labels.digests.remove}>
-            <Trash2 className="size-3.5" aria-hidden />
           </Button>
         </div>
       </div>
 
-      <div className="mt-3 border-t border-[var(--border)] pt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--border)] pt-3 text-xs">
         {!latest ? (
-          <p className="text-xs text-[var(--text-subtle)]">{labels.digests.neverRun}</p>
-        ) : latest.error ? (
-          // A failed run is shown, not hidden: a digest that has been erroring for a week should
-          // look broken rather than merely quiet.
-          <div className="flex gap-2">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[var(--tone-alert)]" aria-hidden />
-            <div className="min-w-0">
-              <p className="text-xs text-[var(--text-muted)]">{labels.digests.runFailed}</p>
-              <p className="truncate text-[11px] text-[var(--text-subtle)]">{latest.error}</p>
-            </div>
-          </div>
+          <span className="text-[var(--text-subtle)]">{labels.digests.neverRun}</span>
         ) : (
           <>
-            <p className="mb-2 text-xs text-[var(--text-muted)]">
-              {labels.digests.lastRun} {relativeTime(latest.ranAt)} ·{' '}
-              {latest.items.length === 0
-                ? labels.digests.noResults
-                : labels.digests.resultCount(latest.items.length)}
-            </p>
-
-            {latest.taskOutput && (
-              <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--surface-sunken)] p-2.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
-                {latest.taskOutput}
-              </pre>
-            )}
-
-            <ul className="space-y-1">
-              {latest.items.map((item) => (
-                <li key={item.chunkId} className="truncate text-xs">
-                  {item.uri ? (
-                    <a
-                      href={item.uri}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--accent)] hover:underline"
-                    >
-                      {item.title || item.uri}
-                    </a>
-                  ) : (
-                    <span>{item.title || item.entityId}</span>
-                  )}
-                  <Technical>
-                    <span className="ml-2 text-[10px] text-[var(--text-subtle)]">
-                      {item.entityId} · {item.score.toFixed(3)}
-                    </span>
-                  </Technical>
-                </li>
-              ))}
-            </ul>
+            <span className="text-[var(--text-muted)]">
+              {labels.digests.lastRun} {relativeTime(latest.ranAt)}
+            </span>
+            <span className="text-[var(--text-subtle)]">·</span>
+            <span
+              className={cn(
+                'flex items-center gap-1',
+                outcome?.failed ? 'text-[var(--tone-alert)]' : 'text-[var(--text)]',
+              )}
+            >
+              {outcome?.failed && <AlertTriangle className="size-3.5" aria-hidden />}
+              {outcome?.text}
+            </span>
           </>
         )}
+        <Link
+          to={`/digests/${digest.id}`}
+          className="ml-auto text-[11px] text-[var(--accent)] hover:underline"
+        >
+          {labels.digests.tabRuns}
+        </Link>
       </div>
     </Card>
   )

@@ -57,16 +57,31 @@ class DigestSchedulerTest {
         }
 
         @Override
+        public Digest update(String id, io.personalassistant.domain.service.DigestPatch patch) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Digest resetHistory(String id) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public void delete(String id) {
         }
 
         @Override
-        public List<DigestRun> runs(String digestId, int limit) {
+        public List<DigestRun> runs(String digestId, int limit, int offset) {
             return List.of();
         }
 
         @Override
         public Optional<DigestRun> latestRun(String digestId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<DigestRun> run(String digestId, String runId) {
             return Optional.empty();
         }
     }

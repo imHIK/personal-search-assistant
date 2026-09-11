@@ -14,6 +14,7 @@ import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
@@ -64,7 +65,8 @@ class DefaultKnowledgeServiceEditTest {
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
-        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections, index, discovery);
+        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections,
+                index, discovery, new RefetchPolicy(registry));
 
         runner = new IngestionRunner(registry, entities, cursors);
         runner.batchesPerLease = 50;
@@ -285,6 +287,42 @@ class DefaultKnowledgeServiceEditTest {
         assertTrue(cursors.store.get(bwd.id()).position().isStart());
         assertEquals(1L, knowledge.findById(kn.id()).orElseThrow().syncGeneration(),
                 "a membership-affecting edit bumps the sync generation");
+    }
+
+    /**
+     * L11. A membership re-walk is the one moment the whole corpus passes back through ingestion, so
+     * for a connector that stages its content it is also where staged copies get refreshed. Without
+     * the flag the re-walk would skip every unchanged file and leave them pointing at a scratch dir
+     * the OS may since have emptied.
+     */
+    @Test
+    void reWalkAlsoRefreshesStagedContentForAConnectorThatFetches() {
+        connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
+        Knowledge kn = add(Map.of("fileTypes", "pdf,docx"));
+        entities.upsert(TestData.ingestedFile("ent_file", kn.id(), "staged", "/scratch/a.pdf",
+                "application/pdf"));
+        entities.upsert(TestData.entityInIterable("ent_text", kn.id(), "chan_a", "inline"));
+
+        service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf")).build());
+
+        assertTrue(entities.findById("ent_file").orElseThrow().needsRefetch(),
+                "the staged copy is re-fetched by the walk the edit just started");
+        assertFalse(entities.findById("ent_text").orElseThrow().needsRefetch(),
+                "inline content is already in Mongo; fetching it again would buy nothing");
+    }
+
+    /** A cosmetic edit starts no walk, so there is nothing to attach a re-fetch to. */
+    @Test
+    void aCosmeticEditNeverTriggersARefetch() {
+        connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
+        Knowledge kn = add(Map.of("fileTypes", "pdf", "label", "Docs"));
+        entities.upsert(TestData.ingestedFile("ent_file2", kn.id(), "staged2", "/scratch/b.pdf",
+                "application/pdf"));
+
+        service.update(kn.id(),
+                KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf", "label", "Files")).build());
+
+        assertFalse(entities.findById("ent_file2").orElseThrow().needsRefetch());
     }
 
     // ---- §8.7 / §8.8 the async re-walk re-ingests adds and stamps the generation -------------

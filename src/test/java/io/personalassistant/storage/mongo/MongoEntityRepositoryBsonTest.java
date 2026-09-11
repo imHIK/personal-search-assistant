@@ -39,7 +39,7 @@ class MongoEntityRepositoryBsonTest {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         return new Entity("ent_1", "kn_1", "root", EntityType.FILE, "ext_1", Map.of(),
                 Entity.Content.ofText("body"), Map.of("title", "t"), "sha256:abc",
-                EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
+                EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
                 now, now, null, 7L);
     }
 
@@ -52,6 +52,8 @@ class MongoEntityRepositoryBsonTest {
         assertTrue(set.containsKey("checksum"), "content fields are written");
         assertEquals("INGESTED", set.getString("status").getValue(), "the work queue is reset");
         assertFalse(set.getBoolean("needsReindex").getValue());
+        assertFalse(set.getBoolean("needsRefetch").getValue(),
+                "the content just written is the fresh copy, so the re-fetch flag is spent here");
         assertEquals(0, set.getDocument("retry").getInt32("count").getValue());
 
         assertTrue(update.getDocument("$unset").containsKey("lease"),
@@ -66,6 +68,26 @@ class MongoEntityRepositoryBsonTest {
         BsonDocument onInsert = update.getDocument("$setOnInsert");
         assertTrue(onInsert.containsKey("_id") && onInsert.containsKey("createdAt"),
                 "identity is set on insert only, so a replay preserves it");
+    }
+
+    /**
+     * L11: the one failure that is terminal on sight. It must not look like an ordinary dead letter —
+     * a consumed retry budget or a pending nextAttemptAt would both say "we are still trying" — and it
+     * must carry the flag, which is the entity's only route back.
+     */
+    @Test
+    void missingContentDeadLettersAtOnceAndAsksForARefetch() {
+        BsonDocument update = render(repo.contentMissingUpdate("Staged content missing at /tmp/x"));
+        BsonDocument set = update.getDocument("$set");
+
+        assertEquals("FAILED", set.getString("status").getValue());
+        assertFalse(set.getBoolean("needsReindex").getValue(), "it leaves the indexing queue");
+        assertTrue(set.getBoolean("needsRefetch").getValue(), "and joins the ingestion one");
+        assertEquals(0, set.getDocument("retry").getInt32("count").getValue(),
+                "no retry budget is spent on a file that cannot come back");
+        assertTrue(set.getDocument("retry").isNull("nextAttemptAt"),
+                "and nothing is scheduled, or the console shows it as merely pending");
+        assertTrue(update.getDocument("$unset").containsKey("lease"));
     }
 
     /** The B2 fix: three fields, not one. A filter of just {_id} is the bug. */

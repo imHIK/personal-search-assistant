@@ -58,11 +58,22 @@ public class InMemoryDigestRepository implements DigestRepository {
 
     @Override
     public List<DigestRun> findRuns(String digestId, int limit) {
+        return findRuns(digestId, limit, 0);
+    }
+
+    @Override
+    public List<DigestRun> findRuns(String digestId, int limit, int offset) {
         return runs.stream()
                 .filter(r -> digestId.equals(r.digestId()))
                 .sorted(Comparator.comparing(DigestRun::ranAt).reversed())
+                .skip(Math.max(offset, 0))
                 .limit(limit)
                 .toList();
+    }
+
+    @Override
+    public Optional<DigestRun> findRun(String runId) {
+        return runs.stream().filter(r -> r.id().equals(runId)).findFirst();
     }
 
     @Override
@@ -72,9 +83,15 @@ public class InMemoryDigestRepository implements DigestRepository {
 
     @Override
     public Set<String> reportedEntityIds(String digestId) {
+        return reportedEntityIds(digestId, null);
+    }
+
+    @Override
+    public Set<String> reportedEntityIds(String digestId, Instant since) {
         Set<String> out = new LinkedHashSet<>();
         for (DigestRun run : runs) {
-            if (digestId.equals(run.digestId())) {
+            if (digestId.equals(run.digestId())
+                    && (since == null || !run.ranAt().isBefore(since))) {
                 run.items().forEach(item -> {
                     if (item.entityId() != null) {
                         out.add(item.entityId());

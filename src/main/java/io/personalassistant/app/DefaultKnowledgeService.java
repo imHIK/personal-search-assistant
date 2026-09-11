@@ -14,6 +14,7 @@ import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
+import io.personalassistant.domain.service.Patched;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
@@ -58,12 +59,14 @@ public class DefaultKnowledgeService implements KnowledgeService {
     private final ConnectionResolver connections;
     private final SearchIndex index;
     private final DiscoveryStatusRepository discoveryStatus;
+    private final RefetchPolicy refetchPolicy;
 
     @Inject
     public DefaultKnowledgeService(KnowledgeRepository knowledge, CursorRepository cursors,
                                    EntityRepository entities, ConnectorRegistry connectors,
                                    ConnectionResolver connections, SearchIndex index,
-                                   DiscoveryStatusRepository discoveryStatus) {
+                                   DiscoveryStatusRepository discoveryStatus,
+                                   RefetchPolicy refetchPolicy) {
         this.knowledge = knowledge;
         this.cursors = cursors;
         this.entities = entities;
@@ -71,6 +74,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         this.connections = connections;
         this.index = index;
         this.discoveryStatus = discoveryStatus;
+        this.refetchPolicy = refetchPolicy;
     }
 
     /**
@@ -144,18 +148,18 @@ public class DefaultKnowledgeService implements KnowledgeService {
         if (current.status() == KnowledgeStatus.DELETED) {
             throw new IllegalStateException("A DELETED knowledge cannot be edited");
         }
-        if (patch.type().isPresent() && patch.type().get() != current.connectorDetails().type()) {
+        if (patch.type().present() && patch.type().value() != current.connectorDetails().type()) {
             throw new IllegalArgumentException(
                     "connectorDetails.type is immutable; delete and recreate to change connector");
         }
 
         // Classify the edit by diffing the patch against the stored record.
-        boolean authChanged = patch.auth().isPresent()
-                && !patch.auth().get().equals(current.connectorDetails().auth());
-        boolean inputsChanged = patch.inputs().isPresent()
-                && !patch.inputs().get().equals(current.inputs());
+        boolean authChanged = patch.auth().present() && patch.auth().value() != null
+                && !patch.auth().value().equals(current.connectorDetails().auth());
+        boolean inputsChanged = patch.inputs().present() && patch.inputs().value() != null
+                && !patch.inputs().value().equals(current.inputs());
         boolean backfillOn = current.config().backfill() != null && current.config().backfill().enabled();
-        boolean backfillTurnedOn = patch.backfillEnabled().orElse(backfillOn) && !backfillOn;
+        boolean backfillTurnedOn = flag(patch.backfillEnabled(), backfillOn) && !backfillOn;
 
         Knowledge updated = applyPatch(current, patch, Instant.now());
 
@@ -172,7 +176,10 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
     /** Build the edited record by overlaying only the patch's present fields onto {@code current}. */
     private Knowledge applyPatch(Knowledge current, KnowledgePatch patch, Instant now) {
-        Map<String, Object> auth = patch.auth().orElse(current.connectorDetails().auth());
+        // auth and inputs have no null state — a cleared one would be a source with no credentials
+        // and no scope, which is not an edit anyone means. The DTO rejects it; this keeps a direct
+        // caller from writing one by accident.
+        Map<String, Object> auth = orCurrent(patch.auth(), current.connectorDetails().auth());
         Knowledge.ConnectorDetails cd = new Knowledge.ConnectorDetails(
                 current.connectorDetails().type(),
                 current.connectorDetails().connectionId(), // connection binding is stable across edits
@@ -180,14 +187,16 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
         Knowledge.Config cur = current.config();
         Knowledge.ScheduleSettings schedule = new Knowledge.ScheduleSettings(
+                // A null cron here is a real instruction: it is how the console moves a source off a
+                // custom schedule and back onto a preset interval.
                 patch.schedule().cron().orElse(cur.scheduleSettings().cron()),
                 patch.schedule().interval().orElse(cur.scheduleSettings().interval()),
-                patch.schedule().enabled().orElse(cur.scheduleSettings().enabled()));
+                flag(patch.schedule().enabled(), cur.scheduleSettings().enabled()));
         Knowledge.WebhookSettings webhook = new Knowledge.WebhookSettings(
-                patch.webhook().enabled().orElse(cur.webhookSettings().enabled()),
+                flag(patch.webhook().enabled(), cur.webhookSettings().enabled()),
                 patch.webhook().secret().orElse(cur.webhookSettings().secret()));
         Knowledge.Backfill backfill = new Knowledge.Backfill(
-                patch.backfillEnabled().orElse(cur.backfill().enabled()));
+                flag(patch.backfillEnabled(), cur.backfill().enabled()));
 
         // Chunking is a config-class edit: overlay only the provided leaves onto the current settings.
         // No membership impact and no re-chunk — new chunks use it, existing chunks are left as-is.
@@ -205,8 +214,23 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
         Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking, retention);
 
-        return current.withEdits(patch.name().orElse(current.name()), cd,
-                patch.inputs().orElse(current.inputs()), config, now);
+        return current.withEdits(orCurrent(patch.name(), current.name()), cd,
+                orCurrent(patch.inputs(), current.inputs()), config, now);
+    }
+
+    /**
+     * A patched flag, where clearing it is meaningless: the settings records hold primitives, and an
+     * unboxing NPE is not an answer to "the caller sent null".
+     */
+    private static boolean flag(Patched<Boolean> patched, boolean current) {
+        Boolean value = patched.orElse(current);
+        return value == null ? current : value;
+    }
+
+    /** A patched value for a field that cannot be empty: a cleared one keeps what is stored. */
+    private static <T> T orCurrent(Patched<T> patched, T current) {
+        T value = patched.orElse(current);
+        return value == null ? current : value;
     }
 
     /** True when the resolved cadence (custom cron/interval) changed and must be re-resolved. */
@@ -280,6 +304,18 @@ public class DefaultKnowledgeService implements KnowledgeService {
             if (membershipChanged) {
                 effective = held.bumpGeneration().withStatus(KnowledgeStatus.PAUSED);
                 knowledge.save(effective);
+                // A re-walk is the one moment the whole corpus passes back through ingestion, so for a
+                // connector that stages a copy of its content it is also the cheapest chance to
+                // refresh those copies. Flagged before the rewind for the same reason the generation
+                // is persisted before it: a cursor that starts walking first would skip these items on
+                // an unchanged checksum and leave them pointing at a file that may be gone.
+                if (refetchPolicy.refetches(effective)) {
+                    int flagged = entities.flagNeedsRefetchByKnowledge(id);
+                    if (flagged > 0) {
+                        LOG.info("Membership re-walk for knowledge " + id + " will also re-fetch "
+                                + flagged + " staged file(s)");
+                    }
+                }
                 rewalkForMembershipChange(effective, iterables);
             }
 

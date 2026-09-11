@@ -7,7 +7,9 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -46,6 +48,11 @@ public class PromptCatalog {
 
     private Map<String, PromptTemplate> prompts = Map.of();
     private Map<String, TaskSpec> tasks = Map.of();
+
+    /** Filled by {@link #readTasks}: each task's prose description, and which ones a digest may use. */
+    private final Map<String, String> descriptions = new LinkedHashMap<>();
+    private final Map<String, String> names = new LinkedHashMap<>();
+    private final Set<String> offerable = new LinkedHashSet<>();
 
     /**
      * The bundled catalogue with no override applied, loaded eagerly.
@@ -113,6 +120,26 @@ public class PromptCatalog {
         return tasks.keySet();
     }
 
+    /** Every bundled task, in file order. */
+    public java.util.Collection<TaskSpec> tasks() {
+        return tasks.values();
+    }
+
+    /** A task's display name, falling back to its id. Never null. */
+    public String name(String taskId) {
+        return names.getOrDefault(taskId, taskId);
+    }
+
+    /** A task's prose description, for whoever is choosing one. Never null. */
+    public String description(String taskId) {
+        return descriptions.getOrDefault(taskId, "");
+    }
+
+    /** Whether this bundled task is one a digest may be pointed at — see {@code "digest"} in the file. */
+    public boolean offerableInDigest(String taskId) {
+        return offerable.contains(taskId);
+    }
+
     // ---- parsing -----------------------------------------------------------------------------
 
     private Map<String, PromptTemplate> readPrompts(JsonNode root) {
@@ -132,7 +159,9 @@ public class PromptCatalog {
                     p.path("user").asText(""),
                     textList(p.path("variables"))));
         });
-        return Map.copyOf(out);
+        // Unmodifiable rather than Map.copyOf: the latter is explicitly unordered, which would make
+        // the catalogue's listing — and so the console's task list — vary between restarts.
+        return Collections.unmodifiableMap(out);
     }
 
     private Map<String, TaskSpec> readTasks(JsonNode root) {
@@ -141,6 +170,9 @@ public class PromptCatalog {
             throw new IllegalStateException(RESOURCE + " must define at least one entry under \"tasks\"");
         }
         Map<String, TaskSpec> out = new LinkedHashMap<>();
+        descriptions.clear();
+        names.clear();
+        offerable.clear();
         node.fields().forEachRemaining(entry -> {
             String id = entry.getKey();
             JsonNode t = entry.getValue();
@@ -154,9 +186,19 @@ public class PromptCatalog {
                     enumValue(TaskSpec.SourceText.class, t.path("sourceText"),
                             TaskSpec.SourceText.CHUNK, where + ".sourceText"),
                     enumValue(LlmProvider.ResponseFormat.class, t.path("responseFormat"),
-                            LlmProvider.ResponseFormat.TEXT, where + ".responseFormat")));
+                            LlmProvider.ResponseFormat.TEXT, where + ".responseFormat"),
+                    t.path("annotates").asText(null)));
+            descriptions.put(id, t.path("description").asText(""));
+            // A display name, so a picker shows "Score job postings" rather than the slug "job-fit".
+            names.put(id, t.path("name").asText(id));
+            // Not every task is one a user would attach to a digest: "answer" and "document-facets"
+            // are machinery the read path runs for itself, and offering them would invite a digest
+            // that quietly does nothing useful. Opt in per task rather than out.
+            if (t.path("digest").asBoolean(false)) {
+                offerable.add(id);
+            }
         });
-        return Map.copyOf(out);
+        return Collections.unmodifiableMap(out);
     }
 
     /**

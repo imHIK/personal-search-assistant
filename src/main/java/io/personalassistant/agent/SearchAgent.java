@@ -13,6 +13,20 @@ import java.util.List;
 public interface SearchAgent {
 
     /**
+     * A task's reply together with the hits actually rendered into its sources block, in the order they
+     * were numbered.
+     *
+     * <p>The order is the contract: sources are numbered 1-based and positionally, so a reply that
+     * describes its sources by number can only be matched back to real results by a caller holding this
+     * exact list. {@link #runTask} cannot supply it — whole-entity tasks collapse the hits to one per
+     * document before rendering, so the list the model saw is not the list the caller passed in.
+     *
+     * @param reply   the model's reply, verbatim
+     * @param sources the hits the prompt actually carried, index {@code n-1} being source {@code [n]}
+     */
+    record TaskResult(String reply, List<SearchHit> sources) {}
+
+    /**
      * @param query the user request
      * @param hits  retrieved, reranked grounding set
      * @return a synthesized answer that cites the supplied hits
@@ -46,4 +60,13 @@ public interface SearchAgent {
      */
     String runTask(String taskId, SearchQuery query, List<SearchHit> hits,
                    java.util.Map<String, String> variables);
+
+    /**
+     * Same as {@link #runTask(String, SearchQuery, List)}, also returning the sources the prompt
+     * carried so a per-source reply can be joined back onto the results.
+     *
+     * @throws java.util.NoSuchElementException if no such task exists in the library
+     */
+    TaskResult runTaskWithSources(String taskId, SearchQuery query, List<SearchHit> hits,
+                                  java.util.Map<String, String> variables);
 }

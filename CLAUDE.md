@@ -86,9 +86,11 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    must be fenced the same way; an unfenced one lets a stale worker mark half-finished work complete.
 3. **`checksum` is the only change signal.** A connector must make it change whenever the item changes
    (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail: `gmail:<id>;hist:<historyId>`).
-   Unchanged checksum + a status other than `FAILED` / `DELETED` = skipped entirely. The skip covers
-   `INGESTED` and `INDEXING` too: those already carry that content, and re-upserting them would reset the
-   indexer's `retry` and `nextAttemptAt` out from under it.
+   Unchanged checksum + a status other than `FAILED` / `DELETED` + `needsRefetch` unset = skipped entirely.
+   The skip covers `INGESTED` and `INDEXING` too: those already carry that content, and re-upserting them
+   would reset the indexer's `retry` and `nextAttemptAt` out from under it. `needsRefetch` is the only
+   escape that is not about the source — it says the *stored* content is a staged copy we no longer
+   trust — and `upsert` clears it in the write that stores the fresh bytes.
 4. **`grab` is stateless and idempotent.** All pagination state lives in `CursorPosition`; the same page may
    be replayed after a crash. Files pass as `fileRef` (a path), never bytes — Mongo's 16 MB cap.
 5. **Embedding dimension is baked into the index mapping.** `app.embedding.dimension=768` is written into the
@@ -99,10 +101,13 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    general agreement between `@ConfigProperty` defaults and `application.properties`.
 6. **Indexing is an idempotent replace:** `deleteByEntity(id)` then `indexChunks(...)`, chunk id
    `entityId_ordinal`. Chunking config changes are direct updates — existing chunks are not re-chunked;
-   opt in per entity via `POST /api/index/entities/{id}/reindex`.
+   opt in via `POST /api/index/entities/{id}/reindex` or `.../knowledge/{id}/reindex`. Whether a
+   re-index re-fetches from the source is the **connector's** call (`defaultReindexMode`: `GOOGLE_DRIVE`
+   fetches because its `fileRef` is a staged copy), overridable by `app.indexing.refetch-on-reindex`.
+   Never expose it as a request parameter — the caller asks for a re-index, not for a fetch.
 7. Permits (`InMemoryPermitService`, scopes `global` / `connector:<TYPE>` / `knowledge:<id>`) are
    **single-node only**. Permit TTL must be `>=` lease TTL, and lease TTL must exceed worst-case single-page time.
-8. **Field ownership on `entities`.** Ingestion (`upsert`) owns content, `checksum` and
+8. **Field ownership on `entities`.** Ingestion (`upsert`) owns content, `checksum`, `needsRefetch` and
    `lastSeenGeneration`; the indexer owns `status`, `lease`, `retry` and `index.*`. Writes are field-level,
    never whole-document — a document replace from one side clobbers the other's in-flight state. `upsert`
    additionally drops the lease so new content fences out an indexer running on the previous revision.
@@ -162,8 +167,10 @@ Where things are documented: `docs/knowledge-lifecycle.md` and `docs/knowledge-e
 edit / pause / delete semantics), `docs/indexing-design.md` + `docs/indexing-implementation.md` (the
 two stages, and the config reference in §6), `docs/connectors.md` (the `SourceConnector` SPI and
 `Connection` auth), `docs/parsing-and-chunking.md`, `docs/providers.md` (embedding + LLM providers,
-including the ONNX model export), `docs/mongodb-schema.md` / `docs/opensearch-index.md`
-(persistence), `docs/limitations.md` (L1–L6 accepted gaps — don't "fix" these unprompted).
+including the ONNX model export), `docs/digests.md` + `docs/tasks.md` (scheduled saved searches, and
+the two-half task library the bundled catalogue and user-written tasks form), `docs/mongodb-schema.md`
+/ `docs/opensearch-index.md` (persistence), `docs/limitations.md` (L1–L10 accepted gaps — don't "fix"
+these unprompted; L11 is closed and kept as the record of why re-index re-fetches).
 `application.properties` is the tiebreaker for any config default, but **content** — prompts and
 metadata field sets — lives in `src/main/resources/config/*.json`; `docs/configuration.md` is the rule
 for which mechanism a new setting belongs in.

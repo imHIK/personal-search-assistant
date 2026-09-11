@@ -96,7 +96,8 @@ class RetentionSweeperTest {
         knowledges.store.put(kn.id(), kn);
         Entity old = TestData.agedEntity("ent_old", kn.id(), "old", NOW.minus(Duration.ofDays(20)), null);
         store(new Entity(old.id(), old.knowledgeId(), old.iterableId(), old.entityType(), old.externalId(),
-                old.raw(), old.content(), old.metadata(), old.checksum(), old.status(), old.needsReindex(),
+                old.raw(), old.content(), old.metadata(), old.checksum(), old.status(),
+                old.needsReindex(), old.needsRefetch(),
                 old.index(), old.lease(), old.retry(), old.createdAt(), NOW, old.expiresAt(),
                 old.lastSeenGeneration()));
 

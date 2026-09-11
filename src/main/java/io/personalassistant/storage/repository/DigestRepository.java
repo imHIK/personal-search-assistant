@@ -31,7 +31,13 @@ public interface DigestRepository {
     /** A digest's runs, newest first. */
     List<DigestRun> findRuns(String digestId, int limit);
 
+    /** A page of a digest's runs, newest first — the history view scrolls rather than truncating. */
+    List<DigestRun> findRuns(String digestId, int limit, int offset);
+
     Optional<DigestRun> findLatestRun(String digestId);
+
+    /** One run by its own id, so a link to a run resolves without paging the history. */
+    Optional<DigestRun> findRun(String runId);
 
     /**
      * Every entity id this digest has already reported, across all its recorded runs — the "already
@@ -42,6 +48,12 @@ public interface DigestRepository {
      * would grow linearly with the digest's age.
      */
     Set<String> reportedEntityIds(String digestId);
+
+    /**
+     * The same, counting only runs at or after {@code since} — a digest whose history has been reset.
+     * Null means every run counts.
+     */
+    Set<String> reportedEntityIds(String digestId, Instant since);
 
     /** Remove a digest's runs. Cascades from {@link #delete}. */
     void deleteRuns(String digestId);

@@ -24,7 +24,9 @@ export const ResultCard = forwardRef<HTMLElement, {
   rank: number
   query: string
   topScore: number
-}>(function ResultCard({ hit, rank, query, topScore }, ref) {
+  /** Briefly set after a citation in the answer jumps here, so the arrival is visible. */
+  highlighted?: boolean
+}>(function ResultCard({ hit, rank, query, topScore, highlighted }, ref) {
   const technical = useTechnicalDetails()
   const { data: sources } = useKnowledgeList()
 
@@ -35,7 +37,17 @@ export const ResultCard = forwardRef<HTMLElement, {
   const relative = topScore > 0 ? Math.max(6, Math.round((hit.score / topScore) * 100)) : 0
 
   return (
-    <Card ref={ref as React.Ref<HTMLDivElement>} className="scroll-mt-24 px-5 py-4">
+    <Card
+      ref={ref as React.Ref<HTMLDivElement>}
+      // Focusable but not in the tab order: a citation jump moves focus here so a screen reader and
+      // the keyboard both follow the scroll, without adding a stop to every card on the page.
+      id={`hit-${rank}`}
+      tabIndex={-1}
+      className={cn(
+        'scroll-mt-24 px-5 py-4 outline-none transition-shadow duration-300',
+        highlighted && 'ring-2 ring-[var(--accent)]',
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-baseline gap-2">

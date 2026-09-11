@@ -2,6 +2,7 @@ package io.personalassistant.storage.mongo;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.gte;
 import static com.mongodb.client.model.Filters.lte;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Sorts.descending;
@@ -94,10 +95,21 @@ public class MongoDigestRepository implements DigestRepository {
 
     @Override
     public List<DigestRun> findRuns(String digestId, int limit) {
+        return findRuns(digestId, limit, 0);
+    }
+
+    @Override
+    public List<DigestRun> findRuns(String digestId, int limit, int offset) {
         List<DigestRun> out = new ArrayList<>();
-        runs().find(eq("digestId", digestId)).sort(descending("ranAt")).limit(limit)
+        runs().find(eq("digestId", digestId)).sort(descending("ranAt"))
+                .skip(Math.max(offset, 0)).limit(limit)
                 .forEach(d -> out.add(fromRunDoc(d)));
         return out;
+    }
+
+    @Override
+    public Optional<DigestRun> findRun(String runId) {
+        return Optional.ofNullable(runs().find(eq("_id", runId)).first()).map(this::fromRunDoc);
     }
 
     @Override
@@ -109,11 +121,19 @@ public class MongoDigestRepository implements DigestRepository {
 
     @Override
     public Set<String> reportedEntityIds(String digestId) {
+        return reportedEntityIds(digestId, null);
+    }
+
+    @Override
+    public Set<String> reportedEntityIds(String digestId, Instant since) {
         // Projected to the ids alone: a run document also carries titles and snippets, and the whole
         // history is read on every run, so paging the full documents back would grow with the digest's
         // age for data this query does not use.
         Set<String> out = new LinkedHashSet<>();
-        runs().find(eq("digestId", digestId))
+        // The (digestId, ranAt) index already covers the bounded form, so a reset costs nothing.
+        var filter = since == null ? eq("digestId", digestId)
+                : and(eq("digestId", digestId), gte("ranAt", BsonSupport.date(since)));
+        runs().find(filter)
                 .projection(Projections.include("items.entityId"))
                 .forEach(d -> {
                     Object items = d.get("items");
@@ -157,7 +177,8 @@ public class MongoDigestRepository implements DigestRepository {
                 .append("enabled", d.enabled())
                 .append("nextRunAt", BsonSupport.date(d.nextRunAt()))
                 .append("createdAt", BsonSupport.date(d.createdAt()))
-                .append("updatedAt", BsonSupport.date(d.updatedAt()));
+                .append("updatedAt", BsonSupport.date(d.updatedAt()))
+                .append("historyResetAt", BsonSupport.date(d.historyResetAt()));
     }
 
     private Digest fromDoc(Document d) {
@@ -183,7 +204,8 @@ public class MongoDigestRepository implements DigestRepository {
                 Boolean.TRUE.equals(d.getBoolean("enabled")),
                 BsonSupport.instant(d.get("nextRunAt")),
                 BsonSupport.instant(d.get("createdAt")),
-                BsonSupport.instant(d.get("updatedAt")));
+                BsonSupport.instant(d.get("updatedAt")),
+                BsonSupport.instant(d.get("historyResetAt")));
     }
 
     private Document toRunDoc(DigestRun run) {
@@ -194,13 +216,17 @@ public class MongoDigestRepository implements DigestRepository {
                     .append("title", item.title())
                     .append("uri", item.uri())
                     .append("score", item.score())
-                    .append("snippet", item.snippet()));
+                    .append("snippet", item.snippet())
+                    .append("annotations", BsonSupport.toBsonMap(item.annotations())));
         }
         return new Document("_id", run.id())
                 .append("digestId", run.digestId())
                 .append("ranAt", BsonSupport.date(run.ranAt()))
                 .append("items", items)
                 .append("taskOutput", run.taskOutput())
+                .append("candidates", run.candidates())
+                .append("suppressed", run.suppressed())
+                .append("outsideWindow", run.outsideWindow())
                 .append("error", run.error());
     }
 
@@ -215,7 +241,9 @@ public class MongoDigestRepository implements DigestRepository {
                             item.getString("title"),
                             item.getString("uri"),
                             item.get("score") instanceof Number n ? n.doubleValue() : 0.0,
-                            item.getString("snippet")));
+                            item.getString("snippet"),
+                            // Absent on every run written before annotations existed.
+                            BsonSupport.toPlainMap(item.get("annotations"))));
                 }
             }
         }
@@ -225,6 +253,11 @@ public class MongoDigestRepository implements DigestRepository {
                 BsonSupport.instant(d.get("ranAt")),
                 items,
                 d.getString("taskOutput"),
+                // Runs recorded before the counters existed report what they can: the items they kept.
+                d.get("candidates") instanceof Number n ? n.intValue() : items.size(),
+                d.get("suppressed") instanceof Number n ? n.intValue() : 0,
+                // Absent on every run written before the window diagnostic existed.
+                d.get("outsideWindow") instanceof Number n ? n.intValue() : 0,
                 d.getString("error"));
     }
 

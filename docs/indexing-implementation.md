@@ -136,6 +136,9 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 - Two ways back in, both explicit: `POST /api/index/entities/{id}/reindex` (single entity) and
   `POST /api/index/knowledge/{id}/retry-failed` (everything dead-lettered in a knowledge, cursors
   included). Both restore a fresh retry budget.
+- One dead letter is terminal on the *first* attempt rather than after the ladder: an entity whose
+  staged `fileRef` no longer exists. No backoff can make the file reappear, so the same write sets
+  `needsRefetch=true`, which is what lets a later walk re-materialize it — see §5.
 
 ---
 
@@ -191,12 +194,39 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 | `POST /api/connections/{id}/default` | Make it the default connection for its `SourceType` |
 | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (incremental trigger) |
 | `POST /api/index/knowledge/{id}/retry-failed` | Revive dead-lettered work: `FAILED` cursors → `AVAILABLE`, `FAILED` entities → `INGESTED`, both with a fresh retry budget. The only exit from `FAILED`; distinct from `/sync`, which re-arms forward cursors only and so can never reach a backward one |
-| `POST /api/index/entities/{id}/reindex` | Flag one entity for re-index (no re-fetch) — the opt-in path after a chunking change |
+| `POST /api/index/knowledge/{id}/reindex` | Re-index every entity of a knowledge — the opt-in path after a chunking or embedding-model change. Returns `{knowledgeId, queued, refetching, cursorsReset}`; the last two are non-zero only for a connector whose content is a staged copy (see below) |
+| `POST /api/index/entities/{id}/reindex` | Re-index one entity, re-fetching its content first if the connector stages a copy. That fetch is synchronous, so the call can take as long as one download |
 | `DELETE /api/index/entities/{id}` | Tombstone an entity (chunks removed by the indexing stage) |
 | `POST /api/search` | Hybrid / lexical / semantic search |
 | `GET /q/health` | SmallRye health / readiness |
 
 `personal-search-assistant.postman_collection.json` at the repo root exercises all of these.
+
+### Re-index: when it re-fetches, and how (L11)
+
+"Re-index" means *make this current again*, and the caller never says how. Whether the stored content
+can be trusted is a property of the connector, not of the request: inline text lives in Mongo and a
+`LOCAL_FS` `fileRef` names the user's own file, but Drive's `fileRef` is a copy in a scratch dir the
+OS may empty. Each connector declares this as a `ReindexMode`, and `app.indexing.refetch-on-reindex`
+(`auto` / `always` / `never`) overrides it.
+
+| | one entity | one knowledge |
+|---|---|---|
+| Route | `SourceConnector.fetchOne` → `materialize` → `upsert`, synchronously | flag `Entity.needsRefetch` on every file-backed entity, then rewind the cursors |
+| Why | a walk pages through a source and cannot be asked for one known id | the ingestion walk already has the leases, permits and rate limiting that thousands of downloads from an HTTP thread would not |
+| Fetches | exactly one | one per changed-or-flagged item, spread across ticks |
+
+`needsRefetch` is the one escape from the checksum skip (invariant 3) — "unchanged at the source" is
+precisely the case it exists to override — and `upsert` clears it in the same write that stores the
+fresh bytes. The rewind matters just as much: the forward cursor's high-water floor is what stops an
+unmodified file from ever being offered again. Flag before rewind, never after, or a cursor that
+starts walking first re-skips those items. `RETIRED` cursors stay parked, and a `BACKWARD` cursor is
+rewound only when backfill is still enabled or it has already `EXHAUSTED`.
+
+A missing staged file is also the one indexing failure that is terminal on sight: `IndexingRunner`
+separates `NoSuchFileException` from an unreadable-but-present file, dead-letters it immediately
+(no backoff can make the file reappear) and sets `needsRefetch` in the same fenced write, so the next
+walk that re-lists the item repairs it.
 
 ### Example: add a local-filesystem knowledge
 ```bash
@@ -241,10 +271,11 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.indexing.max-knowledges` | `200` | Cap on distinct knowledges scanned per indexing tick |
 | `app.indexing.concurrency` | `4` | Global indexing concurrency ceiling |
 | `app.indexing.permits.ttl-seconds` | `1200` | Indexing permit TTL; held for a whole tick (not renewed mid-tick), so size above the worst-case tick time |
-| `app.indexing.embed-batch` | `64` | Chunks per embedding call |
+| `app.indexing.embed-batch` | `15` | Chunks per embedding call |
 | `app.indexing.lease-seconds` | `900` | Entity indexing lease duration |
 | `app.indexing.retry-limit` | `5` | **Consecutive** indexing failures before `FAILED`; a successful index resets the streak |
 | `app.indexing.backoff-seconds` | `300` | Delay before a failed entity is re-claimable |
+| `app.indexing.refetch-on-reindex` | `auto` | Whether a re-index fetches content from the source first. `auto` asks the connector (`GOOGLE_DRIVE` fetches, because its `fileRef` is a staged copy; everything else re-indexes what is stored); `always` forces it for every file-backed entity; `never` restores the old behaviour of always trusting the stored reference, which makes a purged staged file dead-letter loudly instead of silently re-downloading. See §5 |
 | `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`/`table`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | `app.chunking.mime-aware` | `true` | Allow content type to pick the strategy when the knowledge has not chosen one explicitly (`ChunkingStrategy.prefers`). An explicit per-knowledge choice always wins. Off restores name-only selection |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |

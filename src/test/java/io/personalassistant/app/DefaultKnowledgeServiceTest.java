@@ -53,8 +53,9 @@ class DefaultKnowledgeServiceTest {
                 .withDynamicIterables(true);
         // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
+        SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors,
-                entities, new SingleConnectorRegistry(connector), connections, index, discovery);
+                entities, registry, connections, index, discovery, new RefetchPolicy(registry));
     }
 
     private Knowledge addKnowledge() {

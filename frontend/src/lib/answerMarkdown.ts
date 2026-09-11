@@ -31,8 +31,15 @@ export type Block =
   | { kind: 'list'; ordered: boolean; items: Inline[][] }
   | { kind: 'table'; header: Inline[][]; rows: Inline[][][] }
 
-/** `**bold**`, or a citation marker holding one or more comma-separated numbers. */
-const INLINE_PATTERN = /\*\*([^*]+)\*\*|\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]/g
+/**
+ * `**bold**`, or a citation marker holding one or more comma-separated numbers.
+ *
+ * Both bracket families are accepted. The prompt asks for ASCII `[1]`, but hosted models routinely
+ * emit the fullwidth CJK pair `【1】` (and the fullwidth comma) regardless of what they were told, and
+ * a marker that misses the pattern renders as dead text in the middle of the answer. A mismatched
+ * pair like `[1】` is accepted for the same reason: a stray marker should still link.
+ */
+const INLINE_PATTERN = /\*\*([^*]+)\*\*|[[【]\s*(\d{1,3}(?:\s*[,，]\s*\d{1,3})*)\s*[\]】]/g
 
 const HEADING = /^(#{2,3})\s+(.*)$/
 const BULLET = /^\s*[-*]\s+(.*)$/
@@ -45,6 +52,7 @@ const TABLE_DIVIDER = /^\s*\|?[\s|]*(?::?-{2,}:?[\s|]*)+\|?\s*$/
  *
  * A grouped marker becomes several citation runs, so `[1,3]` renders as two separate clickable chips.
  * That is the whole reason the prompt asks for grouping: one marker to read, still one link per source.
+ * Repeats inside one marker collapse — `[1,1]` is the model stuttering, not two sources.
  */
 export function parseInline(line: string): Inline[] {
   const runs: Inline[] = []
@@ -59,8 +67,19 @@ export function parseInline(line: string): Inline[] {
     if (match[1] !== undefined) {
       runs.push({ kind: 'bold', text: match[1] })
     } else {
-      for (const number of match[2].split(',')) {
-        runs.push({ kind: 'citation', index: Number(number.trim()) })
+      const seen = new Set<number>()
+      for (const number of match[2].split(/[,，]/)) {
+        const index = Number(number.trim())
+        // The numbering is 1-based, so a 0 names no hit and can only render as an inert marker.
+        if (index > 0 && !seen.has(index)) {
+          seen.add(index)
+          runs.push({ kind: 'citation', index })
+        }
+      }
+      // Nothing citable in the marker — fall back to the literal text rather than deleting a
+      // fragment of the answer, which is the passthrough rule this parser follows everywhere else.
+      if (seen.size === 0) {
+        runs.push({ kind: 'text', text: match[0] })
       }
     }
     lastIndex = match.index + match[0].length

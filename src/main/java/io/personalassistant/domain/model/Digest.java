@@ -38,6 +38,13 @@ import java.util.Map;
  *                     digest a digest rather than a repeated search
  * @param enabled      master switch; a disabled digest is never scheduled but can still be run by hand
  * @param nextRunAt    when the scheduler may next run it; null means "due now"
+ * @param historyResetAt earlier runs are ignored when working out what has already been reported;
+ *                     null means the whole history counts.
+ *                     <p>This exists so "show me these again" and "forget this digest ever ran" can be
+ *                     different operations. The run history <em>is</em> the already-seen set, so
+ *                     deleting runs to replay a backlog would also destroy the record of what was sent
+ *                     — and the record is half of why runs are kept. Bounding the read instead leaves
+ *                     the history intact and visible while the next run starts from nothing
  */
 public record Digest(
         String id,
@@ -56,10 +63,22 @@ public record Digest(
         boolean enabled,
         Instant nextRunAt,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        Instant historyResetAt) {
 
     /** Default result count, matching the search API's own default. */
     public static final int DEFAULT_TOP_K = 10;
+
+    /** A digest whose history has never been reset — the shape every caller but the reset used. */
+    public Digest(String id, String name, String query, String sourceEntityId,
+                  List<String> knowledgeIds, Map<String, Object> filters, String window,
+                  SyncSchedule schedule, String taskId, int topK, boolean collapseDuplicates,
+                  Integer maxChunksPerEntity, boolean onlyNew, boolean enabled, Instant nextRunAt,
+                  Instant createdAt, Instant updatedAt) {
+        this(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+                collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
+                updatedAt, null);
+    }
 
     public Digest {
         knowledgeIds = knowledgeIds == null ? List.of() : List.copyOf(knowledgeIds);
@@ -96,12 +115,26 @@ public record Digest(
     public Digest withNextRunAt(Instant next) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, next,
-                createdAt, updatedAt);
+                createdAt, updatedAt, historyResetAt);
     }
 
     public Digest withEnabled(boolean nowEnabled, Instant updatedAt) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, nowEnabled, nextRunAt,
-                createdAt, updatedAt);
+                createdAt, updatedAt, historyResetAt);
+    }
+
+    /** The same digest, marked as edited at {@code at}. */
+    public Digest withTouched(Instant at) {
+        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
+                createdAt, at, historyResetAt);
+    }
+
+    /** Start the already-seen set again from {@code at}, keeping every recorded run. */
+    public Digest withHistoryResetAt(Instant at) {
+        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
+                createdAt, at, at);
     }
 }

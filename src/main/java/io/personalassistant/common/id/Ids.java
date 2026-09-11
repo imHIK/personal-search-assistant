@@ -17,6 +17,7 @@ public final class Ids {
     public static final String DISCOVERY_PREFIX = "dsc_";
     public static final String DIGEST_PREFIX = "dig_";
     public static final String DIGEST_RUN_PREFIX = "run_";
+    public static final String TASK_PREFIX = "task_";
 
     private Ids() {
     }
@@ -43,6 +44,15 @@ public final class Ids {
 
     public static String digestRun() {
         return DIGEST_RUN_PREFIX + token();
+    }
+
+    /**
+     * User-defined prompt tasks. The prefix is what separates them from the bundled catalogue's
+     * slug-shaped ids ({@code answer}, {@code job-fit}), so a user task can never shadow a built-in
+     * one and {@code TaskLibrary} can route a lookup on the id alone.
+     */
+    public static String task() {
+        return TASK_PREFIX + token();
     }
 
     /**

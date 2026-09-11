@@ -60,9 +60,19 @@ class IngestionRunnerTest {
     }
 
     private static RawItem textItem(String ext) {
+        return textItem(ext, "sha256:" + ext);
+    }
+
+    private static RawItem textItem(String ext, String checksum) {
         return new RawItem(ext, EntityType.MESSAGE, "text/plain", ext, "uri:" + ext,
-                "sha256:" + ext, Instant.now(), Map.of("k", "v"), "body of " + ext, null,
+                checksum, Instant.now(), Map.of("k", "v"), "body of " + ext, null,
                 Map.of("title", ext), null, false);
+    }
+
+    /** A file-backed item: content is a path, which is the shape that can go stale under us. */
+    private static RawItem fileItem(String ext) {
+        return RawItem.file(ext, "text/plain", ext, "uri:" + ext, "sha256:" + ext, Instant.now(),
+                "/scratch/" + ext + ".txt", Map.of("k", "v"), Map.of("title", ext));
     }
 
     private Cursor seedCursor(CursorDirection direction) {
@@ -244,6 +254,81 @@ class IngestionRunnerTest {
         Entity stored = entities.findById(claimed.id()).orElseThrow();
         assertEquals(EntityStatus.INGESTED, stored.status(), "the dead letter is back in the queue");
         assertEquals(0, stored.retry().count(), "with a fresh retry budget");
+    }
+
+    /**
+     * Change detection has to gate the content fetch, not just the write. A connector whose checksum
+     * comes from a cheap listing (Drive's {@code version}) emits items carrying only that checksum and
+     * a reference, and pays for the bytes in materialize() — so an item the runner skips must cost no
+     * fetch at all. Before this the download happened inside grab(), which meant every re-listed
+     * boundary file was downloaded on every arm just to be discarded here.
+     */
+    @Test
+    void contentIsFetchedOnlyForItemsTheRunnerDecidesToPersist() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        assertEquals(1, connector.materializeCalls, "a new item is fetched");
+
+        // The boundary of a forward window is re-listed by design: same item, same checksum.
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+        assertEquals(1, connector.materializeCalls, "an unchanged item costs no fetch");
+
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc", "sha256:edited")), CursorPosition.of(Map.of("seq", 3L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+        assertEquals(2, connector.materializeCalls, "a changed checksum is fetched");
+        assertEquals("body of doc", entities.store.values().iterator().next().content().text());
+    }
+
+    /** The dead-letter fall-through is a re-fetch too — it is the only path that re-stages lost content. */
+    @Test
+    void aDeadLetteredItemIsFetchedAgainEvenThoughItsChecksumIsUnchanged() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
+        assertTrue(entities.markFailed(claimed.id(), "idx1", EntityStatus.FAILED, "boom", 6, null));
+
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+
+        assertEquals(2, connector.materializeCalls);
+    }
+
+    /**
+     * L11. The other fall-through, and the one the source cannot signal: an entity whose staged copy
+     * is gone is still {@code INDEXED} and still carries the checksum the source reports, so nothing
+     * about the item says it needs anything. The flag is what makes the walk fetch it anyway, which
+     * is what lets a knowledge-wide re-index repair staged content instead of dead-lettering it.
+     */
+    @Test
+    void anItemFlaggedForRefetchIsFetchedAgainDespiteAnUnchangedChecksum() {
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(fileItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+        assertEquals(1, connector.materializeCalls);
+
+        // A second unchanged pass is still skipped — the flag, not the re-listing, is what matters.
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(fileItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+        assertEquals(1, connector.materializeCalls, "unchanged and untouched: no fetch");
+
+        assertEquals(1, entities.flagNeedsRefetchByKnowledge(kn.id()));
+        connector.enqueue(CursorDirection.FORWARD,
+                new GrabResult(List.of(fileItem("doc")), CursorPosition.of(Map.of("seq", 3L)), false));
+        runner.runLease(kn, reclaim(cursor), "w1", () -> {});
+
+        assertEquals(2, connector.materializeCalls, "the flag overrides the unchanged checksum");
+        Entity stored = entities.store.values().iterator().next();
+        assertFalse(stored.needsRefetch(), "and is cleared by the write that used it, not left to repeat");
     }
 
     /**

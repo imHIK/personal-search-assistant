@@ -22,6 +22,9 @@ import { ResultCard } from './ResultCard'
 import { SearchFilters } from './SearchFilters'
 import { useSearch } from './useSearch'
 
+/** How long a cited result keeps its ring — long enough to notice, short enough not to linger. */
+const HIGHLIGHT_MS = 1200
+
 /**
  * The landing screen. All state lives in the URL, so a search is shareable and the back button
  * works the way a user expects.
@@ -31,12 +34,18 @@ export function SearchPage() {
   const { data: sources } = useKnowledgeList()
   const search = useSearch()
   const resultRefs = useRef<Record<number, HTMLElement | null>>({})
+  // The rank a citation just jumped to. Ranks only mean anything within one result set, so this is
+  // cleared whenever a new search runs.
+  const [citedRank, setCitedRank] = useState<number | null>(null)
+  const citedTimer = useRef<number | null>(null)
 
   const urlQuery = params.get('q') ?? ''
   const mode = (params.get('mode') as SearchMode | null) ?? DEFAULT_SEARCH_MODE
   const topK = Number(params.get('topK')) || DEFAULT_TOP_K
   const scope = params.get('scope') ?? ''
-  const wantsAnswer = params.get('answer') === '1'
+  // Opt-out, not opt-in: the summary is the default reading of a result set, so a bare `?q=` URL
+  // produces one and only an explicit `answer=0` suppresses it.
+  const wantsAnswer = params.get('answer') !== '0'
   const groupDuplicates = params.get('group') === '1'
 
   // Filters are offered per source, so they follow the scope rather than the query. A scope of
@@ -52,6 +61,25 @@ export function SearchPage() {
 
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
+
+  // The highlight is a timer, so it has to be cancelled on unmount — otherwise a navigation during
+  // the flash sets state on a component that is gone.
+  useEffect(() => () => {
+    if (citedTimer.current !== null) window.clearTimeout(citedTimer.current)
+  }, [])
+
+  /** Scroll to a cited result, move focus there, and flash it so the jump is visible. */
+  const jumpToCitation = (rank: number) => {
+    const element = resultRefs.current[rank]
+    if (!element) return
+    // Focus first: focusing during a smooth scroll cancels it, even with preventScroll, so the page
+    // would stop partway to the result.
+    element.focus({ preventScroll: true })
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setCitedRank(rank)
+    if (citedTimer.current !== null) window.clearTimeout(citedTimer.current)
+    citedTimer.current = window.setTimeout(() => setCitedRank(null), HIGHLIGHT_MS)
+  }
 
   // Re-run whenever the URL changes, so back/forward replays the search rather than showing a
   // stale result set.
@@ -69,6 +97,7 @@ export function SearchPage() {
       ...(Object.keys(filters).length > 0 ? { filters } : {}),
       ...(groupDuplicates ? { collapseDuplicates: true } : {}),
     }
+    setCitedRank(null)
     runRef.current(body)
     // filterSpecs is derived from scope, which is already a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -165,7 +194,7 @@ export function SearchPage() {
             />
             <Toggle
               checked={wantsAnswer}
-              onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
+              onCheckedChange={(checked) => update({ answer: checked ? null : '0' })}
               label={labels.search.answerToggle}
             />
           </div>
@@ -210,12 +239,7 @@ export function SearchPage() {
               <AnswerCard
                 answer={result.answer}
                 hits={result.hits}
-                onCitationClick={(index) =>
-                  resultRefs.current[index]?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center',
-                  })
-                }
+                onCitationClick={jumpToCitation}
               />
             )}
 
@@ -231,6 +255,7 @@ export function SearchPage() {
                   rank={index + 1}
                   query={urlQuery}
                   topScore={result.hits[0]?.score ?? 1}
+                  highlighted={citedRank === index + 1}
                   ref={(element) => {
                     resultRefs.current[index + 1] = element
                   }}

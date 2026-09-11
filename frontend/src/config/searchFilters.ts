@@ -107,6 +107,18 @@ export function filtersFor(sourceType: SourceType | null): SearchFilterSpec[] {
 }
 
 /**
+ * The filters worth offering across several sources at once — a digest may span more than one.
+ * A union rather than an intersection: a filter that matches only some of the selected sources still
+ * narrows usefully, whereas hiding it would leave the user unable to express what they want at all.
+ */
+export function filtersForSources(sourceTypes: SourceType[]): SearchFilterSpec[] {
+  if (sourceTypes.length === 0) return searchFilters.filter((spec) => !spec.sourceTypes)
+  return searchFilters.filter(
+    (spec) => !spec.sourceTypes || spec.sourceTypes.some((type) => sourceTypes.includes(type)),
+  )
+}
+
+/**
  * Turn the raw control values into the API's `filters` map, skipping anything blank or unusable.
  * A number that will not parse is dropped rather than sent: the backend would read it as a term
  * and silently match nothing, which looks like "the filter broke my search".

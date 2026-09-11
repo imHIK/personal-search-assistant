@@ -1,9 +1,12 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.CursorDirection;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.GrabContext;
 import io.personalassistant.ingestion.connector.GrabResult;
@@ -36,6 +39,8 @@ public class StubConnector implements SourceConnector {
     private Set<String> membershipKeys; // null = signature hashes the whole inputs map (default)
     private boolean requiresConnection;
     private RuntimeException verifyConnectionFailure;
+    private ReindexMode reindexMode = ReindexMode.REINDEX_ONLY;
+    private final Map<String, Optional<RawItem>> fetchOneResults = new LinkedHashMap<>();
 
     /** Test observability: how many times discover()/verify()/verifyConnection() ran, and the last iterable grabbed. */
     public int discoverCalls;
@@ -43,6 +48,10 @@ public class StubConnector implements SourceConnector {
     public int verifyConnectionCalls;
     public String lastGrabIterableId;
     public Map<String, Object> lastGrabAttributes;
+    /** How many times materialize() ran — i.e. how many items the runner decided were worth fetching. */
+    public int materializeCalls;
+    /** External ids passed to fetchOne(), in order — the single-entity re-fetch path. */
+    public final List<String> fetchOneCalls = new ArrayList<>();
 
     public StubConnector(SourceType type, List<SourceIterable> iterables) {
         this.type = type;
@@ -51,6 +60,18 @@ public class StubConnector implements SourceConnector {
 
     public StubConnector enqueue(CursorDirection direction, GrabResult page) {
         pages.computeIfAbsent(direction, d -> new ArrayDeque<>()).add(page);
+        return this;
+    }
+
+    /** Declare this connector's content staged (FETCH_AND_REINDEX) rather than durable. */
+    public StubConnector withReindexMode(ReindexMode mode) {
+        this.reindexMode = mode;
+        return this;
+    }
+
+    /** What fetchOne() returns for an external id; an absent entry means "gone at the source". */
+    public StubConnector withFetchOne(String externalId, RawItem item) {
+        fetchOneResults.put(externalId, Optional.ofNullable(item));
         return this;
     }
 
@@ -175,6 +196,23 @@ public class StubConnector implements SourceConnector {
             throw discoverFailure;
         }
         return new ArrayList<>(iterables);
+    }
+
+    @Override
+    public Entity.Content materialize(Knowledge knowledge, RawItem item) {
+        materializeCalls++;
+        return SourceConnector.super.materialize(knowledge, item);
+    }
+
+    @Override
+    public ReindexMode defaultReindexMode() {
+        return reindexMode;
+    }
+
+    @Override
+    public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
+        fetchOneCalls.add(entity.externalId());
+        return fetchOneResults.getOrDefault(entity.externalId(), Optional.empty());
     }
 
     @Override

@@ -8,10 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.CursorPosition;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.EntityType;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.GrabContext;
@@ -86,6 +88,31 @@ class GoogleDriveConnectorTest {
         assertEquals("Projects", iterable(iterables, "f1").displayName());
         assertEquals("2026", iterable(iterables, "f2").displayName());
         assertEquals(3, iterables.size(), "only folders become iterables, walked recursively");
+    }
+
+    @Test
+    void aConfiguredRootIsNamedRatherThanShownAsItsId(@TempDir Path scratch) {
+        // Sub-folders arrive from a listing that carries names; a configured root is a bare id the
+        // user pasted in. Labelling it with itself put a raw Drive id in front of the user as the
+        // folder's name, on the source overview and over its sync history.
+        connector = connector(scratch);
+        api.folder("1qTKf3MTYH6BTMq9l60", "Job hunt", "root");
+
+        List<SourceIterable> iterables =
+                connector.discover(knowledge(Instant.now(), Map.of("folderIds", List.of("1qTKf3MTYH6BTMq9l60"))));
+
+        assertEquals("Job hunt", iterable(iterables, "1qTKf3MTYH6BTMq9l60").displayName());
+    }
+
+    @Test
+    void aRootWhoseNameCannotBeReadFallsBackToItsId(@TempDir Path scratch) {
+        // A label is not worth failing discovery over; the walk itself will surface a bad root.
+        connector = connector(scratch);
+
+        List<SourceIterable> iterables =
+                connector.discover(knowledge(Instant.now(), Map.of("folderIds", List.of("gone"))));
+
+        assertEquals("gone", iterable(iterables, "gone").displayName());
     }
 
     // ---- forward: ascending high-water walk ---------------------------------------------------
@@ -170,7 +197,7 @@ class GoogleDriveConnectorTest {
     // ---- content mapping ----------------------------------------------------------------------
 
     @Test
-    void nativeDocExportsToInlineTextPage(@TempDir Path scratch) {
+    void nativeDocIsMappedForExportWithoutExportingDuringTheWalk(@TempDir Path scratch) {
         connector = connector(scratch);
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         api.nativeDoc("d1", "Design Doc", "application/vnd.google-apps.document", "root",
@@ -182,13 +209,33 @@ class GoogleDriveConnectorTest {
 
         assertEquals(EntityType.PAGE, item.entityType());
         assertEquals("Design Doc", item.title());
-        assertEquals("The design body text.", item.text());
-        assertNull(item.fileRef(), "native docs carry text inline, no file ref");
+        assertEquals("text/plain", item.contentType(), "the export mime is resolved during the walk");
         assertTrue(item.checksum().startsWith("drive:d1;v:4"));
+        assertNull(item.text(), "the export is deferred to materialize");
+        assertNull(item.fileRef(), "native docs carry text inline, no file ref");
+        assertEquals(0, api.exports, "the walk must not export");
     }
 
     @Test
-    void binaryFileIsDownloadedToScratchAndReferencedByFileRef(@TempDir Path scratch) throws Exception {
+    void materializeExportsANativeDocToInlineText(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.nativeDoc("d1", "Design Doc", "application/vnd.google-apps.document", "root",
+                anchor.plusSeconds(5).toEpochMilli(), 4, "The design body text.");
+
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        RawItem item = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10)).items().get(0);
+
+        Entity.Content content = connector.materialize(kn, item);
+
+        assertEquals("The design body text.", content.text());
+        assertNull(content.fileRef());
+        assertEquals(1, api.exports);
+    }
+
+    @Test
+    void binaryFileIsMappedToItsStagedPathWithoutDownloading(@TempDir Path scratch) {
         connector = connector(scratch);
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         byte[] pdf = "%PDF-1.4 fake bytes".getBytes();
@@ -201,10 +248,156 @@ class GoogleDriveConnectorTest {
         assertEquals(EntityType.FILE, item.entityType());
         assertEquals("application/pdf", item.contentType());
         assertNull(item.text(), "binary files are referenced, not inlined");
-        assertNotNull(item.fileRef());
+        assertNotNull(item.fileRef(), "the path the bytes will occupy is known without fetching them");
         Path staged = Path.of(item.fileRef());
-        assertTrue(Files.exists(staged), "bytes staged to the scratch dir for Tika");
         assertTrue(staged.startsWith(scratch));
+        assertFalse(Files.exists(staged), "nothing is written until materialize");
+        assertEquals(0, api.downloads, "the walk must not download");
+    }
+
+    @Test
+    void materializeDownloadsToTheVeryPathTheWalkReported(@TempDir Path scratch) throws Exception {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        byte[] pdf = "%PDF-1.4 fake bytes".getBytes();
+        api.binary("b1", "report.pdf", "application/pdf", "root", anchor.plusSeconds(5).toEpochMilli(), 7, pdf);
+
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        RawItem item = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10)).items().get(0);
+
+        Entity.Content content = connector.materialize(kn, item);
+
+        assertEquals(item.fileRef(), content.fileRef(), "what is stored and what is written must agree");
+        Path staged = Path.of(content.fileRef());
+        assertTrue(Files.exists(staged), "bytes staged to the scratch dir for Tika");
         assertEquals("%PDF-1.4 fake bytes", Files.readString(staged));
+        assertEquals(1, api.downloads);
+    }
+
+    @Test
+    void aWalkOverManyItemsTransfersNoBytesAtAll(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        for (int i = 0; i < 4; i++) {
+            api.binary("b" + i, "file" + i + ".pdf", "application/pdf", "root",
+                    anchor.plusSeconds(i + 1).toEpochMilli(), 1, ("bytes " + i).getBytes());
+            api.nativeDoc("d" + i, "Doc " + i, "application/vnd.google-apps.document", "root",
+                    anchor.plusSeconds(i + 1).toEpochMilli(), 1, "text " + i);
+        }
+
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        GrabResult page = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 50));
+
+        assertEquals(8, page.items().size());
+        assertEquals(0, api.downloads);
+        assertEquals(0, api.exports);
+    }
+
+    @Test
+    void theTwoSkipsStillHappenDuringTheWalkAndFetchNothing(@TempDir Path scratch) {
+        connector = connector(scratch);
+        connector.maxFileBytes = 8;
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.binary("big", "huge.pdf", "application/pdf", "root",
+                anchor.plusSeconds(1).toEpochMilli(), 1, "well over eight bytes".getBytes());
+        // A native type with no export mime — a Drive form has nothing textual to index.
+        api.nativeDoc("form", "Signup", "application/vnd.google-apps.form", "root",
+                anchor.plusSeconds(2).toEpochMilli(), 1, "unused");
+
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        GrabResult page = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10));
+
+        assertTrue(page.items().isEmpty(), "oversized files and unsupported native types are skipped");
+        assertEquals(0, api.downloads);
+        assertEquals(0, api.exports);
+    }
+
+    // ---- L11: per-item re-list --------------------------------------------------------------
+
+    @Test
+    void declaresThatItsContentMustBeFetchedAgainBeforeReIndexing() {
+        // The whole of L11 hangs off this: its fileRef is a copy in a dir the OS may empty.
+        assertEquals(ReindexMode.FETCH_AND_REINDEX, connector(Path.of("/tmp")).defaultReindexMode());
+    }
+
+    @Test
+    void fetchOneReListsAFileExactlyAsAWalkWould(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.binary("f1", "report.pdf", "application/pdf", "root",
+                anchor.plusSeconds(1).toEpochMilli(), 3, "pdf-bytes".getBytes());
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        RawItem walked = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10))
+                .items().get(0);
+
+        RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
+
+        // Identical, field for field, is the requirement: a checksum that differed here would make
+        // every subsequent poll see a change that never happened.
+        assertEquals(walked.checksum(), relisted.checksum());
+        assertEquals(walked.fileRef(), relisted.fileRef());
+        assertEquals(walked.contentType(), relisted.contentType());
+        assertEquals(walked.metadata(), relisted.metadata());
+        assertEquals(0, api.downloads, "re-listing is metadata only; materialize pays for the bytes");
+    }
+
+    @Test
+    void fetchOneRestagesTheBytesThroughMaterialize(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.binary("f2", "notes.pdf", "application/pdf", "root",
+                anchor.plusSeconds(1).toEpochMilli(), 1, "fresh-bytes".getBytes());
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        RawItem walked = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10))
+                .items().get(0);
+        connector.materialize(kn, walked);
+        Path staged = Path.of(walked.fileRef());
+        assertTrue(Files.exists(staged));
+
+        // The OS empties the scratch dir; this is the state that used to dead-letter the entity.
+        assertTrue(staged.toFile().delete());
+
+        RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
+        Entity.Content content = connector.materialize(kn, relisted);
+
+        assertEquals(staged.toString(), content.fileRef(), "re-staged at the same deterministic path");
+        assertTrue(Files.exists(staged), "and the bytes are actually back on disk");
+    }
+
+    @Test
+    void fetchOneReportsATrashedFileAsGone(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        api.binary("f3", "old.pdf", "application/pdf", "root",
+                anchor.plusSeconds(1).toEpochMilli(), 1, "bytes".getBytes());
+        Knowledge kn = knowledge(anchor, Map.of());
+        SourceIterable root = iterable(connector.discover(kn), "root");
+        RawItem walked = connector.grab(req(kn, root, CursorDirection.FORWARD, CursorPosition.start(), 10))
+                .items().get(0);
+        api.trash("f3");
+
+        assertTrue(connector.fetchOne(kn, entityFor(walked)).isEmpty(),
+                "the walk's query excludes trashed files, so the re-list must agree");
+    }
+
+    @Test
+    void fetchOneReportsADeletedFileAsGone(@TempDir Path scratch) {
+        connector = connector(scratch);
+        Knowledge kn = knowledge(Instant.now(), Map.of());
+        Entity orphan = TestData.ingestedFile("ent_x", kn.id(), "vanished",
+                scratch.resolve("vanished.pdf").toString(), "application/pdf");
+
+        assertTrue(connector.fetchOne(kn, orphan).isEmpty(), "a 404 is an answer here, not a fault");
+    }
+
+    /** The entity the walk would have produced for this item — all fetchOne reads is externalId. */
+    private static Entity entityFor(RawItem item) {
+        return TestData.ingestedFile("ent_" + item.externalId(), "kn_drive", item.externalId(),
+                item.fileRef(), item.contentType());
     }
 }

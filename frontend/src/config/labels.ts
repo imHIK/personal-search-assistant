@@ -20,6 +20,9 @@ export const nouns = {
   accounts: 'Accounts',
 } as const
 
+/** Named here so the idle hint can quote the toggle by the exact name on the switch. */
+const answerToggle = 'Summarize results'
+
 export const labels = {
   app: {
     name: 'Personal Search Assistant',
@@ -31,6 +34,7 @@ export const labels = {
     sources: nouns.sources,
     accounts: nouns.accounts,
     digests: 'Digests',
+    tasks: 'Tasks',
     technicalDetails: 'Technical details',
     technicalDetailsHint: 'Show ids, raw states and internal counters',
     theme: 'Theme',
@@ -48,7 +52,7 @@ export const labels = {
     topK: 'Results',
     scope: 'Look in',
     scopeAll: `All ${nouns.sources.toLowerCase()}`,
-    answerToggle: 'Answer my question',
+    answerToggle,
     answerToggleHint: 'Reads the top results and writes a cited answer',
     answerHeading: 'Answer',
     answerUnavailable:
@@ -64,7 +68,7 @@ export const labels = {
     empty: 'No results',
     emptyHint: 'Try different words, widen the scope, or check that indexing has finished.',
     idle: 'Search across everything you have connected.',
-    idleHint: 'Results come from your own files, mail and documents — nothing leaves this machine unless you ask for an answer.',
+    idleHint: `Results come from your own files, mail and documents. Turn off “${answerToggle}” to keep everything on this machine.`,
     resultCount: (n: number, seconds: string) =>
       `${n} ${n === 1 ? 'result' : 'results'} in ${seconds}s`,
     openOriginal: 'Open',
@@ -251,6 +255,10 @@ export const labels = {
     technical: 'Technical details',
     rawError: 'Raw message',
     remove: 'Remove',
+    search: 'Search…',
+    previous: 'Previous',
+    next: 'Next',
+    save: 'Save',
   },
 
   picklist: {
@@ -290,9 +298,12 @@ export const labels = {
     sourceEntityPlaceholder: 'ent_…',
     sourceEntityHint: 'The id of something already indexed — a CV, a brief. Find it under a source.',
     windowLabel: 'Look back',
+    windowHint:
+      'Counts from when something was last added to a source, not when it was written. Pick “No time limit” unless the source keeps changing.',
     scheduleLabel: 'Run every',
     onlyNew: 'Only what is new',
     onlyNewHint: 'Skip anything an earlier run already showed',
+    onlyNewOffHint: 'Every run shows the best matches again, new or not',
     sourcesSomeHint: (n: number) => `${n} ${n === 1 ? 'source' : 'sources'} selected`,
     runNow: 'Run now',
     running: 'Running…',
@@ -300,6 +311,9 @@ export const labels = {
     neverRun: 'Not run yet',
     noResults: 'Nothing new',
     resultCount: (n: number) => `${n} new ${n === 1 ? 'result' : 'results'}`,
+    // A digest that is not filtering by newness has no "new" to speak of; calling its matches new
+    // is simply wrong, and was the copy every non-job-search digest got.
+    resultCountPlain: (n: number) => `${n} ${n === 1 ? 'result' : 'results'}`,
     paused: 'Paused',
     pause: 'Pause',
     resume: 'Resume',
@@ -308,6 +322,134 @@ export const labels = {
     removeBody: 'Its history of past runs is deleted with it. This cannot be undone.',
     runFailed: 'This run failed',
     createFailed: 'Could not create the digest',
+    saveFailed: 'Could not save the digest',
+    save: 'Save changes',
+    saved: 'Saved',
+
+    // Detail page
+    back: 'All digests',
+    tabRuns: 'History',
+    tabSettings: 'Settings',
+    runsTitle: 'Past runs',
+    runsEmpty: 'This digest has not run yet.',
+    runsEmptyHint: 'It runs on its own schedule, or you can run it now.',
+    loadMore: 'Show older runs',
+    nextRun: 'Next run',
+    dueNow: 'Due now',
+    notScheduled: 'Not scheduled',
+    searchesFor: 'Searches for',
+    searchesLike: 'Finds things like',
+    looksIn: 'Looks in',
+    looksInAll: 'Everything connected',
+    lookBack: 'Looks back',
+    lookBackNone: 'No time limit',
+    runsEvery: 'Runs',
+    taskLabel: 'Then',
+    taskNone: 'Just lists what is new',
+    // A digest naming a task that cannot be resolved must not be described as naming none — that
+    // reads as a working digest and hides the reason its runs carry no task output.
+    taskMissing: 'Task unavailable',
+    showsOnlyNew: 'Shows only what is new',
+    showsEverything: 'Shows every match, new or not',
+
+    // Run outcomes. These three all rendered as "no results" before the counters existed.
+    outcomeFailed: 'Failed',
+    outcomeNothingMatched: 'Nothing matched',
+    outcomeAllSeen: (n: number) =>
+      `Nothing new — ${n} ${n === 1 ? 'result' : 'results'}, all seen before`,
+    // The window counts from when something was last indexed, so a source that is ingested once and
+    // then left alone silently leaves a short window and never comes back. Reported as "nothing
+    // matched", that sends people to rewrite a query that was fine all along.
+    outcomeOutsideWindow: (n: number) =>
+      `Nothing in this window — ${n} older ${n === 1 ? 'match' : 'matches'}`,
+    outcomeOutsideWindowHint:
+      'Nothing has been added to this source recently, so the look-back window is empty. Widen it in Settings to see these.',
+    outcomeNothingMatchedHint: 'No result anywhere in the chosen sources fits this search.',
+    outcomeAllSeenHint:
+      'The search worked — everything it found has been shown in an earlier run. Reset the history to see them again.',
+    widenWindow: 'Widen the look-back',
+    runStreak: (n: number) => `${n}\u00d7`,
+    rawOutput: 'Raw task reply',
+
+    resetHistory: 'Reset history',
+    resetHistoryConfirm: 'Show everything again?',
+    resetHistoryBody:
+      'This digest will forget what it has already shown you, so the next run may repeat things you have seen. Past runs are kept.',
+    resetHistoryDone: 'History reset — the next run starts fresh',
+    historyResetAt: 'History was reset',
+
+    // Form additions
+    taskField: 'What should I do with the results?',
+    taskFieldHint: 'An instruction the assistant runs over everything the digest finds.',
+    taskFieldNone: 'Nothing — just show me what is new',
+    taskManage: 'Write your own',
+    topK: 'How many results',
+    onePerDocument: 'One result per document',
+    onePerDocumentHint: 'Otherwise several passages from the same file can each take a slot',
+    groupDuplicates: 'Group duplicates',
+    pickDocument: 'Choose a document',
+    changeDocument: 'Change',
+    clearDocument: 'Clear',
+    filtersLabel: 'Narrow it down',
+  },
+
+  tasks: {
+    title: 'Tasks',
+    subtitle: 'Instructions a digest can run over what it finds.',
+    add: 'New task',
+    empty: 'No tasks of your own yet',
+    emptyHint:
+      'A task tells the assistant what to do with a digest\u2019s results — score them, summarise them, pull out what matters.',
+    builtIn: 'Built in',
+    builtInHint: 'Shipped with the app. Duplicate it to make a version you can change.',
+    usedBySearch: 'Used by search',
+    yours: 'Your tasks',
+    duplicate: 'Duplicate',
+    view: 'View',
+    edit: 'Edit',
+    remove: 'Delete',
+    removeConfirm: 'Delete this task?',
+    removeBody: 'Digests still using it must be changed first. This cannot be undone.',
+    removeFailed: 'Could not delete this task',
+    saveFailed: 'Could not save this task',
+    create: 'Create task',
+    save: 'Save changes',
+    created: 'Task created',
+    updated: 'Task saved',
+
+    name: 'Name',
+    namePlaceholder: 'Score roles against my CV',
+    description: 'What it is for',
+    descriptionPlaceholder: 'Shown when picking a task for a digest',
+    instruction: 'Instruction',
+    instructionPlaceholder:
+      'Score how well each posting fits a senior backend role. Be strict, and say what decided it.',
+    instructionHint:
+      'Written as if to a colleague. The assistant adds the rules that stop indexed text from giving it orders.',
+    outputLabel: 'What should come back',
+    fieldsLabel: 'Record for each result',
+    fieldsHint: 'Numbers show as a badge, text as a line underneath.',
+    fieldName: 'Name',
+    fieldType: 'Type',
+    fieldDescription: 'What to put here',
+    fieldOptional: 'May be left out',
+    addField: 'Add a field',
+    removeField: 'Remove',
+    useSuggested: 'Use score, reason and concern',
+    judgeBy: 'Judge each result by',
+    quality: 'Model',
+    qualityHint: 'A digest runs its task on every scheduled run, so a cheaper model costs less over time.',
+    costNote:
+      'This runs every time the digest runs. A daily digest over ten results is a daily cost.',
+    rawMode: 'Write the prompt myself',
+    rawModeHint:
+      'Replaces the instruction with the exact system and user messages. You then own the rules that keep retrieved text as data rather than instructions — get that wrong and a document in your index can steer the model.',
+    rawSystem: 'System message',
+    rawUser: 'User message',
+    rawUserHint: 'Must contain {{sources}}, or the model is given nothing to work from.',
+    contextChars: 'Context budget (characters)',
+    maxSources: 'Most results to send',
+    builtInReadOnly: 'This task ships with the app and cannot be changed. Duplicate it to edit.',
   },
 
   jobBoards: {

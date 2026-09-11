@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.personalassistant.ingestion.connector.google.GoogleApiException;
 import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -83,8 +84,10 @@ class FakeGmailApi implements GmailApi {
 
     @Override
     public JsonNode getMessage(GoogleAuth auth, String id) {
+        // 404, not an IllegalArgumentException: that is what GoogleHttp translates a missing id into,
+        // and the re-list path branches on it to tell "deleted" from "broken".
         Msg m = messages.stream().filter(x -> x.id.equals(id)).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("no such message " + id));
+                .orElseThrow(() -> new GoogleApiException(404, "no such message " + id));
         ObjectNode msg = mapper.createObjectNode();
         msg.put("id", m.id);
         msg.put("threadId", "t_" + m.id);

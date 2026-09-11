@@ -259,9 +259,20 @@ mark:    EntityRepository.markIndexed(id, chunkCount, embeddingModel, now)  → 
 **Failure path:** retry with backoff (`status = INGESTED`, `retry.nextAttemptAt` set) until
 `retry-limit`, then terminal `FAILED` with the captured error on the entity.
 
-**Re-index without re-fetch:** because the entity retains `raw` + `fileRef`, re-indexing (new
-chunking config or embedding model) is just `flagNeedsReindex` → the loop runs this path again. No
-source calls. Chunks live **only** in OpenSearch and are always regenerable.
+**Re-index, usually without re-fetch:** because the entity retains `raw` + `fileRef`, re-indexing
+(new chunking config or embedding model) is normally just `flagNeedsReindex` → the loop runs this
+path again, with no source calls. Chunks live **only** in OpenSearch and are always regenerable.
+
+The exception is a `fileRef` that names a staged *copy* rather than the source file. Drive's does,
+under a scratch dir the OS may empty, so `GOOGLE_DRIVE` declares `FETCH_AND_REINDEX` and its content
+is fetched again first — per entity through `SourceConnector.fetchOne`, or knowledge-wide by flagging
+`needsRefetch` and rewinding the cursors so Stage 1 re-materializes it. The caller asks for a
+re-index either way. See [L11](./limitations.md) and `indexing-implementation.md` §5.
+
+**A missing staged file is terminal on sight.** Separately from the ladder above: when `extract`
+finds the `fileRef` gone, the entity is dead-lettered on the first attempt — no backoff brings a
+purged file back — and the same write sets `needsRefetch`, so the next walk that re-lists it repairs
+it rather than leaving it stranded.
 
 ---
 
@@ -332,8 +343,9 @@ indexing timestamp alone, or a revived item will read as brand new.
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
 | Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
-| Set a retention window | `PATCH /api/knowledge/{id}` (`retentionPeriod`) | Config-class edit. Changes only what a later sweep removes, never what is ingested. Absent means unchanged, not "clear". |
-| Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs (no re-fetch) |
+| Set a retention window | `PATCH /api/knowledge/{id}` (`retentionPeriod`) | Config-class edit. Changes only what a later sweep removes, never what is ingested. Absent means unchanged; an explicit `null` clears it back to never-expire. |
+| Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs. For a `FETCH_AND_REINDEX` connector it first re-fetches the item synchronously (`fetchOne` → `materialize` → `upsert`), so the call can take as long as one download |
+| Re-index a knowledge | `POST /api/index/knowledge/{id}/reindex` | `flagNeedsReindexByKnowledge` → Stage 2 re-runs over the corpus — the survivable way to change embedding model. For a `FETCH_AND_REINDEX` connector it also flags the file-backed entities `needsRefetch` and rewinds the cursors, so Stage 1 refreshes the staged copies first |
 | Delete one entity | `DELETE /api/index/entities/{id}` | `markDeleted` → Stage 2 removes its chunks |
 | Browse entities | `GET /api/knowledge/{id}/entities` | Read-only. Pages the ingested items newest-first with an optional `EntityStatus` filter, returning `EntitySummary` projections. This is how a caller finds the `FAILED` items worth re-indexing, and the only way to enumerate entities at all. |
 | Inspect sync progress | `GET /api/knowledge/{id}/cursors` | Read-only. Per-iterable walk state. `stats` on the knowledge says how many entities exist; only the cursors say whether the *backward* walk is finished (`EXHAUSTED`) or the forward one is merely waiting (`IDLE`). |
@@ -429,7 +441,7 @@ RawItem.tombstone(externalId);
 | `title`, `uri` | display + citation locator |
 | `checksum` | change-detection token: re-indexed whenever it changes. Use a content hash, or — when hashing isn't feasible — a `(size, modifiedAt)` / etag / version that **changes when the item is modified** |
 | `modifiedAt` | source-side last-modified, if known |
-| `raw` | the **complete** source payload — retained so re-index never re-fetches |
+| `raw` | the **complete** source payload — retained so a re-index needs no re-fetch (unless the connector declares `FETCH_AND_REINDEX`, i.e. its `fileRef` is a staged copy) |
 | `text` / `fileRef` | inline text for small text items, **or** a local file path for files (bytes stay on disk, never inlined) |
 | `metadata` | normalized facets (`title`, `uri`, `author`, dates, labels…) used for display/filtering |
 | `deleted` | `true` for a tombstone |

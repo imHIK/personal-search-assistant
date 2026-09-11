@@ -20,6 +20,54 @@ resume from where it stopped.
 | Google Drive | `GOOGLE_DRIVE` | `google.drive.GoogleDriveConnector` | required (OAuth) | one per folder (tree walked at discovery) |
 | Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Workday / Oracle HCM |
 
+## Content: `grab()` maps, `materialize()` fetches
+
+`grab()` returns `RawItem`s, but an item's *content* is fetched separately, by
+`SourceConnector.materialize(knowledge, item)`. The ingestion runner calls it only for items it has
+decided to persist — new, changed, or previously `FAILED` — **after** its checksum comparison.
+
+The split exists because change detection cannot live in the connector. `grab` is stateless and
+idempotent by contract (invariant 4) and a connector has no access to what is stored, so only the
+runner can say "this one is unchanged". A connector that can derive its checksum from a cheap listing
+therefore emits items carrying just that checksum plus a *reference* — for `GOOGLE_DRIVE`, the scratch
+path the bytes will occupy — and transfers the bytes in `materialize()`.
+
+The default implementation carries whatever the item already holds (`fileRef` if set, else `text`),
+which is right for every connector whose content is cheap by construction: a path into the source
+itself (`LOCAL_FS`), a body that had to be fetched to know the checksum at all (`GMAIL`), or a payload
+that arrived with the listing (`JOB_BOARDS`). Only Drive overrides it today.
+
+`materialize()` runs on the ingestion worker inside the cursor's lease and may throw: the page is
+replayed by the cursor's ordinary retry/backoff, which is safe precisely because `grab` is idempotent
+and all pagination state lives on the cursor.
+
+## Re-index: `defaultReindexMode()` declares whether content is durable
+
+A re-index re-reads the entity's stored content long after the walk that wrote it, so a connector has
+to say whether that content can still be trusted. `defaultReindexMode()` answers exactly that:
+
+| | `REINDEX_ONLY` (default) | `FETCH_AND_REINDEX` |
+|---|---|---|
+| Who | `LOCAL_FS`, `GMAIL`, `JOB_BOARDS` | `GOOGLE_DRIVE` |
+| Because | inline text lives in Mongo; a `LOCAL_FS` `fileRef` names the user's own file | the `fileRef` names a *copy* staged under `download-dir`, which defaults into the temp dir the OS purges |
+
+This is a property of where the bytes went, not of the request, which is why the API has no "refetch"
+verb — a caller asks for a re-index and this decides the cost. `app.indexing.refetch-on-reindex`
+(`auto` / `always` / `never`) is the operator's override.
+
+`fetchOne(knowledge, entity)` is the fetch half: re-list one already-known item by its `externalId`.
+Its contract is that the returned `RawItem` is shaped exactly as `grab` would have shaped it — same
+checksum rule above all, since a checksum that differed here would make every subsequent poll see a
+change that never happened. Implemented by reusing the connector's own listing-row mapping:
+`files.get` for Drive, a re-stat for `LOCAL_FS`, `messages.get` for Gmail. `Optional.empty()` means
+gone at the source (trashed, deleted, 404) and the caller tombstones the entity — which, since no
+connector emits tombstones during a walk, is currently the only way a removal is ever noticed. The
+default implementation throws; a `REINDEX_ONLY` connector is never asked.
+
+The knowledge-wide counterpart does not call this at all: it flags `Entity.needsRefetch` and rewinds
+the cursors, so the ordinary walk re-materializes the items inside the lease, permit and rate-limit
+machinery it already has. See `docs/limitations.md` L11.
+
 ## Connections (credentials, separated from knowledges)
 
 Credentials do **not** live on a knowledge. They live in a reusable, first-class **`Connection`**
@@ -182,6 +230,13 @@ Content mapping splits by type: Google-native docs are exported to text
 binary files are downloaded to a local scratch dir (`app.ingestion.google-drive.download-dir`) and
 referenced by `fileRef` so the existing Tika path parses them exactly like a local `FILE`. Files over
 `max-file-bytes` and unsupported native types (forms, maps, drawings) are skipped.
+
+Neither transfer happens during the walk — both are deferred to `materialize()` (below). The walk maps
+a file from listing metadata alone, including the scratch path the bytes *will* occupy, so an item the
+runner skips as unchanged costs a listing row and nothing else. That matters because the forward
+boundary is re-listed on every arm by design: fetching in `grab()` meant re-downloading those files
+every arm only for change detection to throw the bytes away, and re-fetching the whole corpus on any
+backfill or membership re-walk.
 
 ## Company job boards (`JOB_BOARDS`)
 

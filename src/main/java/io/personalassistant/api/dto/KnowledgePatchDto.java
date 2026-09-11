@@ -1,66 +1,55 @@
 package io.personalassistant.api.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgePatch;
-import java.util.List;
-import java.util.Map;
+import io.personalassistant.domain.service.Patched;
 
 /**
- * Inbound payload for a partial edit ({@code PATCH /api/knowledge/{id}}). Patch semantics: a field
- * that is absent (or JSON {@code null}) is left untouched; only fields present with a value are
- * changed. This mirrors the boxed-nullable convention the create {@link KnowledgeDto} already uses
- * for {@code scheduleEnabled}/{@code backfillEnabled}.
+ * Inbound payload for a partial edit ({@code PATCH /api/knowledge/{id}}). A field that is <b>absent</b>
+ * is left untouched; a field present as JSON {@code null} is <b>cleared</b> back to inherit-the-default;
+ * anything else is set.
  *
- * <p><b>Limitation:</b> because an omitted JSON field and an explicit JSON {@code null} both arrive
- * as a {@code null} Java field, this DTO cannot express "clear back to inherit" for {@code cron}/
- * {@code interval} — a null there means "unchanged", not "unset". The service-layer
- * {@link KnowledgePatch} models present-vs-absent precisely; a future typed-null wire format could
- * expose the clear semantics if needed.
+ * <p>Reads the body as a tree rather than binding it — see {@link PatchBody}. That is what makes the
+ * clears real: {@code cron: null} is how the console moves a source off a custom schedule and back onto
+ * a preset interval, and a blank chunk size is how it hands tuning back to the server default. Bound to
+ * plain fields, both were indistinguishable from "unchanged", so the old cron kept winning over the new
+ * interval and a chunking override could be set but never removed.
  *
- * @param type              present only so an attempt to change the immutable connector type can be rejected (400)
- * @param chunkingStrategy  chunking strategy to use for this knowledge (e.g. {@code "recursive"},
- *                          {@code "character"}, {@code "fixed-size"}, {@code "token"}); null = unchanged
- * @param chunkingMaxSize   target chunk size (characters, or tokens for {@code token}); null = unchanged
- * @param chunkingOverlap   overlap between adjacent chunks in the same unit; null = unchanged
- * @param chunkingSeparators ordered separators for {@code recursive}/{@code character}; null = unchanged
- * @param retentionPeriod   how long entities are kept, e.g. {@code "14d"}; null = unchanged. Like
- *                          {@code cron}/{@code interval} above, this cannot express "clear back to
- *                          inherit" over the wire
+ * <p>{@code name}, {@code auth}, {@code inputs} and {@code type} have no empty state and reject an
+ * explicit null with a 400 rather than writing one: a source with no name is a blank row, and one with
+ * no inputs has nothing to walk. Clearing a map means sending {@code {}}, which is expressible and
+ * means something different.
  */
-public record KnowledgePatchDto(
-        String name,
-        String type,
-        Map<String, Object> auth,
-        Map<String, Object> inputs,
-        String cron,
-        String interval,
-        Boolean scheduleEnabled,
-        Boolean backfillEnabled,
-        Boolean webhookEnabled,
-        String webhookSecret,
-        String chunkingStrategy,
-        Integer chunkingMaxSize,
-        Integer chunkingOverlap,
-        List<String> chunkingSeparators,
-        String retentionPeriod) {
+public record KnowledgePatchDto(JsonNode body) {
 
+    /**
+     * @throws IllegalArgumentException on an unknown connector type, a field carrying the wrong JSON
+     *                                  type, or a null where the field has no empty state. The resource
+     *                                  maps all of these to a 400
+     */
     public KnowledgePatch toPatch() {
-        return KnowledgePatch.builder()
-                .name(name)
-                .type(type == null ? null : SourceType.valueOf(type)) // bad enum → IllegalArgumentException → 400
-                .auth(auth)
-                .inputs(inputs)
-                .cron(cron)
-                .interval(interval)
-                .scheduleEnabled(scheduleEnabled)
-                .backfillEnabled(backfillEnabled)
-                .webhookEnabled(webhookEnabled)
-                .webhookSecret(webhookSecret)
-                .chunkingStrategy(chunkingStrategy)
-                .chunkingMaxSize(chunkingMaxSize)
-                .chunkingOverlap(chunkingOverlap)
-                .chunkingSeparators(chunkingSeparators)
-                .retentionPeriod(retentionPeriod)
-                .build();
+        PatchBody patch = new PatchBody(body);
+        String type = patch.requiredText("type").value();
+        return new KnowledgePatch(
+                patch.requiredText("name"),
+                // Carried only so an attempt to change the immutable connector type can be rejected.
+                type == null ? Patched.absent() : Patched.of(SourceType.valueOf(type)),
+                patch.requiredMap("auth"),
+                patch.requiredMap("inputs"),
+                new KnowledgePatch.SchedulePatch(
+                        patch.text("cron"),
+                        patch.text("interval"),
+                        patch.bool("scheduleEnabled")),
+                new KnowledgePatch.WebhookPatch(
+                        patch.bool("webhookEnabled"),
+                        patch.text("webhookSecret")),
+                patch.bool("backfillEnabled"),
+                new KnowledgePatch.ChunkingPatch(
+                        patch.text("chunkingStrategy"),
+                        patch.integer("chunkingMaxSize"),
+                        patch.integer("chunkingOverlap"),
+                        patch.strings("chunkingSeparators")),
+                patch.text("retentionPeriod"));
     }
 }

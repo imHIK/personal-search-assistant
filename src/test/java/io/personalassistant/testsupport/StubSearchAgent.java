@@ -49,8 +49,19 @@ public class StubSearchAgent implements SearchAgent {
     @Override
     public String runTask(String taskId, SearchQuery query, List<SearchHit> hits,
                           java.util.Map<String, String> values) {
+        return runTaskWithSources(taskId, query, hits, values).reply();
+    }
+
+    /**
+     * Reports the hits it was given as the sources, which is what a chunk-level task actually renders.
+     * A test exercising the whole-entity collapse supplies hits already shaped that way rather than
+     * having this stub reimplement {@code SourceTexts}.
+     */
+    @Override
+    public TaskResult runTaskWithSources(String taskId, SearchQuery query, List<SearchHit> hits,
+                                         java.util.Map<String, String> values) {
         taskIds.add(taskId);
         variables.add(values);
-        return reply.apply(query, hits);
+        return new TaskResult(reply.apply(query, hits), hits == null ? List.of() : List.copyOf(hits));
     }
 }

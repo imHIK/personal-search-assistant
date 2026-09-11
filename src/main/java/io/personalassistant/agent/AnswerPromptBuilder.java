@@ -79,7 +79,10 @@ public class AnswerPromptBuilder {
      *   <li><strong>Markdown, constrained.</strong> A fixed subset — headings, bold, lists, tables — so
      *       tabular answers render as tables and the console needs only a small renderer.</li>
      *   <li><strong>Grouped citations.</strong> {@code [1,2,3]} instead of {@code [1][2][3]}: fewer
-     *       inline markers to read, and the console expands the group back into separate links.</li>
+     *       inline markers to read, and the console expands the group back into separate links. The
+     *       prompt also pins the bracket <em>shape</em> to ASCII, because the console's parser keys
+     *       off it — hosted models like to emit the fullwidth CJK pair, which used to land in the
+     *       answer as dead text. The console now accepts both, so this is belt and braces.</li>
      *   <li><strong>Fences.</strong> Source text is untrusted input. Telling the model the fenced
      *       regions are data, not instructions, is what stops a document containing prompt-like prose
      *       from steering the answer.</li>
@@ -95,6 +98,17 @@ public class AnswerPromptBuilder {
      *                  added here and win, so a caller cannot redefine what the assembly code emits
      */
     String system(TaskSpec task, Map<String, String> variables) {
+        return system(catalog.promptForTask(task.id()), variables);
+    }
+
+    /**
+     * Same, against a prompt supplied by the caller.
+     *
+     * <p>A user-written task has no entry in the bundled catalogue — its prompt is either a shipped
+     * wrapper rendered around the user's instruction, or text the user wrote outright — so the template
+     * arrives here rather than being looked up. {@code TaskLibrary} is what resolves the two cases.
+     */
+    String system(PromptTemplate prompt, Map<String, String> variables) {
         // The fence and the truncation marker are supplied by this class rather than restated in the
         // JSON: the prompt describes them, but the assembly code below is what actually emits them, so a
         // single source of truth keeps the description and the output from drifting apart.
@@ -103,7 +117,7 @@ public class AnswerPromptBuilder {
         values.put("today", LocalDate.now(clock).format(DateTimeFormatter.ISO_DATE));
         values.put("fence", FENCE);
         values.put("truncationMarker", TRUNCATION_MARKER.trim());
-        return catalog.promptForTask(task.id()).renderSystem(values);
+        return prompt.renderSystem(values);
     }
 
     String user(TaskSpec task, SearchQuery query, List<SearchHit> hits) {
@@ -117,7 +131,13 @@ public class AnswerPromptBuilder {
      */
     String user(TaskSpec task, SearchQuery query, List<SearchHit> hits,
                 Map<String, String> textByChunkId) {
-        return catalog.promptForTask(task.id()).renderUser(Map.of(
+        return user(catalog.promptForTask(task.id()), task, query, hits, textByChunkId);
+    }
+
+    /** Same, against a caller-supplied prompt — see {@link #system(PromptTemplate, Map)}. */
+    String user(PromptTemplate prompt, TaskSpec task, SearchQuery query, List<SearchHit> hits,
+                Map<String, String> textByChunkId) {
+        return prompt.renderUser(Map.of(
                 "query", query.text() == null ? "" : query.text(),
                 "sources", sources(task, hits, textByChunkId)));
     }

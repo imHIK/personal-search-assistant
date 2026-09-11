@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -60,7 +61,7 @@ public class IndexingRunner {
     private final EmbeddingProvider embeddings;
     private final SearchIndex index;
 
-    @ConfigProperty(name = "app.indexing.embed-batch", defaultValue = "64")
+    @ConfigProperty(name = "app.indexing.embed-batch", defaultValue = "15")
     int embedBatch;
 
     @ConfigProperty(name = "app.indexing.retry-limit", defaultValue = "5")
@@ -137,9 +138,30 @@ public class IndexingRunner {
             }
         } catch (RateLimitedException e) {
             defer(entity, owner, e);
+        } catch (MissingContentException e) {
+            missingContent(entity, owner, e);
         } catch (RuntimeException e) {
             fail(entity, owner, Errors.summary(e), false);
             LOG.log(Level.WARNING, "Indexing failed for entity " + entity.id(), e);
+        }
+    }
+
+    /**
+     * Dead-letter an entity whose staged content has been purged, and mark it for re-fetching.
+     *
+     * <p>Terminal on the first attempt on purpose: the bytes are not coming back on their own, so the
+     * retry ladder would spend {@code retry-limit × backoff} arriving at the same place with the
+     * error hidden behind a pending retry. The flag is what makes it recoverable — the next walk that
+     * re-lists this item re-materializes it even though the source has not changed, so what used to
+     * be a permanent dead letter is now one that heals on the next re-index of the knowledge.
+     */
+    private void missingContent(Entity entity, String owner, MissingContentException e) {
+        String error = e.getMessage() + "; the source copy must be re-fetched";
+        LOG.warning("Entity " + entity.id() + " lost its staged content (" + e.path
+                + "); dead-lettered for re-fetch");
+        if (!entities.markContentMissing(entity.id(), owner, error)) {
+            LOG.warning("Lost the indexing lease on entity " + entity.id()
+                    + " before markContentMissing; leaving it to the new owner");
         }
     }
 
@@ -177,8 +199,27 @@ public class IndexingRunner {
         String contentType = contentTypeOf(entity, path);
         try (InputStream in = Files.newInputStream(path)) {
             return new Extracted(parsers.get(contentType).parse(in, contentType), contentType);
+        } catch (NoSuchFileException e) {
+            // Split out from the IOException below because the two need opposite handling: a file
+            // that is absent will still be absent in five minutes, so retrying is pure delay, while
+            // an unreadable-but-present one is exactly the transient case the ladder exists for.
+            throw new MissingContentException(path);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read file " + path + " for entity " + entity.id(), e);
+        }
+    }
+
+    /**
+     * The staged copy this entity's {@code fileRef} names is gone. Thrown and caught within this
+     * class only — it is a routing signal for {@link #indexEntity}, not a failure mode callers can do
+     * anything with.
+     */
+    private static final class MissingContentException extends RuntimeException {
+        private final transient Path path;
+
+        MissingContentException(Path path) {
+            super("Staged content missing at " + path);
+            this.path = path;
         }
     }
 

@@ -11,6 +11,7 @@ const navItems = [
   { to: '/', label: labels.nav.search, icon: Search, end: true },
   { to: '/knowledge', label: labels.nav.sources, icon: Library, end: false },
   { to: '/digests', label: labels.nav.digests, icon: CalendarClock, end: false },
+  { to: '/tasks', label: labels.nav.tasks, icon: Sparkles, end: false },
   { to: '/connections', label: labels.nav.accounts, icon: Plug, end: false },
 ]
 

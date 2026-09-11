@@ -1,5 +1,6 @@
 package io.personalassistant.api.resource;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.api.dto.CursorDto;
 import io.personalassistant.api.dto.EntityPageDto;
 import io.personalassistant.api.dto.KnowledgeDto;
@@ -58,9 +59,14 @@ public class KnowledgeResource {
      */
     @PATCH
     @Path("/{id}")
-    public Knowledge update(@PathParam("id") String id, KnowledgePatchDto dto) {
+    public Knowledge update(@PathParam("id") String id, JsonNode body) {
+        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
+        // this endpoint's contract, and binding loses it. KnowledgePatchDto explains why.
+        if (body == null || !body.isObject()) {
+            throw ApiErrors.badRequest("a patch body is required");
+        }
         try {
-            return knowledgeService.update(id, dto.toPatch());
+            return knowledgeService.update(id, new KnowledgePatchDto(body).toPatch());
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) {          // immutable type change / unknown type value

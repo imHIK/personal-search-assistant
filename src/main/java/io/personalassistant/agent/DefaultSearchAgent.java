@@ -2,7 +2,7 @@ package io.personalassistant.agent;
 
 import io.personalassistant.agent.llm.LlmProfiles;
 import io.personalassistant.agent.llm.LlmProvider;
-import io.personalassistant.agent.prompt.PromptCatalog;
+import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.agent.prompt.TaskSpec;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
@@ -25,7 +25,7 @@ public class DefaultSearchAgent implements SearchAgent {
     private final LlmProvider llm;
     private final AnswerPromptBuilder prompts;
     private final LlmProfiles profiles;
-    private final PromptCatalog catalog;
+    private final TaskLibrary library;
     private final SourceTexts sourceTexts;
 
     /**
@@ -39,11 +39,11 @@ public class DefaultSearchAgent implements SearchAgent {
 
     @Inject
     public DefaultSearchAgent(LlmProvider llm, AnswerPromptBuilder prompts, LlmProfiles profiles,
-                              PromptCatalog catalog, SourceTexts sourceTexts) {
+                              TaskLibrary library, SourceTexts sourceTexts) {
         this.llm = llm;
         this.prompts = prompts;
         this.profiles = profiles;
-        this.catalog = catalog;
+        this.library = library;
         this.sourceTexts = sourceTexts;
     }
 
@@ -60,14 +60,32 @@ public class DefaultSearchAgent implements SearchAgent {
     @Override
     public String runTask(String id, SearchQuery query, List<SearchHit> hits,
                           java.util.Map<String, String> variables) {
+        return runTaskWithSources(id, query, hits, variables).reply();
+    }
+
+    @Override
+    public TaskResult runTaskWithSources(String id, SearchQuery query, List<SearchHit> hits,
+                                         java.util.Map<String, String> variables) {
         if (hits == null || hits.isEmpty()) {
-            return NO_SOURCES;
+            return new TaskResult(NO_SOURCES, List.of());
         }
-        TaskSpec task = catalog.task(id);
+        TaskLibrary.ResolvedTask resolvedTask = library.resolve(id);
+        TaskSpec task = resolvedTask.spec();
         SourceTexts.Resolved resolved = sourceTexts.resolve(task, hits);
+
+        // The task's own variables first, so a caller cannot accidentally overwrite the instruction a
+        // user task is made of; the framework's own (today, fence, …) are added downstream and win.
+        java.util.Map<String, String> values =
+                new java.util.LinkedHashMap<>(resolvedTask.variables());
+        if (variables != null) {
+            variables.forEach(values::putIfAbsent);
+        }
+
         var messages = List.of(new LlmProvider.Message("user",
-                prompts.user(task, query, resolved.hits(), resolved.textByChunkId())));
-        return llm.complete(profiles.get(task.llmProfile()), task.responseFormat(),
-                prompts.system(task, variables), messages);
+                prompts.user(resolvedTask.prompt(), task, query, resolved.hits(),
+                        resolved.textByChunkId())));
+        String reply = llm.complete(profiles.get(task.llmProfile()), task.responseFormat(),
+                prompts.system(resolvedTask.prompt(), values), messages);
+        return new TaskResult(reply, resolved.hits());
     }
 }

@@ -92,6 +92,10 @@ public class MongoEntityRepository implements EntityRepository {
                 // --- new content invalidates whatever was in flight: reset the work queue ---
                 Updates.set("status", EntityStatus.INGESTED.name()),
                 Updates.set("needsReindex", false),
+                // The content above is freshly materialized, so whatever made us distrust the stored
+                // copy is now spent. Clearing it here and nowhere else is what keeps the flag from
+                // forcing a re-fetch on every subsequent walk.
+                Updates.set("needsRefetch", false),
                 Updates.set("retry", zeroRetry()),
                 Updates.set("index.error", null),
                 // --- and fence out a worker still chewing on the OLD text ---
@@ -246,6 +250,43 @@ public class MongoEntityRepository implements EntityRepository {
             updates.add(Updates.set("needsReindex", false));
         }
         return Updates.combine(updates);
+    }
+
+    @Override
+    public boolean markContentMissing(String id, String owner, String error) {
+        var result = collection().updateOne(ownedBy(id, owner), contentMissingUpdate(error));
+        return result.getMatchedCount() > 0;
+    }
+
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    Bson contentMissingUpdate(String error) {
+        return Updates.combine(
+                // Terminal on the first attempt, unlike failUpdate: the staged copy is gone and no
+                // amount of backoff brings it back, so the retry ladder would only delay the signal.
+                Updates.set("status", EntityStatus.FAILED.name()),
+                Updates.set("needsReindex", false),
+                // ... but the entity is recoverable, just not from here. This is what makes the next
+                // walk re-materialize it despite an unchanged checksum, so the dead letter heals.
+                Updates.set("needsRefetch", true),
+                Updates.set("index.error", error),
+                Updates.set("retry", new Document("count", 0).append("nextAttemptAt", null)),
+                Updates.unset("lease"),
+                Updates.set("updatedAt", BsonSupport.date(Instant.now())));
+    }
+
+    @Override
+    public int flagNeedsRefetchByKnowledge(String knowledgeId) {
+        // File-backed entities only: inline text lives in this document and needs no re-fetch, so
+        // flagging it would buy a download per item and change nothing. Served by the existing
+        // (knowledgeId, status) index; content.fileRef is the residual filter.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                ne("status", EntityStatus.DELETED.name()),
+                ne("content.fileRef", null));
+        var result = collection().updateMany(filter, Updates.combine(
+                Updates.set("needsRefetch", true),
+                Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+        return (int) result.getModifiedCount();
     }
 
     @Override
@@ -436,6 +477,7 @@ public class MongoEntityRepository implements EntityRepository {
                 d.getString("checksum"),
                 BsonSupport.enumOf(EntityStatus.class, d.get("status")),
                 Boolean.TRUE.equals(d.getBoolean("needsReindex")),
+                Boolean.TRUE.equals(d.getBoolean("needsRefetch")),
                 idx == null ? Entity.IndexInfo.empty() : new Entity.IndexInfo(
                         intValue(idx.get("chunkCount")), idx.getString("embeddingModel"),
                         BsonSupport.instant(idx.get("indexedAt")), idx.getString("error")),

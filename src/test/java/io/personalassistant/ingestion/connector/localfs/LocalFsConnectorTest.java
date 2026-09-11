@@ -9,6 +9,7 @@ import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.CursorDirection;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.GrabContext;
 import io.personalassistant.ingestion.connector.GrabResult;
@@ -232,5 +233,45 @@ class LocalFsConnectorTest {
         Knowledge kn = knowledgeAt(root, anchor);
         GrabResult page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
         assertEquals(List.of("top.txt"), titles(page), "the root iterable only emits top-level files");
+    }
+
+    @Test
+    void reIndexesFromTheStoredPathWithoutFetching() {
+        // Nothing here is a copy: externalId and fileRef are the user's own file, which is exactly
+        // what a staging connector cannot claim.
+        assertEquals(ReindexMode.REINDEX_ONLY, connector.defaultReindexMode());
+    }
+
+    @Test
+    void fetchOneReStatsAFileExactlyAsAWalkWould(@TempDir Path root) throws IOException {
+        Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        write(root.resolve("note.txt"), "hello", anchor.minusSeconds(10));
+        Knowledge kn = knowledgeAt(root, anchor);
+        RawItem walked = connector.grab(
+                        req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10))
+                .items().get(0);
+
+        RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
+
+        assertEquals(walked.checksum(), relisted.checksum(), "same (size, mtime), so no phantom change");
+        assertEquals(walked.fileRef(), relisted.fileRef());
+        assertEquals(walked.metadata(), relisted.metadata());
+    }
+
+    @Test
+    void fetchOneReportsADeletedFileAsGone(@TempDir Path root) {
+        Knowledge kn = knowledgeAt(root, Instant.now());
+        RawItem phantom = RawItem.file(root.resolve("deleted.txt").toString(), "text/plain",
+                "deleted.txt", "file://x", "size:0;mtime:0", Instant.now(),
+                root.resolve("deleted.txt").toString(), Map.of(), Map.of());
+
+        assertTrue(connector.fetchOne(kn, entityFor(phantom)).isEmpty(),
+                "no connector emits tombstones, so this is the one place a removal is noticed");
+    }
+
+    /** The entity the walk would have produced — all fetchOne reads is externalId. */
+    private static io.personalassistant.domain.model.Entity entityFor(RawItem item) {
+        return TestData.ingestedFile("ent_fs", "kn_fs", item.externalId(), item.fileRef(),
+                item.contentType());
     }
 }

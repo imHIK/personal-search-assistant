@@ -1,13 +1,18 @@
 package io.personalassistant.app;
 
+import io.personalassistant.agent.prompt.PromptCatalog;
+import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.domain.model.Digest;
 import io.personalassistant.domain.model.DigestRun;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
+import io.personalassistant.domain.service.DigestPatch;
+import io.personalassistant.domain.service.Patched;
 import io.personalassistant.domain.service.SearchService;
 import io.personalassistant.testsupport.InMemoryDigestRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.StubSearchAgent;
 import java.time.Duration;
 import java.time.Instant;
@@ -22,19 +27,29 @@ import org.junit.jupiter.api.Test;
  */
 class DefaultDigestServiceTest {
 
-    /** Returns a scripted result set and records the query it was given. */
+    /**
+     * Returns a scripted result set and records every query it was given.
+     *
+     * <p>Every query, not just the last: a run that comes back empty searches a second time with the
+     * window removed, to work out whether the window is what emptied it. {@code queries.get(0)} is
+     * always the digest's own search.
+     */
     private static final class RecordingSearch implements SearchService {
         List<SearchHit> result = List.of();
-        SearchQuery lastQuery;
+        /** What an unwindowed search returns, when a test wants the two to differ. Null = same. */
+        List<SearchHit> withoutWindow;
+        final List<SearchQuery> queries = new ArrayList<>();
         RuntimeException failure;
 
         @Override
         public SearchResponse search(SearchQuery query) {
-            this.lastQuery = query;
+            queries.add(query);
             if (failure != null) {
                 throw failure;
             }
-            return new SearchResponse(result, null, null, 1);
+            boolean windowed = query.filters().containsKey(DefaultDigestService.INDEXED_AT);
+            List<SearchHit> hits = !windowed && withoutWindow != null ? withoutWindow : result;
+            return new SearchResponse(hits, null, null, 1);
         }
     }
 
@@ -46,8 +61,11 @@ class DefaultDigestServiceTest {
                 "snippet", "uri://" + entityId, 1.0, Map.of());
     }
 
+    private final InMemoryTaskRepository taskRepository = new InMemoryTaskRepository();
+    private final TaskLibrary library = new TaskLibrary(PromptCatalog.bundled(), taskRepository);
+
     private DefaultDigestService service(StubSearchAgent agent) {
-        DefaultDigestService svc = new DefaultDigestService(repository, search, agent);
+        DefaultDigestService svc = new DefaultDigestService(repository, search, agent, library);
         svc.newItemMultiplier = 4;
         return svc;
     }
@@ -65,7 +83,7 @@ class DefaultDigestServiceTest {
 
         svc.run(created.id());
 
-        Object filter = search.lastQuery.filters().get(DefaultDigestService.INDEXED_AT);
+        Object filter = search.queries.get(0).filters().get(DefaultDigestService.INDEXED_AT);
         Assertions.assertInstanceOf(Map.class, filter, "a window must be a range, not a term");
         Assertions.assertTrue(((Map<?, ?>) filter).containsKey("gte"));
     }
@@ -77,7 +95,8 @@ class DefaultDigestServiceTest {
 
         svc.run(created.id());
 
-        Assertions.assertFalse(search.lastQuery.filters().containsKey(DefaultDigestService.INDEXED_AT));
+        Assertions.assertFalse(
+                search.queries.get(0).filters().containsKey(DefaultDigestService.INDEXED_AT));
     }
 
     @Test
@@ -120,7 +139,7 @@ class DefaultDigestServiceTest {
 
         svc.run(created.id());
 
-        Assertions.assertEquals(20, search.lastQuery.topK(), "5 requested x4 multiplier");
+        Assertions.assertEquals(20, search.queries.get(0).topK(), "5 requested x4 multiplier");
     }
 
     @Test
@@ -130,7 +149,8 @@ class DefaultDigestServiceTest {
         search.result = List.of(hit("ent_a"), hit("ent_b"), hit("ent_c"));
 
         Assertions.assertEquals(2, svc.run(created.id()).items().size());
-        Assertions.assertEquals(2, search.lastQuery.topK(), "no over-fetch is needed without filtering");
+        Assertions.assertEquals(2, search.queries.get(0).topK(),
+                "no over-fetch is needed without filtering");
     }
 
     @Test
@@ -219,5 +239,258 @@ class DefaultDigestServiceTest {
         svc.delete(created.id());
 
         Assertions.assertTrue(repository.findRuns(created.id(), 10).isEmpty());
+    }
+
+    // ---- annotations -------------------------------------------------------------------------
+
+    /** A job-fit-shaped reply: an array of objects, each naming the source it describes. */
+    private static String scored(String body) {
+        return "{\"postings\": [" + body + "]}";
+    }
+
+    @Test
+    void aPerSourceReplyIsJoinedOntoTheItemItDescribes() {
+        StubSearchAgent agent = new StubSearchAgent(scored(
+                "{\"source\": 2, \"fit\": 9, \"reason\": \"Kafka and the JVM\"},"
+                        + "{\"source\": 1, \"fit\": 3, \"reason\": \"mostly frontend\"}"));
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+        search.result = List.of(hit("ent_a"), hit("ent_b"));
+
+        DigestRun run = svc.run(created.id());
+
+        // Source numbers are positional, so 2 describes the second item however the reply is ordered.
+        Assertions.assertEquals(3L, run.items().get(0).annotations().get("fit"));
+        Assertions.assertEquals(9L, run.items().get(1).annotations().get("fit"));
+        Assertions.assertEquals("Kafka and the JVM", run.items().get(1).annotations().get("reason"));
+    }
+
+    @Test
+    void aNullAnnotationIsOmittedRatherThanStoredEmpty() {
+        // "concern": null is the model saying there is nothing to report; keeping it would make the
+        // console render a labelled blank on most items.
+        StubSearchAgent agent = new StubSearchAgent(
+                scored("{\"source\": 1, \"fit\": 7, \"concern\": null}"));
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertEquals(java.util.Set.of("fit"), run.items().get(0).annotations().keySet());
+    }
+
+    @Test
+    void anUnreadableReplyLeavesItemsUnannotatedRatherThanFailingTheRun() {
+        StubSearchAgent agent = new StubSearchAgent("I could not score these, sorry.");
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertNull(run.error(), "the results are real and worth showing");
+        Assertions.assertTrue(run.items().get(0).annotations().isEmpty());
+        Assertions.assertEquals("I could not score these, sorry.", run.taskOutput(),
+                "the reply is kept verbatim so a broken task can be diagnosed");
+    }
+
+    @Test
+    void aSourceNumberOutsideTheBatchIsIgnored() {
+        // The model can name a source that was cut for budget, or simply invent one. That costs the
+        // annotation, not the run.
+        StubSearchAgent agent = new StubSearchAgent(scored(
+                "{\"source\": 9, \"fit\": 10},{\"source\": 0, \"fit\": 1},{\"source\": 1, \"fit\": 5}"));
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertEquals(1, run.items().size());
+        Assertions.assertEquals(5L, run.items().get(0).annotations().get("fit"));
+    }
+
+    @Test
+    void aTaskThatDeclaresNoArrayAnnotatesNothing() {
+        // "answer" replies in prose; there is nothing to join, and trying would be guesswork.
+        StubSearchAgent agent = new StubSearchAgent(scored("{\"source\": 1, \"fit\": 9}"));
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(digest("1d", "answer", true, 10));
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertTrue(run.items().get(0).annotations().isEmpty());
+    }
+
+    // ---- run counters ------------------------------------------------------------------------
+
+    @Test
+    void countsWhatWasFoundAndWhatWasAlreadySeen() {
+        // Three outcomes otherwise look identical in the console: nothing matched, everything matched
+        // was already seen, and something new turned up.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"), hit("ent_b"));
+        svc.run(created.id());
+
+        search.result = List.of(hit("ent_a"), hit("ent_b"), hit("ent_c"));
+        DigestRun second = svc.run(created.id());
+
+        Assertions.assertEquals(3, second.candidates());
+        Assertions.assertEquals(2, second.suppressed());
+        Assertions.assertEquals(1, second.items().size());
+    }
+
+    // ---- editing and history ------------------------------------------------------------------
+
+    @Test
+    void editingADigestDoesNotCostItItsMemory() {
+        // The delete-and-recreate route this replaced dropped the runs, and the runs are the
+        // already-seen set — so renaming a digest used to make it re-report its whole window.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"));
+        svc.run(created.id());
+
+        svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null, null, null,
+                null, Patched.of("7d"), null, null, null, null, null, null, null));
+        DigestRun after = svc.run(created.id());
+
+        Assertions.assertEquals("Renamed", svc.get(created.id()).orElseThrow().name());
+        Assertions.assertEquals("7d", svc.get(created.id()).orElseThrow().window());
+        Assertions.assertEquals("engineer", svc.get(created.id()).orElseThrow().query(),
+                "a field the patch did not mention is untouched");
+        Assertions.assertTrue(after.items().isEmpty(), "ent_a was already reported");
+    }
+
+    @Test
+    void resettingHistoryReplaysTheBacklogWithoutDeletingTheRecord() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"));
+        svc.run(created.id());
+
+        svc.resetHistory(created.id());
+        DigestRun replayed = svc.run(created.id());
+
+        Assertions.assertEquals(List.of("ent_a"),
+                replayed.items().stream().map(DigestRun.Item::entityId).toList());
+        Assertions.assertEquals(2, repository.findRuns(created.id(), 10).size(),
+                "the earlier run is still in the history — only the seen-set was cleared");
+    }
+
+    @Test
+    void anExplicitNullClearsTheFieldRatherThanBeingIgnored() {
+        // Every console control that turns something off sends one of these. Treated as "unchanged",
+        // a digest could be given a look-back window, or a task, and never have it taken away — and
+        // the edit still answered 200.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+
+        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null, null,
+                Patched.of(null), null, Patched.of(null), null, null, Patched.of(null), null, null));
+
+        Assertions.assertNull(cleared.window(), "no time bound");
+        Assertions.assertNull(cleared.taskId(), "results only");
+        Assertions.assertNull(cleared.maxChunksPerEntity(), "back to the server default");
+    }
+
+    @Test
+    void anAbsentFieldIsStillLeftAlone() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+
+        Digest renamed = svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null, null,
+                null, null, null, null, null, null, null, null, null, null));
+
+        Assertions.assertEquals("1d", renamed.window());
+        Assertions.assertEquals("job-fit", renamed.taskId());
+    }
+
+    @Test
+    void clearingAFieldThatHasNoOffFallsBackToItsDefault() {
+        // topK, onlyNew and enabled are primitives on the digest: there is no "unset" to write.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, false, 3));
+
+        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null, null, null,
+                null, null, Patched.of(null), null, null, Patched.of(null), Patched.of(null)));
+
+        Assertions.assertEquals(Digest.DEFAULT_TOP_K, cleared.topK());
+        Assertions.assertTrue(cleared.onlyNew());
+        Assertions.assertTrue(cleared.enabled());
+    }
+
+    @Test
+    void anEditCannotLeaveADigestWithNothingToSearchFor() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> svc.update(created.id(), new DigestPatch(null, Patched.of(""), null,
+                        null, null, null, null, null, null, null, null, null, null)));
+    }
+
+    @Test
+    void aRunResolvesByIdOnlyForItsOwnDigest() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest mine = svc.create(digest("1d", null, true, 10));
+        Digest other = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"));
+        DigestRun run = svc.run(mine.id());
+
+        Assertions.assertTrue(svc.run(mine.id(), run.id()).isPresent());
+        Assertions.assertTrue(svc.run(other.id(), run.id()).isEmpty(),
+                "a stale link must not reach another digest's run");
+    }
+
+    @Test
+    void aRunThatMatchedNothingIsDistinguishableFromOneThatSawItAllBefore() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+
+        DigestRun empty = svc.run(created.id());
+
+        Assertions.assertEquals(0, empty.candidates());
+        Assertions.assertEquals(0, empty.suppressed());
+    }
+
+    @Test
+    void anEmptyRunCountsWhatTheWindowCostIt() {
+        // The window filters on indexedAt, so a source ingested once and then left alone falls out of
+        // a short window and never comes back. Without this count that is indistinguishable from a
+        // query that matches nothing, and the console tells the user to fix the wrong thing.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+        search.withoutWindow = List.of(hit("ent_a"), hit("ent_b"));
+
+        DigestRun empty = svc.run(created.id());
+
+        Assertions.assertEquals(0, empty.candidates());
+        Assertions.assertEquals(2, empty.outsideWindow());
+        Assertions.assertEquals(2, search.queries.size(), "the recount is one extra search");
+        Assertions.assertFalse(
+                search.queries.get(1).filters().containsKey(DefaultDigestService.INDEXED_AT));
+    }
+
+    @Test
+    void theRecountIsSkippedWhenItCouldExplainNothing() {
+        // It only answers "did the window empty this run", so a run with results, and a digest with no
+        // window at all, must not pay for a second search.
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest windowed = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"));
+        svc.run(windowed.id());
+        Assertions.assertEquals(1, search.queries.size(), "a run with results explains itself");
+
+        search.queries.clear();
+        search.result = List.of();
+        Digest unbounded = svc.create(digest(null, null, true, 10));
+        DigestRun empty = svc.run(unbounded.id());
+
+        Assertions.assertEquals(1, search.queries.size(), "there is no window to blame");
+        Assertions.assertEquals(0, empty.outsideWindow());
     }
 }

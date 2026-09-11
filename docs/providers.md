@@ -96,6 +96,14 @@ app.llm.profile.digest.rate-limit-mode=wait
 
 Absent, it is fail-fast — the safe default for the only caller that names no background profile.
 
+**Profiles are discovered, never declared.** `LlmProfiles.get` looks keys up dynamically, so a new
+profile is created by adding properties — no bean, no injection point, no code change. `names()`
+enumerates them by scanning `Config.getPropertyNames()` for the `app.llm.profile.` prefix, which is
+what `GET /api/llm-profiles` serves: a task editor can then offer the models that actually exist
+rather than asking for a name to be typed. That matters because an **unknown profile name does not
+throw** — it resolves to an inherit-everything profile with a warning, so a mistyped name silently
+runs on the provider default. A picker is the cheapest way to make that unreachable.
+
 `app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
 is the one config key that silently corrupts the index if guessed — a missing property would
 otherwise build a `knn_vector` mapping of some arbitrary width that the configured model's vectors
@@ -294,6 +302,19 @@ This matters more than it sounds. A chunk holding only table rows — `17 Dusseh
 shares no term and no semantic signal with a document called `public_holidays_2026.pdf`, so a query about
 holidays never retrieved it, and an answer built from the chunks that did rank was silently missing rows.
 **Changing the list means re-indexing:** existing vectors were built from a different string.
+
+## Citation markers
+
+The answer prompt (`config/prompts.json`, `prompts.answer.system`) numbers sources 1-based and positional
+in `hits`, and asks the model to cite them as **ASCII** `[1]`, grouping several into one marker as
+`[1,3,4]`. `AnswerPromptBuilder` keeps that numbering stable even for a hit dropped for budget reasons, so
+a number always names the hit at that position.
+
+The bracket *shape* is part of the contract because the console turns each marker into a button that
+scrolls to the result it cites. Hosted models nonetheless emit the fullwidth CJK pair `【1】` often enough that
+the prompt's instruction alone is not a guarantee, so `frontend/src/lib/answerMarkdown.ts` accepts both
+families (and the fullwidth comma) rather than rendering an unmatched marker as dead text. Prompt first,
+parser as the backstop — a new marker shape in the wild is a one-line change to `INLINE_PATTERN`.
 
 ## Try it
 

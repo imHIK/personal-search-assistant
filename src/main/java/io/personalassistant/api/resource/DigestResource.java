@@ -1,6 +1,8 @@
 package io.personalassistant.api.resource;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.api.dto.DigestDto;
+import io.personalassistant.api.dto.DigestPatchDto;
 import io.personalassistant.api.dto.DigestRunDto;
 import io.personalassistant.domain.service.DigestService;
 import jakarta.inject.Inject;
@@ -54,15 +56,40 @@ public class DigestResource {
         }
     }
 
-    /** Pause or resume scheduling. A paused digest can still be run by hand. */
+    /**
+     * Edit a digest. Any field may be sent; anything absent is left alone, so the pause/resume body
+     * {@code {"enabled": false}} still works exactly as before.
+     *
+     * <p>The run history survives an edit, which matters more than it looks: the history is the
+     * already-seen set, so the previous delete-and-recreate route silently made an edited digest
+     * re-report its whole window. Use {@code POST /{id}/reset-history} when that is what you want.
+     */
     @PATCH
     @Path("/{id}")
-    public DigestDto setEnabled(@PathParam("id") String id, EnabledDto dto) {
-        if (dto == null || dto.enabled() == null) {
-            throw ApiErrors.badRequest("enabled must be true or false");
+    public DigestDto update(@PathParam("id") String id, JsonNode body) {
+        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
+        // this endpoint's contract, and binding loses it. DigestPatchDto explains why.
+        if (body == null || !body.isObject()) {
+            throw ApiErrors.badRequest("a patch body is required");
         }
         try {
-            return DigestDto.from(digests.setEnabled(id, dto.enabled()));
+            return DigestDto.from(digests.update(id, new DigestPatchDto(body).toPatch()));
+        } catch (NoSuchElementException e) {
+            throw ApiErrors.notFound(e.getMessage());
+        } catch (IllegalArgumentException e) {          // unparseable schedule/window, or empty query
+            throw ApiErrors.badRequest(e.getMessage());
+        }
+    }
+
+    /**
+     * Forget what has already been reported, keeping the recorded runs. The next run may repeat things
+     * already seen — the point of the operation after widening a query.
+     */
+    @POST
+    @Path("/{id}/reset-history")
+    public DigestDto resetHistory(@PathParam("id") String id) {
+        try {
+            return DigestDto.from(digests.resetHistory(id));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
         }
@@ -91,9 +118,11 @@ public class DigestResource {
 
     @GET
     @Path("/{id}/runs")
-    public List<DigestRunDto> runs(@PathParam("id") String id, @QueryParam("limit") Integer limit) {
+    public List<DigestRunDto> runs(@PathParam("id") String id, @QueryParam("limit") Integer limit,
+                                   @QueryParam("offset") Integer offset) {
         int capped = Math.clamp(limit == null ? 20 : limit, 1, MAX_RUNS);
-        return digests.runs(id, capped).stream().map(DigestRunDto::from).toList();
+        return digests.runs(id, capped, offset == null ? 0 : Math.max(offset, 0)).stream()
+                .map(DigestRunDto::from).toList();
     }
 
     @GET
@@ -103,6 +132,11 @@ public class DigestResource {
                 .orElseThrow(() -> ApiErrors.notFound("Digest " + id + " has no run yet"));
     }
 
-    /** Body of the enable/disable patch. */
-    public record EnabledDto(Boolean enabled) {}
+    /** One run by id. {@code 404} when it is not this digest's, so a stale link cannot leak a run. */
+    @GET
+    @Path("/{id}/runs/{runId}")
+    public DigestRunDto run(@PathParam("id") String id, @PathParam("runId") String runId) {
+        return digests.run(id, runId).map(DigestRunDto::from)
+                .orElseThrow(() -> ApiErrors.notFound("No run " + runId + " for digest " + id));
+    }
 }

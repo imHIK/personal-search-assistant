@@ -84,7 +84,7 @@ public class IngestionRunner {
                         kn, cursor.iterableId(), cursor.attributes(),
                         position, seedWindow, maxItemsPerBatch));
 
-                long persisted = persistPage(kn, cursor, page.items());
+                long persisted = persistPage(kn, cursor, connector, page.items());
                 position = page.cursor();
                 Instant now = Instant.now();
 
@@ -173,16 +173,16 @@ public class IngestionRunner {
                 : TimeWindow.atOrAfter(anchor);
     }
 
-    private long persistPage(Knowledge kn, Cursor cursor, List<RawItem> items) {
+    private long persistPage(Knowledge kn, Cursor cursor, SourceConnector connector, List<RawItem> items) {
         long count = 0;
         for (RawItem item : items) {
-            persistItem(kn, cursor, item);
+            persistItem(kn, cursor, connector, item);
             count++;
         }
         return count;
     }
 
-    private void persistItem(Knowledge kn, Cursor cursor, RawItem item) {
+    private void persistItem(Knowledge kn, Cursor cursor, SourceConnector connector, RawItem item) {
         Optional<Entity> existing = entities.findByKnowledgeAndExternalId(kn.id(), item.externalId());
 
         if (item.deleted()) {
@@ -203,8 +203,14 @@ public class IngestionRunner {
         // nothing until the window truly reopened. FAILED still falls through, so a poll is one of the
         // ways a dead letter gets another chance; DELETED falls through so an item that reappears at the
         // source with an unchanged checksum is re-ingested rather than left tombstoned.
+        //
+        // needsRefetch falls through too, and it is the only clause here that is not about the source:
+        // it says the *stored* content is a staged copy we no longer trust, so "unchanged at the
+        // source" is exactly the case it has to override. upsert() clears it in the same write that
+        // stores the fresh bytes, so the escape is spent the moment it is used.
         if (existing.isPresent() && item.checksum() != null
                 && item.checksum().equals(existing.get().checksum())
+                && !existing.get().needsRefetch()
                 && existing.get().status() != EntityStatus.FAILED
                 && existing.get().status() != EntityStatus.DELETED) {
             if (existing.get().lastSeenGeneration() != kn.syncGeneration()) {
@@ -216,9 +222,11 @@ public class IngestionRunner {
         Instant now = Instant.now();
         String id = existing.map(Entity::id).orElse(Ids.entity());
         Instant createdAt = existing.map(Entity::createdAt).orElse(now);
-        Entity.Content content = item.fileRef() != null
-                ? Entity.Content.ofFile(item.fileRef())
-                : Entity.Content.ofText(item.text());
+        // Below the skip, and only below it: this is where a connector that defers an expensive fetch
+        // (Drive downloads a file, exports a doc) actually pays for it, so an unchanged item costs a
+        // listing row and nothing else. A throw here propagates to runLease's catch and the page is
+        // replayed — safe, since grab is idempotent and all pagination state is on the cursor.
+        Entity.Content content = connector.materialize(kn, item);
 
         // The status/needsReindex/index/lease/retry arguments below are what upsert() guarantees
         // anyway — it owns the work-queue reset so that a re-ingest atomically fences out an indexer
@@ -226,7 +234,7 @@ public class IngestionRunner {
         // carrier record; changing them here would not change what is stored.
         Entity entity = new Entity(id, kn.id(), cursor.iterableId(), item.entityType(),
                 item.externalId(), item.raw(), content, item.metadata(), item.checksum(),
-                EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
+                EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null, Entity.Retry.zero(),
                 createdAt, now,
                 item.expiresAt(), // source-declared expiry, if any; else the knowledge window governs
                 kn.syncGeneration()); // stamp the walk generation so re-walked items aren't seen as stale

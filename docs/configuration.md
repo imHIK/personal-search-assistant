@@ -43,6 +43,12 @@ task or a second connector needs a different value, you are choosing between a r
 Two sections. `prompts` is the text; `tasks` is the thin wiring saying which prompt, which model, and
 which budgets a given job runs with.
 
+This file holds the **bundled** tasks only. User-written tasks live in the Mongo `tasks` collection
+and are layered over it at runtime — the split, and why the two validate at different times, is in
+[`tasks.md`](./tasks.md). The rule for which mechanism a new task belongs in: if the application
+itself depends on it, it is bundled and read-only; if a person authors it for their own digest, it is
+a row.
+
 ```jsonc
 {
   "prompts": {
@@ -54,10 +60,26 @@ which budgets a given job runs with.
     }
   },
   "tasks": {
-    "answer": { "prompt": "answer", "llmProfile": "answer", "contextChars": 24000, "maxSources": 10 }
+    "answer": {
+      "name": "Answer questions",        // shown in a picker; falls back to the id
+      "prompt": "answer",
+      "llmProfile": "answer",
+      "contextChars": 24000,
+      "maxSources": 10
+    },
+    "job-fit": {
+      "annotates": "postings",           // array in a JSON reply describing sources one by one
+      "digest": true                     // may a digest be pointed at this? opt in, not out
+    }
   }
 }
 ```
+
+Two task keys exist for the digest read path. **`annotates`** names the array in a JSON reply whose
+elements each carry a `source` number, which is how a digest joins the reply back onto the results it
+ran over — see [`digests.md`](./digests.md). **`digest`** opts a task in to being offered in the
+console: `answer` and `document-facets` are machinery the read path runs for itself, and offering them
+would invite a digest that quietly does nothing useful.
 
 **Prompts are keyed by task, never by model.** A prompt naming a model cannot be reused when the model
 changes and cannot be shared by two features on different models. Model choice lives in
@@ -155,6 +177,15 @@ directly instead of standing up a container, and every path that produces one is
 > Note the asymmetry it forces on PATCH: absent already means "unchanged", so *clearing* the value
 > needs an explicit empty (`{"rateLimit": {"rules": []}}`). Any future user-editable collection will
 > hit the same problem — decide how removal is spelled before shipping the field.
+
+> **A behaviour the code already knows belongs in the code, with config as the override.**
+> `app.indexing.refetch-on-reindex` defaults to `auto`, which means "ask the connector"
+> (`SourceConnector#defaultReindexMode`). Whether a re-index has to fetch content again is a fact
+> about where that connector puts its bytes, so a per-connector property would be a list of answers
+> the connector already knows and a new connector would ship broken until someone remembered to add a
+> line. Config exists here only for the two cases code cannot settle: forcing it on while debugging,
+> and turning it off to make a purged staged file fail loudly. `RefetchPolicy` is the one place that
+> reads both.
 
 > **A tier may legitimately resolve to nothing.** `RetentionResolver` returns `null` when no tier sets
 > a window, and callers must read that as *never expire* rather than *expire immediately*. Shipping

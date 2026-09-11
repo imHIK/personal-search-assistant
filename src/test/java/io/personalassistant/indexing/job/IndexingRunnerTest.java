@@ -163,17 +163,44 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INDEXED, entities.findById("ent_2").orElseThrow().status());
     }
 
+    /**
+     * L11. A staged copy that has been purged is the one failure the retry ladder cannot help with,
+     * so it dead-letters at once — and carries the flag that lets a later walk re-fetch it, which is
+     * what stops this being the permanent dead end it used to be.
+     */
     @Test
-    void recordsRetryableFailureWhenFileMissing() {
+    void deadLettersImmediatelyAndFlagsForRefetchWhenTheFileIsGone() {
         entities.upsert(TestData.ingestedFile("ent_3", "kn_1", "missing", "/no/such/file.txt", "text/plain"));
 
         runner.indexEntity(claim("ent_3"), WORKER);
 
         Entity stored = entities.findById("ent_3").orElseThrow();
+        assertEquals(EntityStatus.FAILED, stored.status(), "no retry can make the file reappear");
+        assertEquals(0, stored.retry().count(), "no retry budget is consumed either");
+        assertNull(stored.retry().nextAttemptAt(), "and nothing is scheduled to re-attempt it");
+        assertFalse(stored.needsReindex(), "it has left the indexing queue");
+        assertTrue(stored.needsRefetch(), "but the next walk must re-materialize it");
+        assertTrue(stored.index().error().contains("/no/such/file.txt"),
+                "the error names the path that vanished: " + stored.index().error());
+    }
+
+    /**
+     * The counterpart: a file that is present but unreadable is exactly the transient case the ladder
+     * exists for, so it must keep its backoff rather than being swept into the fast-fail above.
+     */
+    @Test
+    void stillRetriesWhenTheFileExistsButCannotBeRead(@TempDir Path dir) throws IOException {
+        Path unreadable = dir.resolve("locked");
+        Files.createDirectory(unreadable); // a directory opens, then fails on read — present, unusable
+        entities.upsert(TestData.ingestedFile("ent_3b", "kn_1", "locked", unreadable.toString(), "text/plain"));
+
+        runner.indexEntity(claim("ent_3b"), WORKER);
+
+        Entity stored = entities.findById("ent_3b").orElseThrow();
         assertEquals(EntityStatus.INGESTED, stored.status(), "retryable failure returns to the queue");
         assertEquals(1, stored.retry().count());
-        assertNotNull(stored.index().error());
         assertNotNull(stored.retry().nextAttemptAt(), "backoff time should be set");
+        assertFalse(stored.needsRefetch(), "a present-but-unreadable file is not a missing one");
     }
 
     @Test

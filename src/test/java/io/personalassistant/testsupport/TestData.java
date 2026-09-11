@@ -66,7 +66,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText("body"),
                 Map.of("title", externalId, "uri", "test://" + externalId),
-                "sha256:" + externalId, EntityStatus.INDEXED, false, Entity.IndexInfo.empty(), null,
+                "sha256:" + externalId, EntityStatus.INDEXED, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), createdAt, createdAt, expiresAt, 0L);
     }
 
@@ -111,7 +111,7 @@ public final class TestData {
         Instant now = Instant.now();
         return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText("body"), Map.of("title", externalId, "uri", "test://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), now, now, null, 0L);
     }
 
@@ -119,7 +119,7 @@ public final class TestData {
         Instant now = Instant.now();
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText(text), Map.of("title", externalId, "uri", "test://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), now, now, null, 0L);
     }
 
@@ -128,7 +128,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, "root", EntityType.FILE, externalId,
                 Map.of("contentType", contentType), Entity.Content.ofFile(fileRef),
                 Map.of("title", externalId, "uri", "file://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), now, now, null, 0L);
     }
 }

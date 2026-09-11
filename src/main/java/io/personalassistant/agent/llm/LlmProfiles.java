@@ -55,6 +55,29 @@ public class LlmProfiles {
         return cache.computeIfAbsent(name, this::resolve);
     }
 
+    /**
+     * Every profile name the configuration defines, in encounter order.
+     *
+     * <p>Derived by scanning property names rather than kept as a list, for the same reason
+     * {@link #get} looks keys up dynamically: a profile is created by adding properties, so any
+     * declared set would be a second place to remember. This exists so a user choosing which model
+     * runs their task can be offered the real options instead of typing a name.
+     */
+    public java.util.List<String> names() {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (String property : config.getPropertyNames()) {
+            if (!property.startsWith(PREFIX)) {
+                continue;
+            }
+            String rest = property.substring(PREFIX.length());
+            int dot = rest.indexOf('.');
+            if (dot > 0) {
+                out.add(rest.substring(0, dot));
+            }
+        }
+        return java.util.List.copyOf(out);
+    }
+
     private LlmProfile resolve(String name) {
         Optional<String> baseUrl = text(name, "base-url");
         Optional<String> model = text(name, "model");
