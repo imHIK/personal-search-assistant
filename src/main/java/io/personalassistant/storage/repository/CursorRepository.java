@@ -5,6 +5,7 @@ import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,10 +30,15 @@ public interface CursorRepository {
     /**
      * Candidate cursors the ingestion loop may attempt to claim: {@code AVAILABLE} with no live
      * lease, a {@code RATE_LIMITED} one whose {@code retry.nextAttemptAt} has passed, or an
-     * {@code IN_PROGRESS} one whose lease expired. Returned candidates are advisory — the actual
-     * claim is atomic via {@link #claim}.
+     * {@code IN_PROGRESS} one whose lease expired — restricted to cursors of {@code knowledgeIds},
+     * least-recently-run first. Returned candidates are advisory — the actual claim is atomic via
+     * {@link #claim}.
+     *
+     * <p>The caller names the eligible knowledges because a cursor the loop skips never advances its
+     * {@code lastRunAt}: left in the ordering, it keeps its slot at the head of the bounded batch on
+     * every tick, and enough of them starve every other source. An empty collection returns nothing.
      */
-    List<Cursor> findClaimable(int limit);
+    List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit);
 
     /**
      * Atomically lease a cursor: only succeeds if it is still claimable on the same terms as

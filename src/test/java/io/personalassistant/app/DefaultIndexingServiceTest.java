@@ -81,7 +81,7 @@ class DefaultIndexingServiceTest {
     void revivesDeadLetteredCursorsAndEntitiesWithAFreshBudget() {
         Cursor cursor = failedCursor("kn_1", "root", CursorDirection.BACKWARD);
         failedEntity("ent_1", "kn_1");
-        assertTrue(cursors.findClaimable(10).isEmpty(), "precondition: nothing is claimable");
+        assertTrue(cursors.findClaimable(List.of("kn_1"), 10).isEmpty(), "precondition: nothing is claimable");
         assertTrue(entities.claimForIndexing(10, "w", Duration.ofMinutes(5)).isEmpty());
 
         IndexingService.RetryTrigger result = service.retryFailed("kn_1");
@@ -102,7 +102,7 @@ class DefaultIndexingServiceTest {
         assertNull(revivedEntity.index().error());
 
         // The point of the exercise: both are back in their work queues.
-        assertEquals(1, cursors.findClaimable(10).size());
+        assertEquals(1, cursors.findClaimable(List.of("kn_1"), 10).size());
         assertEquals(1, entities.claimForIndexing(10, "w", Duration.ofMinutes(5)).size());
     }
 

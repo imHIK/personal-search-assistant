@@ -53,14 +53,16 @@ class IngestionJobBackstopTest {
     void parksClaimableCursorsOfPausedKnowledge() {
         pausedKnowledge("k1");
         cursors.insertIfAbsent(TestData.cursor("k1", "chan", CursorDirection.FORWARD, SourceType.SLACK));
-        assertEquals(1, cursors.findClaimable(20).size(), "precondition: the straggler is claimable");
+        assertEquals(1, cursors.findClaimable(java.util.List.of("k1"), 20).size(),
+                "precondition: the straggler is claimable");
 
         job.tick();
 
         assertTrue(cursors.findByKnowledge("k1").stream()
                         .allMatch(c -> c.status() == CursorStatus.SUSPENDED),
                 "the backstop parks the paused knowledge's claimable cursors");
-        assertTrue(cursors.findClaimable(20).isEmpty(), "batch is no longer polluted next tick");
+        assertTrue(cursors.findClaimable(java.util.List.of("k1"), 20).isEmpty(),
+                "batch is no longer polluted next tick");
     }
 
     @Test

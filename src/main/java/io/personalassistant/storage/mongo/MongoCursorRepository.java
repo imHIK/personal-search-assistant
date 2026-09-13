@@ -27,6 +27,7 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -83,12 +84,15 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
-    public List<Cursor> findClaimable(int limit) {
+    public List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit) {
         List<Cursor> out = new ArrayList<>();
+        if (knowledgeIds.isEmpty()) {
+            return out;
+        }
         // Fairness: least-recently-run first. Never-run cursors (null lastRunAt) sort first in
         // Mongo ascending order, so fresh work is picked up promptly and no active knowledge can
         // monopolise the bounded batch.
-        collection().find(claimableFilter(Instant.now()))
+        collection().find(and(in("knowledgeId", knowledgeIds), claimableFilter(Instant.now())))
                 .sort(ascending("stats.lastRunAt"))
                 .limit(limit)
                 .forEach(d -> out.add(fromDoc(d)));

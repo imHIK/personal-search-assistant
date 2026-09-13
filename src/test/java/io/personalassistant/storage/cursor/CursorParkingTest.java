@@ -79,7 +79,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("a", "k1", CursorStatus.AVAILABLE, null));
         cursors.suspendByKnowledge("k1");
 
-        assertTrue(cursors.findClaimable(100).isEmpty(), "parked cursors are not claimable");
+        assertTrue(cursors.findClaimable(List.of("k1"), 100).isEmpty(), "parked cursors are not claimable");
     }
 
     @Test
@@ -105,7 +105,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(rateLimited("elapsed", "k1", Instant.now().minusSeconds(1)));
         cursors.insertIfAbsent(rateLimited("stranded", "k1", null));
 
-        List<String> claimable = cursors.findClaimable(100).stream().map(Cursor::id).toList();
+        List<String> claimable = cursors.findClaimable(List.of("k1"), 100).stream().map(Cursor::id).toList();
 
         assertEquals(List.of("elapsed"), claimable);
         assertTrue(cursors.claim("held", "w1", java.time.Duration.ofMinutes(5)).isEmpty(),
@@ -146,7 +146,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("neverRun", "k1", CursorStatus.AVAILABLE, null));
         cursors.insertIfAbsent(cursor("older", "k1", CursorStatus.AVAILABLE, t1));
 
-        List<String> order = cursors.findClaimable(100).stream().map(Cursor::id).toList();
+        List<String> order = cursors.findClaimable(List.of("k1"), 100).stream().map(Cursor::id).toList();
 
         assertEquals(List.of("neverRun", "older", "recent"), order,
                 "never-run first, then least-recently-run");
@@ -159,7 +159,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("recent", "k1", CursorStatus.AVAILABLE, t2));
         cursors.insertIfAbsent(cursor("older", "k1", CursorStatus.AVAILABLE, t1));
 
-        List<String> top1 = cursors.findClaimable(1).stream().map(Cursor::id).toList();
+        List<String> top1 = cursors.findClaimable(List.of("k1"), 1).stream().map(Cursor::id).toList();
 
         assertEquals(List.of("older"), top1, "the limit keeps the oldest, not insertion order");
         assertFalse(top1.contains("recent"));

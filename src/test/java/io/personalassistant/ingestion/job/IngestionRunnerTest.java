@@ -351,7 +351,7 @@ class IngestionRunnerTest {
         assertEquals(reopensAt, after.retry().nextAttemptAt(), "the limiter's reopening instant is kept");
         assertEquals(1, after.retry().count(), "and it counts against the deferral budget, not retryLimit");
         assertTrue(after.retry().lastError().contains("Rate limited"));
-        assertTrue(cursors.findClaimable(100).isEmpty(), "the hold keeps it out of the poll batch");
+        assertTrue(cursors.findClaimable(List.of(kn.id()), 100).isEmpty(), "the hold keeps it out of the poll batch");
     }
 
     @Test
@@ -361,7 +361,7 @@ class IngestionRunnerTest {
         runner.runLease(kn, cursor, "w1", () -> {});
 
         assertEquals(List.of(cursor.id()),
-                cursors.findClaimable(100).stream().map(Cursor::id).toList(),
+                cursors.findClaimable(List.of(kn.id()), 100).stream().map(Cursor::id).toList(),
                 "no sweeper flips the status — the instant simply stops excluding it");
     }
 

@@ -193,14 +193,14 @@ class DefaultKnowledgeServiceTest {
     @Test
     void pauseParksClaimableCursorsSoTheyStopBeingPicked() {
         Knowledge kn = addKnowledge();
-        assertEquals(2, cursors.findClaimable(100).size(), "fresh cursors are claimable");
+        assertEquals(2, cursors.findClaimable(List.of(kn.id()), 100).size(), "fresh cursors are claimable");
 
         service.pause(kn.id());
 
         assertTrue(cursors.findByKnowledge(kn.id()).stream()
                         .allMatch(c -> c.status() == CursorStatus.SUSPENDED),
                 "pausing parks the knowledge's cursors");
-        assertEquals(0, cursors.findClaimable(100).size(),
+        assertEquals(0, cursors.findClaimable(List.of(kn.id()), 100).size(),
                 "parked cursors no longer pollute the claim batch");
     }
 
@@ -214,7 +214,7 @@ class DefaultKnowledgeServiceTest {
         assertTrue(cursors.findByKnowledge(kn.id()).stream()
                         .allMatch(c -> c.status() == CursorStatus.AVAILABLE),
                 "resuming re-arms parked cursors");
-        assertEquals(2, cursors.findClaimable(100).size(), "re-armed cursors are claimable again");
+        assertEquals(2, cursors.findClaimable(List.of(kn.id()), 100).size(), "re-armed cursors are claimable again");
     }
 
     @Test

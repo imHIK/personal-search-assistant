@@ -61,7 +61,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / SUSPENDED / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
 | §4 Atomic lease + crash recovery (expired lease reclaimable) | `storage.mongo.MongoCursorRepository.claim` / `claimableFilter` (`findOneAndUpdate`) |
 | §5 Backward/forward grabbers, anchor boundary | `ingestion.connector.localfs.LocalFsConnector` (`grabForward` = mtime-ordered bounded pass; `grabBackward` = path-ordered cursor-skipping DFS) |
-| §5 Ingestion loop (batch=page, lease=N batches, persist→advance) | `ingestion.job.IngestionRunner.runLease` + `IngestionJob.tick` |
+| §5 Ingestion loop (batch=page, lease=N batches, persist→advance) | `ingestion.job.IngestionRunner.runLease` + `IngestionJob.tick` (claim batch drawn only from eligible knowledges — ACTIVE with a usable connection, plus PAUSED — via `CursorRepository.findClaimable(knowledgeIds, limit)`; a skipped cursor never advances `lastRunAt`, so filtering after the query lets skipped cursors starve the batch) |
 | §5 Forward scheduling (IDLE → AVAILABLE) | `ingestion.job.ForwardCursorScheduler` + `CursorRepository.armForwardCursors` |
 | Per-source schedule (custom → connector default → global) | `ingestion.schedule.ScheduleResolver` (+ `domain.model.SyncSchedule`, `SourceConnector.defaultSchedule`, `Knowledge.nextSyncDueAt`). Each tick arms only knowledges whose `nextSyncDueAt` has arrived, then rolls it forward by the resolved interval/cron |
 | Dynamic iterables (new sub-streams over time) | `SourceConnector.hasDynamicIterables` + `ingestion.job.IterableDiscoveryScheduler` + `KnowledgeService.reconcileCursors` |

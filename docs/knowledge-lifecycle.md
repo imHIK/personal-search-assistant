@@ -121,15 +121,24 @@ A poll loop (`IngestionJob.tick`, every `app.ingestion.poll-interval`, default 3
 into entities.
 
 ### Per tick
-1. **Find claimable cursors** — `AVAILABLE`, `RATE_LIMITED` whose `retry.nextAttemptAt` has passed,
-   or `IN_PROGRESS` whose lease has expired (crash recovery), ordered **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so
-   no active knowledge can monopolise the bounded batch. Direction is irrelevant; backward and
-   forward are treated identically.
-2. For each candidate:
-   - Skip if its Knowledge isn't `ACTIVE`. If it is `PAUSED`, **park** the knowledge's claimable
-     cursors (`→ SUSPENDED`) so they drop out of the batch — a backstop for cursors that were leased
-     when the knowledge was paused (the bulk park happens in `pause()`; `resume()` re-arms). Orphan
-     cursors (knowledge gone) are left for the delete path.
+1. **Decide which knowledges are eligible** — `ACTIVE` ones whose connection is not `ERROR`, plus
+   `PAUSED` ones (so the backstop below can still park their stragglers).
+2. **Find claimable cursors of those knowledges** — `AVAILABLE`, `RATE_LIMITED` whose
+   `retry.nextAttemptAt` has passed, or `IN_PROGRESS` whose lease has expired (crash recovery), ordered
+   **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so no active knowledge
+   can monopolise the bounded batch. Direction is irrelevant; backward and forward are treated
+   identically.
+
+   Eligibility is applied in the query rather than by skipping, because a skipped cursor is never
+   written: its `lastRunAt` stays put, it keeps its place at the head of the batch, and twenty of them
+   stop every source. Orphan cursors (knowledge gone), cursors of a `DRAFT`/`ERROR`/`DELETED`
+   knowledge, and cursors of a source whose token has expired are therefore never in the batch at all.
+   They are not cleaned up either — see [`deletion-flow.md`](./deletion-flow.md) for how they arise.
+3. For each candidate:
+   - Skip if its Knowledge isn't `ACTIVE` (it may have changed since step 1). If it is `PAUSED`,
+     **park** the knowledge's claimable cursors (`→ SUSPENDED`) so they drop out of the batch — a
+     backstop for cursors that were leased when the knowledge was paused (the bulk park happens in
+     `pause()`; `resume()` re-arms).
    - **Acquire a permit** from `PermitService`, scoped at three levels at once — `global`,
      `connector:<TYPE>`, `knowledge:<id>` — so one source can't starve the rest. No permit → try
      again next tick.
@@ -347,7 +356,7 @@ indexing timestamp alone, or a revived item will read as brand new.
 | Edit | `PATCH /api/knowledge/{id}` | Update name/schedule (in place) or auth/inputs (re-verify → re-discover → reconcile). See [`knowledge-edit-design.md`](./knowledge-edit-design.md). |
 | Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE/RATE_LIMITED → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
-| Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |
+| Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, `DiscoveryStatusRepository.deleteByKnowledge`, finally drop the Knowledge. Not transactional, not resumable, not lease-aware — see [`deletion-flow.md`](./deletion-flow.md) for the known gaps |
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
 | Set a retention window | `PATCH /api/knowledge/{id}` (`retentionPeriod`) | Config-class edit. Changes only what a later sweep removes, never what is ingested. Absent means unchanged; an explicit `null` clears it back to never-expire. |
 | Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs. For a `FETCH_AND_REINDEX` connector it first re-fetches the item synchronously (`fetchOne` → `materialize` → `upsert`), so the call can take as long as one download |

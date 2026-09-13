@@ -170,7 +170,8 @@ edit / pause / delete semantics), `docs/indexing-design.md` + `docs/indexing-imp
 two stages, and the config reference in §6), `docs/connectors.md` (the `SourceConnector` SPI and
 `Connection` auth), `docs/parsing-and-chunking.md`, `docs/providers.md` (embedding + LLM providers,
 including the ONNX model export), `docs/digests.md` + `docs/tasks.md` (scheduled saved searches, and
-the two-half task library the bundled catalogue and user-written tasks form), `docs/publishing.md` (channels, the delivery outbox, the Gmail email publisher, connection types), `docs/mongodb-schema.md`
+the two-half task library the bundled catalogue and user-written tasks form), `docs/publishing.md` (channels, the delivery outbox, the Gmail email publisher, connection types), `docs/deletion-flow.md`
+(every delete path today and its known gaps — input to the deletion redesign; don't patch those gaps one at a time), `docs/mongodb-schema.md`
 / `docs/opensearch-index.md` (persistence), `docs/limitations.md` (L1–L10 accepted gaps — don't "fix"
 these unprompted; L11 is closed and kept as the record of why re-index re-fetches).
 `application.properties` is the tiebreaker for any config default, but **content** — prompts and

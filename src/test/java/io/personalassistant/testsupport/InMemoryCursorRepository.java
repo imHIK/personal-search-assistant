@@ -8,6 +8,7 @@ import io.personalassistant.storage.repository.CursorRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,10 +36,12 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     @Override
-    public List<Cursor> findClaimable(int limit) {
+    public List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit) {
         Instant now = Instant.now();
-        // Mirror the Mongo adapter: least-recently-run first, never-run (null lastRunAt) first.
+        // Mirror the Mongo adapter: eligible knowledges only, least-recently-run first, never-run
+        // (null lastRunAt) first.
         return store.values().stream()
+                .filter(c -> knowledgeIds.contains(c.knowledgeId()))
                 .filter(c -> isClaimable(c, now))
                 .sorted(Comparator.comparing(
                         (Cursor c) -> c.stats().lastRunAt(),
