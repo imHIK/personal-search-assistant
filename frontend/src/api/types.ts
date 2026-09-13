@@ -195,7 +195,8 @@ export interface RateLimitPolicy {
 export interface Connection {
   id: string
   name: string
-  type: SourceType
+  /** Connection type: a SourceType name (`GMAIL`) or a type something else uses (`GMAIL_SEND`). */
+  type: string
   /** Returned **unredacted** by the backend — mask before rendering. */
   auth: Blob
   config: Blob
@@ -216,7 +217,7 @@ export interface Connection {
 
 export interface CreateConnectionBody {
   name: string
-  type: SourceType
+  type: string
   auth?: Blob
   config?: Blob
   rateLimit?: RateLimitPolicy
@@ -331,6 +332,8 @@ export interface Digest {
    * so changing a digest never silently makes it re-report its whole window.
    */
   historyResetAt: string | null
+  /** Channels each run that finds something new — or fails — is sent to. Empty sends nowhere. */
+  channelIds: string[]
 }
 
 export type CreateDigestBody = Pick<Digest, 'name'> &
@@ -453,4 +456,79 @@ export interface EntitySummary {
   title: string | null
   uri: string | null
   status: string | null
+}
+
+// ---- Publishing -----------------------------------------------------------------------------
+
+export type ChannelType = 'EMAIL' | 'SLACK' | 'WHATSAPP'
+export type ChannelStatus = 'ACTIVE' | 'ERROR'
+export type DeliveryStatus = 'PENDING' | 'SENT' | 'FAILED'
+
+/** Somewhere a message can be sent. The SMTP account that sends is server config, not part of it. */
+export interface Channel {
+  id: string
+  name: string
+  type: ChannelType
+  /** The account it sends through; null means the default account of that type. */
+  connectionId: string | null
+  /** Publisher-defined destination. EMAIL: `{ to: string[], cc?: string[], subjectPrefix?: string }`. */
+  target: Blob
+  /** A paused channel keeps its messages queued rather than failing them. */
+  enabled: boolean
+  /** ERROR = a send was refused permanently; queued messages wait until a test succeeds. */
+  status: ChannelStatus
+  lastError: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface CreateChannelBody {
+  name: string
+  type: ChannelType
+  connectionId?: string
+  target: Blob
+  enabled?: boolean
+}
+
+/** Absent fields are unchanged. `target` replaces the whole target. */
+export interface PatchChannelBody {
+  name?: string
+  /** `''` switches back to the default account; absent leaves it unchanged. */
+  connectionId?: string
+  target?: Blob
+  enabled?: boolean
+}
+
+export interface PublishMessageItem {
+  title: string | null
+  uri: string | null
+  text: string | null
+  fields: Record<string, string | number | boolean>
+}
+
+/** What to say, with no markup — each channel renders it. */
+export interface PublishMessage {
+  title: string | null
+  intro: string | null
+  items: PublishMessageItem[]
+  link: string | null
+}
+
+/** One message on its way to one channel. */
+export interface Delivery {
+  id: string
+  channelId: string
+  origin: { kind: string; refId: string | null }
+  dedupeKey: string | null
+  message: PublishMessage
+  status: DeliveryStatus
+  /** Consecutive failed attempts; reset by a send or a retry. */
+  attempts: number
+  nextAttemptAt: string | null
+  /** Set while a worker is sending it. */
+  leasedUntil: string | null
+  lastError: string | null
+  providerMessageId: string | null
+  createdAt: string
+  sentAt: string | null
 }

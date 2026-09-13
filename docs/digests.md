@@ -25,7 +25,8 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
   "collapseDuplicates": true,
   "maxChunksPerEntity": 1,
   "onlyNew": true,                    // what makes a digest a digest
-  "enabled": true
+  "enabled": true,
+  "channelIds": ["chn_…"]              // publishing channels each run is sent to; empty = nowhere
 }
 ```
 
@@ -89,6 +90,16 @@ Everything here degrades to *no annotations* rather than failing. A model that i
 shape, wrapped its object in prose, or numbered a source dropped for budget costs the annotation and
 nothing else: the items are real search results and worth showing, and `taskOutput` still holds the
 reply verbatim for whoever wants to see why.
+
+That fallback is what the console renders as the run's **Summary** — a boxed panel above the items,
+sharing the search answer's Markdown renderer and its `[n]` citation chips, so a chip scrolls to the
+result the sentence rests on. It resolves `n` the same way the annotation join does, which is why the
+console reads the digest's task `sourceText`: under `ENTITY` the model numbered one source per
+document, not one per hit. A **built-in** task reports no `sourceText` (`TaskDto` redacts a bundled
+entry's spec), so the console falls back to the uncollapsed mapping there — right for `CHUNK`, the
+default, and identical under either mode for any run whose items are already one per document. The
+panel is shown only when nothing was annotated: the same text twice, once as prose and once as
+badges, is noise.
 
 ## Why a quiet run is quiet
 
@@ -172,6 +183,7 @@ with a 200 either way.
 | `GET /api/digests/{id}/runs` | history, newest first (`?limit=` capped at 100, `?offset=`) |
 | `GET /api/digests/{id}/runs/{runId}` | one run; 404 when it belongs to another digest |
 | `GET /api/digests/{id}/runs/latest` | the most recent run, 404 if it has never run |
+| `GET /api/deliveries?refId={runId}` | what one run was sent to (see *Sending results to channels*) |
 
 `GET /api/entities/{id}` is adjacent rather than part of this API, but exists for it: a digest that
 searches *by* a document holds only `sourceEntityId`, and the console was rendering "Like ent_3f9…"
@@ -187,7 +199,34 @@ holds and which would grow the collection without bound. A run also carries `can
 Run history is currently unbounded, though `historyResetAt` bounds the *seen-set* read. See
 [L8](./limitations.md).
 
-## Later
+## Sending results to channels
 
-Email is a thin consumer of `DigestRun`: `quarkus-mailer` plus SMTP config and a sender that formats
-the latest run. Nothing in the model needs to change for it.
+`channelIds` names publishing channels ([`publishing.md`](./publishing.md)). After a run is recorded it is
+queued once per channel when it is worth a message:
+
+| run | sent? |
+|---|---|
+| found items | yes — the items with their annotations, and the task's reply as a summary when it annotated nothing |
+| failed | yes — a short "*name* failed" notice carrying the error |
+| quiet (nothing new) | no |
+
+A quiet run sends nothing because a daily "nothing new" trains people to ignore the message that
+matters. A failure sends because a digest someone relies on by email is exactly the one whose run history
+nobody opens. **Run now** sends like a scheduled run — it is the quickest way to see the email.
+
+The message mirrors the run view: the same items, annotation keys labelled the way the console labels
+them (`next_step` → "Next step"), the summary under the same rule, and a link back to the digest built
+from `app.console.url`.
+
+Queuing only writes delivery rows, keyed `digestRun:<runId>:<channelId>`, so it cannot slow or fail the
+run, and a replayed run queues nothing twice. A failure to queue is logged and the run is still recorded.
+`GET /api/deliveries?refId=<runId>` is what the console reads for the "Sent to" line under each run.
+
+An unknown channel id is a 400 on create and on edit, and a channel a digest still sends to cannot be
+deleted (409) — dropping it from the digest instead would turn its emails off without anyone deciding to.
+`PATCH` treats `channelIds` like the other fields: absent leaves it, `null` or `[]` sends nowhere.
+
+> **Citations in the email.** The summary's `[n]` markers are rendered as written. The console resolves
+> them through the task's source mode; the email does not, so under a whole-document task a run holding
+> several chunks of one document can cite a number that differs from the item's position. Digests default
+> to one result per document, which avoids it.

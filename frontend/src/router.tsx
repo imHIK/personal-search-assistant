@@ -3,6 +3,8 @@ import { Layout } from '@/components/Layout'
 import { RouteError } from '@/components/RouteError'
 import { AccountFormPage } from '@/features/accounts/AccountFormPage'
 import { AccountsPage } from '@/features/accounts/AccountsPage'
+import { ChannelFormPage } from '@/features/channels/ChannelFormPage'
+import { ChannelsPage } from '@/features/channels/ChannelsPage'
 import { DigestDetailPage } from '@/features/digests/DigestDetailPage'
 import { DigestsPage } from '@/features/digests/DigestsPage'
 import { SearchPage } from '@/features/search/SearchPage'
@@ -34,6 +36,9 @@ export const router = createBrowserRouter([
       { path: 'connections', element: <AccountsPage /> },
       { path: 'connections/new', element: <AccountFormPage /> },
       { path: 'connections/:id', element: <AccountFormPage /> },
+      { path: 'channels', element: <ChannelsPage /> },
+      { path: 'channels/new', element: <ChannelFormPage /> },
+      { path: 'channels/:id', element: <ChannelFormPage /> },
     ],
   },
 ])

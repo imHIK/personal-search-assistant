@@ -146,6 +146,10 @@ public class DefaultTaskService implements TaskService {
      * Render a raw task's prompt once, with placeholder values, so a typo surfaces as a 400 while its
      * author is present. {@code PromptTemplate} throws on an unresolved {@code {{name}}}, and without
      * this the first sign of one would be a scheduled run failing hours later.
+     *
+     * <p>One probe map covers both messages because the runtime builds one too — see
+     * {@code AnswerPromptBuilder.render} — so a placeholder that passes here is a placeholder that
+     * resolves when the task actually runs, wherever its author chose to put it.
      */
     private void dryRender(Task task) {
         PromptTemplate prompt = library.resolve(task).prompt();

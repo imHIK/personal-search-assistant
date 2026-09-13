@@ -2,7 +2,6 @@ package io.personalassistant.domain.model;
 
 import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
-import io.personalassistant.domain.model.enums.SourceType;
 import java.time.Instant;
 import java.util.Map;
 
@@ -14,7 +13,7 @@ import java.util.Map;
  * whichever they want, without duplicating credentials on every knowledge.
  *
  * <p>Connections are a <strong>generic framework</strong>, not a Google-specific one: a connection is
- * keyed by {@link SourceType} and carries two opaque, connector-defined blobs — {@link #auth}
+ * keyed by its connection {@link #type} and carries two opaque, connector-defined blobs — {@link #auth}
  * (tokens/keys) and {@link #config} (connector-level settings, e.g. an OAuth client or a base URL).
  * The core never inspects either; each connector reads what it needs. Connectors that need no
  * credentials (e.g. {@code LOCAL_FS}) simply never require a connection (see
@@ -26,13 +25,16 @@ import java.util.Map;
  * whether to wait. An absent or unlimited policy means the operator default applies (see
  * {@code RateLimitPolicies}), which is what every connection has until a user sets one.
  *
- * <p><strong>Default per type.</strong> At most one connection per {@link SourceType} is
+ * <p><strong>Default per type.</strong> At most one connection per type is
  * {@link #isDefault()}. A knowledge that names no connection resolves to its type's default, so the
  * common single-account case needs no per-knowledge wiring.
  *
  * @param id        stable id, e.g. {@code "conn_..."}
  * @param name      human-friendly label ("Work Gmail")
- * @param type      which connector this connection authenticates
+ * @param type      the connection type — what the credential is for. A {@code SourceType} name for a
+ *                  connector's account ({@code GMAIL}), or a type something else registers
+ *                  ({@code GMAIL_SEND}, the email publisher's send-only account). Resolved through
+ *                  {@code ConnectionKindRegistry}, so a connection is not tied to the knowledge flow
  * @param auth      opaque credentials (access/refresh tokens, API keys); never inspected by the core
  * @param config    opaque connector-level settings (OAuth client, base URL overrides); never inspected
  * @param rateLimit ceilings on this account's outbound call rate; null or empty means no account-level
@@ -46,7 +48,7 @@ import java.util.Map;
 public record Connection(
         String id,
         String name,
-        SourceType type,
+        String type,
         Map<String, Object> auth,
         Map<String, Object> config,
         RateLimitPolicy rateLimit,

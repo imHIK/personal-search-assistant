@@ -70,6 +70,13 @@ machinery it already has. See `docs/limitations.md` L11.
 
 ## Connections (credentials, separated from knowledges)
 
+> **Connections are not only for knowledges.** A connection's `type` is a *connection type* — a
+> `SourceType` name for a connector's account, or a type something else registers, such as the email
+> channel's send-only `GMAIL_SEND` ([`publishing.md`](./publishing.md)). `ConnectionKindRegistry`
+> resolves the type to its check: a connector that `requiresConnection()` is registered automatically
+> and verified by its own `verifyConnection`; anything else is a `ConnectionKind` bean. Nothing below
+> changes for connectors.
+
 Credentials do **not** live on a knowledge. They live in a reusable, first-class **`Connection`**
 (the `connections` collection) that a knowledge authenticates *through*. This is a generic framework,
 not a Google-specific one: a connection is keyed by `SourceType` and carries two opaque, connector-
@@ -158,15 +165,26 @@ Both Google connectors resolve a bearer token through the shared `GoogleAccessTo
 | `auth` | `refreshToken` | long-lived token used to mint new access tokens |
 | `config` | `clientId` / `clientSecret` | OAuth client used to refresh (falls back to app config) |
 
-When the access token is missing or near expiry and a refresh token is present, the provider mints a
-fresh token from the OAuth endpoint, caches it in-process (keyed by connection id), **and writes it
-back onto the connection** so it survives restarts and is shared by every knowledge on that account.
-The app-level fallback client is `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (see
-`app.ingestion.google.*`). Swapping in a real secret store is a drop-in replacement of the
+When the access token is missing or near expiry and a refresh token is present, a fresh token is
+minted from the OAuth endpoint, cached in-process (keyed by connection id), **and written back onto
+the connection** so it survives restarts and is shared by every knowledge on that account. The
+app-level fallback client is `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (see
+`app.oauth.google.*`). Swapping in a real secret store is a drop-in replacement of the
 `GoogleAccessTokens` / `ConnectionRepository` beans — no connector changes.
 
+`DefaultGoogleAccessTokens` is only a facade: it pairs the bearer with Google's rate-limit bucket, and
+delegates the credential handling to the provider-neutral `OAuthTokenService`. The refresh, caching,
+write-back and revoked-grant behaviour are shared with every OAuth provider — **see `docs/oauth.md`**,
+which is also where the consent flow (`POST /api/connections/oauth/google/start`) and the rule that
+matters operationally live:
+
+> A refresh token issued by a client whose consent screen is still in **Testing** is revoked by Google
+> after **7 days**, no matter what this application does. The consent screen must be published
+> ("In production") for a Google connection to survive. Unverified is fine for a personal deployment.
+
 Required OAuth scopes: `https://www.googleapis.com/auth/gmail.readonly` and
-`https://www.googleapis.com/auth/drive.readonly`.
+`https://www.googleapis.com/auth/drive.readonly`. They are declared in `GoogleOAuthProvider`, which is
+what the consent flow requests.
 
 ### Connection health
 
@@ -175,8 +193,13 @@ expired afterwards left its connection reading `ACTIVE` while every sync failed:
 past in the log, the console showed nothing wrong, and the first real signal was that the data had
 quietly stopped updating.
 
-`ConnectionHealthScheduler` re-runs `verifyConnection` on every connection every
+`ConnectionHealthScheduler` re-runs each connection's check (`verifyConnection` for a connector's
+account, `ConnectionKind.verify` otherwise) on every connection every
 `app.connections.health-interval` (30m) and records the outcome as `ConnectionStatus` + `lastError`.
+It is no longer the only signal: a provider that reports the grant is permanently dead
+(`CredentialsRejectedException`) marks the connection `ERROR` on the spot, so the skip and the
+console's reconnect banner happen on the next tick rather than up to 30 minutes later — see
+`docs/oauth.md` §4.
 `POST /api/connections/{id}/test` does the same on demand, and is what the console's **Test** button
 calls. Both return 200 whether or not the check passed — a bad credential is a result to display, not
 a 4xx.

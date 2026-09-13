@@ -36,6 +36,11 @@ public class InMemoryDigestRepository implements DigestRepository {
     }
 
     @Override
+    public List<Digest> findByChannelId(String channelId) {
+        return store.values().stream().filter(d -> d.channelIds().contains(channelId)).toList();
+    }
+
+    @Override
     public List<Digest> findDue(Instant now, int limit) {
         return store.values().stream()
                 .filter(Digest::enabled)

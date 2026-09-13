@@ -42,7 +42,8 @@ public record DigestPatchDto(JsonNode body) {
                 patch.bool("collapseDuplicates"),
                 patch.integer("maxChunksPerEntity"),
                 patch.bool("onlyNew"),
-                patch.bool("enabled"));
+                patch.bool("enabled"),
+                patch.strings("channelIds"));
     }
 
     private static Patched<String> window(PatchBody patch) {

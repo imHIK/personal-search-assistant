@@ -5,14 +5,18 @@ import io.personalassistant.agent.JsonReplies;
 import io.personalassistant.agent.SearchAgent;
 import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.common.id.Ids;
+import io.personalassistant.domain.model.Delivery;
 import io.personalassistant.domain.model.Digest;
 import io.personalassistant.domain.model.DigestRun;
+import io.personalassistant.domain.model.PublishMessage;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.domain.service.DigestPatch;
 import io.personalassistant.domain.service.DigestService;
+import io.personalassistant.domain.service.PublishingService;
 import io.personalassistant.domain.service.SearchService;
+import io.personalassistant.storage.repository.ChannelRepository;
 import io.personalassistant.storage.repository.DigestRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -50,6 +54,8 @@ public class DefaultDigestService implements DigestService {
     private final SearchService search;
     private final SearchAgent agent;
     private final TaskLibrary library;
+    private final ChannelRepository channels;
+    private final PublishingService publishing;
 
     /**
      * How many extra candidates a run asks for when it is going to discard already-seen ones. Without
@@ -59,17 +65,25 @@ public class DefaultDigestService implements DigestService {
     @ConfigProperty(name = "app.digest.new-item-multiplier", defaultValue = "4")
     int newItemMultiplier;
 
+    /** Where the console is served — only to build the link a published run carries back to its digest. */
+    @ConfigProperty(name = "app.console.url", defaultValue = "http://localhost:8080")
+    String consoleUrl;
+
     @Inject
     public DefaultDigestService(DigestRepository digests, SearchService search, SearchAgent agent,
-                                TaskLibrary library) {
+                                TaskLibrary library, ChannelRepository channels,
+                                PublishingService publishing) {
         this.digests = digests;
         this.search = search;
         this.agent = agent;
         this.library = library;
+        this.channels = channels;
+        this.publishing = publishing;
     }
 
     @Override
     public Digest create(Digest digest) {
+        requireChannels(digest.channelIds());
         Instant now = Instant.now();
         Digest stored = new Digest(
                 digest.id() == null || digest.id().isBlank() ? Ids.digest() : digest.id(),
@@ -79,7 +93,7 @@ public class DefaultDigestService implements DigestService {
                 digest.enabled(),
                 // Left null so the first run happens on the next tick rather than one whole interval
                 // from now — a digest you just created and cannot see the output of looks broken.
-                null, now, now);
+                null, now, now, null, digest.channelIds());
         return digests.save(stored);
     }
 
@@ -112,6 +126,9 @@ public class DefaultDigestService implements DigestService {
         }
         if (merged.name() == null || merged.name().isBlank()) {
             throw new IllegalArgumentException("name must not be blank");
+        }
+        if (patch.channelIds().present()) {
+            requireChannels(merged.channelIds());
         }
         return digests.save(merged);
     }
@@ -350,8 +367,51 @@ public class DefaultDigestService implements DigestService {
     private DigestRun record(Digest digest, Instant ranAt, List<DigestRun.Item> items,
                              String taskOutput, int candidates, int suppressed, int outsideWindow,
                              String error) {
-        return digests.saveRun(new DigestRun(Ids.digestRun(), digest.id(), ranAt, items, taskOutput,
+        DigestRun saved = digests.saveRun(new DigestRun(Ids.digestRun(), digest.id(), ranAt, items, taskOutput,
                 candidates, suppressed, outsideWindow, error));
+        publish(digest, saved);
+        return saved;
+    }
+
+    /**
+     * Queue a recorded run for the digest's channels, when it is worth a message — see
+     * {@link DigestMessages#worthSending}. Both scheduled runs and "run now" come through here, so pressing
+     * the button is also how the email is tried out.
+     *
+     * <p>Only delivery rows are written; the publishing worker sends them, so a slow or broken channel
+     * cannot slow or fail the run. The dedupe key means a replayed run queues nothing twice. Anything that
+     * goes wrong here is logged and swallowed: the run already happened and is recorded, and losing its
+     * message is better than reporting the run itself as failed.
+     */
+    private void publish(Digest digest, DigestRun run) {
+        if (digest.channelIds().isEmpty() || !DigestMessages.worthSending(run)) {
+            return;
+        }
+        PublishMessage message;
+        try {
+            message = DigestMessages.forRun(digest, run, consoleUrl);
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Digest " + digest.id() + ": could not build the message for run " + run.id(), e);
+            return;
+        }
+        for (String channelId : digest.channelIds()) {
+            try {
+                publishing.enqueue(channelId, message, new Delivery.Origin(Delivery.Origin.DIGEST_RUN, run.id()),
+                        "digestRun:" + run.id() + ":" + channelId);
+            } catch (RuntimeException e) {
+                LOG.log(Level.WARNING, "Digest " + digest.id() + ": could not queue run " + run.id()
+                        + " for channel " + channelId, e);
+            }
+        }
+    }
+
+    /** An unknown channel is refused when it is set, rather than discovered when the first run is lost. */
+    private void requireChannels(List<String> channelIds) {
+        for (String channelId : channelIds) {
+            if (channels.findById(channelId).isEmpty()) {
+                throw new IllegalArgumentException("No channel with id " + channelId);
+            }
+        }
     }
 
     private Digest require(String id) {

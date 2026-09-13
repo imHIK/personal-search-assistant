@@ -1,21 +1,8 @@
-import {
-  AlertTriangle,
-  CalendarClock,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  FileText,
-  FolderOpen,
-  History,
-  Play,
-  RotateCcw,
-  Sparkles,
-  Trash2,
-} from 'lucide-react'
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Clock, FileText, FolderOpen, History, Play, RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import type { Digest, DigestRun } from '@/api/types'
+import type { Digest, DigestRun, TaskSourceText } from '@/api/types'
 import { Technical } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -27,6 +14,7 @@ import { formatDigestInterval, formatDigestWindow } from '@/config/constants'
 import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import {
+  useChannels,
   useDigest,
   useDigestActions,
   useDigestRuns,
@@ -36,6 +24,7 @@ import {
 } from '@/hooks/queries'
 import { cn, relativeTime } from '@/lib/utils'
 import { DigestForm } from './DigestForm'
+import { RunDeliveries } from './RunDeliveries'
 import { RunBody, runOutcome, type RunOutcome } from './RunView'
 
 const PAGE = 20
@@ -63,6 +52,7 @@ export function DigestDetailPage() {
 
   const { data: digest, isLoading, error, refetch } = useDigest(id)
   const { data: runs, isLoading: runsLoading } = useDigestRuns(id, PAGE * (page + 1), 0)
+  const { data: tasks } = useTasks()
   const { setEnabled, remove, run, update, resetHistory } = useDigestActions()
 
   const activeTab = (params.get('tab') as TabId | null) ?? 'runs'
@@ -78,6 +68,10 @@ export function DigestDetailPage() {
   if (!digest || !id) return null
 
   const hasMore = (runs?.length ?? 0) >= PAGE * (page + 1)
+  // How the task numbered the sources its summary cites. Null for a built-in task, whose spec the
+  // API redacts — see `citationRanks`.
+  const taskSourceText =
+    (tasks ?? []).find((candidate) => candidate.id === digest.taskId)?.sourceText ?? null
 
   return (
     <>
@@ -157,6 +151,7 @@ export function DigestDetailPage() {
                     next.set('run', group.runs[0].id)
                     setParams(next, { replace: true })
                   }}
+                  taskSourceText={taskSourceText}
                   onWiden={() => setTab('settings')}
                 />
               ) : (
@@ -279,6 +274,8 @@ function SummaryStrip({ digest }: { digest: Digest }) {
   const scoped = (sources ?? []).filter((source) => digest.knowledgeIds.includes(source.id))
   const task = (tasks ?? []).find((candidate) => candidate.id === digest.taskId)
 
+  const { data: channelList } = useChannels()
+  const sendsTo = (channelList ?? []).filter((channel) => digest.channelIds?.includes(channel.id))
   const facts: { icon: typeof FolderOpen; label: string; value: string }[] = [
     // Only for a digest that searches by a document: the subtitle can only say "finds things like",
     // and "like what" is the one thing that digest's page must not leave as an id.
@@ -315,6 +312,11 @@ function SummaryStrip({ digest }: { digest: Digest }) {
       value: digest.taskId
         ? (task?.name ?? labels.digests.taskMissing)
         : labels.digests.taskNone,
+    },
+    {
+      icon: Send,
+      label: labels.digests.sendsTo,
+      value: sendsTo.length > 0 ? sendsTo.map((channel) => channel.name).join(', ') : labels.digests.sendsToNone,
     },
     {
       icon: Clock,
@@ -415,6 +417,7 @@ function RunRow({
   outcome,
   defaultOpen,
   openedByLink,
+  taskSourceText,
   onOpen,
   onWiden,
 }: {
@@ -422,6 +425,7 @@ function RunRow({
   outcome: RunOutcome
   defaultOpen: boolean
   openedByLink: boolean
+  taskSourceText: TaskSourceText | null
   onOpen: () => void
   onWiden: () => void
 }) {
@@ -462,7 +466,8 @@ function RunRow({
 
       {open && (
         <div className="space-y-2 border-t border-[var(--border)] px-4 py-3">
-          <RunBody run={run} outcome={outcome} />
+          <RunBody run={run} outcome={outcome} taskSourceText={taskSourceText} />
+          <RunDeliveries runId={run.id} />
           {outcome.windowed && (
             <button
               type="button"

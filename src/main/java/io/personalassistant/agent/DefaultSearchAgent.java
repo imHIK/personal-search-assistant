@@ -81,11 +81,14 @@ public class DefaultSearchAgent implements SearchAgent {
             variables.forEach(values::putIfAbsent);
         }
 
-        var messages = List.of(new LlmProvider.Message("user",
-                prompts.user(resolvedTask.prompt(), task, query, resolved.hits(),
-                        resolved.textByChunkId())));
+        // One render for both messages, so every value is legal in either half — see
+        // AnswerPromptBuilder.render for why that matters to a user-written prompt.
+        AnswerPromptBuilder.Rendered prompt = prompts.render(resolvedTask.prompt(), task, query,
+                resolved.hits(), resolved.textByChunkId(), values);
+
+        var messages = List.of(new LlmProvider.Message("user", prompt.user()));
         String reply = llm.complete(profiles.get(task.llmProfile()), task.responseFormat(),
-                prompts.system(resolvedTask.prompt(), values), messages);
+                prompt.system(), messages);
         return new TaskResult(reply, resolved.hits());
     }
 }

@@ -2,15 +2,21 @@ package io.personalassistant.app;
 
 import io.personalassistant.agent.prompt.PromptCatalog;
 import io.personalassistant.agent.prompt.TaskLibrary;
+import io.personalassistant.domain.model.Channel;
+import io.personalassistant.domain.model.Delivery;
 import io.personalassistant.domain.model.Digest;
 import io.personalassistant.domain.model.DigestRun;
 import io.personalassistant.domain.model.SyncSchedule;
+import io.personalassistant.domain.model.enums.ChannelStatus;
+import io.personalassistant.domain.model.enums.ChannelType;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.domain.service.DigestPatch;
 import io.personalassistant.domain.service.Patched;
 import io.personalassistant.domain.service.SearchService;
+import io.personalassistant.testsupport.InMemoryChannelRepository;
+import io.personalassistant.testsupport.InMemoryDeliveryRepository;
 import io.personalassistant.testsupport.InMemoryDigestRepository;
 import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.StubSearchAgent;
@@ -64,8 +70,13 @@ class DefaultDigestServiceTest {
     private final InMemoryTaskRepository taskRepository = new InMemoryTaskRepository();
     private final TaskLibrary library = new TaskLibrary(PromptCatalog.bundled(), taskRepository);
 
+    private final InMemoryChannelRepository channels = new InMemoryChannelRepository();
+    private final InMemoryDeliveryRepository deliveries = new InMemoryDeliveryRepository();
+
     private DefaultDigestService service(StubSearchAgent agent) {
-        DefaultDigestService svc = new DefaultDigestService(repository, search, agent, library);
+        DefaultDigestService svc = new DefaultDigestService(repository, search, agent, library, channels,
+                new DefaultPublishingService(channels, deliveries));
+        svc.consoleUrl = "http://console.test/";
         svc.newItemMultiplier = 4;
         return svc;
     }
@@ -492,5 +503,102 @@ class DefaultDigestServiceTest {
 
         Assertions.assertEquals(1, search.queries.size(), "there is no window to blame");
         Assertions.assertEquals(0, empty.outsideWindow());
+    }
+
+    // ---- publishing a run to channels ---------------------------------------------------------------
+
+    private void channel(String id) {
+        Instant now = Instant.now();
+        channels.insert(new Channel(id, "Inbox " + id, ChannelType.EMAIL, null, Map.of(), true, ChannelStatus.ACTIVE,
+                null, now, now));
+    }
+
+    private static DigestPatch sendTo(List<String> channelIds) {
+        return new DigestPatch(null, null, null, null, null, null, null, null, null, null, null, null, null,
+                Patched.of(channelIds));
+    }
+
+    @Test
+    void aRunWithNewItemsIsQueuedOncePerChannel() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        channel("chn_a");
+        channel("chn_b");
+        Digest created = svc.update(svc.create(digest("1d", null, true, 10)).id(), sendTo(List.of("chn_a", "chn_b")));
+        search.result = List.of(hit("ent_a"), hit("ent_b"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertEquals(2, deliveries.store.size());
+        for (Delivery delivery : deliveries.store.values()) {
+            Assertions.assertEquals(Delivery.Origin.DIGEST_RUN, delivery.origin().kind());
+            Assertions.assertEquals(run.id(), delivery.origin().refId());
+            Assertions.assertEquals("digestRun:" + run.id() + ":" + delivery.channelId(), delivery.dedupeKey());
+            Assertions.assertEquals(2, delivery.message().items().size());
+            Assertions.assertTrue(delivery.message().title().startsWith(created.name()), delivery.message().title());
+            Assertions.assertEquals("http://console.test/digests/" + created.id(), delivery.message().link());
+        }
+    }
+
+    @Test
+    void aQuietRunSendsNothing() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        channel("chn_a");
+        Digest created = svc.update(svc.create(digest("1d", null, true, 10)).id(), sendTo(List.of("chn_a")));
+        search.result = List.of();
+
+        svc.run(created.id());
+
+        Assertions.assertTrue(deliveries.store.isEmpty(), "a daily 'nothing new' is noise");
+    }
+
+    @Test
+    void aFailedRunSendsAFailureNotice() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        channel("chn_a");
+        Digest created = svc.update(svc.create(digest("1d", null, true, 10)).id(), sendTo(List.of("chn_a")));
+        search.failure = new IllegalStateException("OpenSearch is down");
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertNotNull(run.error());
+        Delivery notice = deliveries.store.values().iterator().next();
+        Assertions.assertTrue(notice.message().title().endsWith("failed"), notice.message().title());
+        Assertions.assertTrue(notice.message().intro().contains("OpenSearch is down"), notice.message().intro());
+    }
+
+    @Test
+    void aDigestWithNoChannelsSendsNothing() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+        search.result = List.of(hit("ent_a"));
+
+        svc.run(created.id());
+
+        Assertions.assertTrue(deliveries.store.isEmpty());
+    }
+
+    @Test
+    void anUnknownChannelIsRefused() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest created = svc.create(digest("1d", null, true, 10));
+
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> svc.update(created.id(), sendTo(List.of("chn_missing"))));
+        Assertions.assertTrue(svc.get(created.id()).orElseThrow().channelIds().isEmpty());
+    }
+
+    @Test
+    void failingToQueueDoesNotFailTheRun() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        channel("chn_a");
+        Digest created = svc.update(svc.create(digest("1d", null, true, 10)).id(), sendTo(List.of("chn_a")));
+        channels.store.remove("chn_a"); // gone between configuring the digest and the run
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertNull(run.error(), "the run happened; only its message was lost");
+        Assertions.assertEquals(1, run.items().size());
+        Assertions.assertTrue(deliveries.store.isEmpty());
     }
 }

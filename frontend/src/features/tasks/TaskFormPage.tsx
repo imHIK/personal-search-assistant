@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Task, TaskBody, TaskField, TaskFieldType, TaskOutput, TaskSourceText } from '@/api/types'
+import { PlaceholderTextarea } from '@/components/PlaceholderTextarea'
 import { Technical } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -176,22 +177,22 @@ function Editor({
               </div>
 
               <Field label={labels.tasks.rawSystem} required htmlFor="task-system">
-                <Textarea
+                <PlaceholderTextarea
                   id="task-system"
+                  slot="system"
                   rows={10}
                   value={system}
-                  onChange={(event) => setSystem(event.target.value)}
-                  className="font-mono text-[12px]"
+                  onChange={setSystem}
                 />
               </Field>
 
               <Field label={labels.tasks.rawUser} hint={labels.tasks.rawUserHint} htmlFor="task-user">
-                <Textarea
+                <PlaceholderTextarea
                   id="task-user"
+                  slot="user"
                   rows={4}
                   value={user}
-                  onChange={(event) => setUser(event.target.value)}
-                  className="font-mono text-[12px]"
+                  onChange={setUser}
                 />
               </Field>
             </>

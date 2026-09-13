@@ -44,6 +44,33 @@ public class GoogleHttp {
         }
     }
 
+    /** POST a JSON body on behalf of an account and parse the JSON response. */
+    public JsonNode postJson(String url, String jsonBody, GoogleAuth auth, long timeoutSeconds) {
+        HttpCall call = HttpCall.post(url, jsonBody, Duration.ofSeconds(timeoutSeconds),
+                        auth == null ? null : auth.limit())
+                .header("Content-Type", "application/json")
+                .acceptJson();
+        try {
+            return http.json(auth == null ? call : call.header("Authorization", "Bearer " + auth.bearer()));
+        } catch (OutboundHttpException e) {
+            throw translate(e);
+        }
+    }
+
+    /**
+     * POST a form body with no credentials and parse the JSON response. For endpoints that take a token
+     * as a parameter — it belongs in a body, never in a URL that ends up in logs.
+     */
+    public JsonNode postForm(String url, String formBody, long timeoutSeconds) {
+        try {
+            return http.json(HttpCall.post(url, formBody, Duration.ofSeconds(timeoutSeconds), null)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .acceptJson());
+        } catch (OutboundHttpException e) {
+            throw translate(e);
+        }
+    }
+
     private static HttpCall request(String url, GoogleAuth auth, long timeoutSeconds) {
         HttpCall call = HttpCall.get(url, Duration.ofSeconds(timeoutSeconds),
                 auth == null ? null : auth.limit());

@@ -1,7 +1,6 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -31,19 +30,19 @@ public class InMemoryConnectionRepository implements ConnectionRepository {
     }
 
     @Override
-    public List<Connection> findByType(SourceType type) {
-        return store.values().stream().filter(c -> c.type() == type).toList();
+    public List<Connection> findByType(String type) {
+        return store.values().stream().filter(c -> type.equals(c.type())).toList();
     }
 
     @Override
-    public Optional<Connection> findDefault(SourceType type) {
-        return store.values().stream().filter(c -> c.type() == type && c.isDefault()).findFirst();
+    public Optional<Connection> findDefault(String type) {
+        return store.values().stream().filter(c -> type.equals(c.type()) && c.isDefault()).findFirst();
     }
 
     @Override
-    public void clearDefault(SourceType type) {
+    public void clearDefault(String type) {
         store.values().stream()
-                .filter(c -> c.type() == type && c.isDefault())
+                .filter(c -> type.equals(c.type()) && c.isDefault())
                 .toList()
                 .forEach(c -> store.put(c.id(), c.asDefault(false)));
     }

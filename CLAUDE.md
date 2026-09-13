@@ -38,14 +38,14 @@ There is no CI. Match surrounding layout by hand; never bulk-reformat a file you
 
 ## Architecture rules
 
-Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`, `ingestion`, `indexing`, `agent`).
+Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`, `ingestion`, `indexing`, `agent`, `publishing`).
 
 - **Use-case logic goes in `app/Default*Service`.** Resources only map DTO↔domain and exception↔status
   (`NoSuchElementException`→404, `IllegalArgumentException`→400, `IllegalStateException`→409) — there is no
   exception-mapper package.
-- **Nothing is registered in a central place.** Connectors, parsers, and chunking strategies are plain
-  `@ApplicationScoped` beans discovered by `CdiConnectorRegistry` / `CdiParserRegistry` /
-  `CdiChunkingStrategyRegistry`. Adding one = add the bean (+ a `SourceType` constant for a connector).
+- **Nothing is registered in a central place.** Connectors, publishers, parsers, and chunking strategies are plain
+  `@ApplicationScoped` beans discovered by `CdiConnectorRegistry` / `CdiPublisherRegistry` / `CdiConnectionKindRegistry` / `CdiParserRegistry` /
+  `CdiChunkingStrategyRegistry`. Adding one = add the bean (+ a `SourceType` constant for a connector, a `ChannelType` constant for a publisher).
 - **Never inject a concrete embedding or LLM provider.** They carry the `@ProviderImpl` qualifier
   (`common/ProviderImpl.java`), and the active one is produced by `EmbeddingProviderSelector` /
   `LlmProviderSelector` from `app.embedding.provider` / `app.llm.provider`.
@@ -150,9 +150,11 @@ adding `@QuarkusTest` + rest-assured tests for resources; the untested-adapter g
 alternative `onnx-bge` has an empty `app.embedding.onnx.model-path`, so selecting it throws until a
 model is exported. For local dev with neither set `app.embedding.provider=local-hashing`.
 Optional env vars: `GROQ_API_KEY` (answers), `GEMINI_API_KEY` (hosted embeddings),
-`GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh). No `.env` file — bare env vars.
+`GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh and the email channel's sending account). No `.env` file — bare env vars.
 
-Credentials live on `Connection` (`connections` collection, one default per `SourceType`), not on `Knowledge`.
+Credentials live on `Connection` (`connections` collection, one default per connection type), not on `Knowledge`.
+A connection type is a `SourceType` name for a connector's account or a type registered by a `ConnectionKind`
+bean (`GMAIL_SEND`, the email channel's send-only Google account) — see `docs/publishing.md` § Accounts.
 
 ## Docs
 
@@ -168,7 +170,7 @@ edit / pause / delete semantics), `docs/indexing-design.md` + `docs/indexing-imp
 two stages, and the config reference in §6), `docs/connectors.md` (the `SourceConnector` SPI and
 `Connection` auth), `docs/parsing-and-chunking.md`, `docs/providers.md` (embedding + LLM providers,
 including the ONNX model export), `docs/digests.md` + `docs/tasks.md` (scheduled saved searches, and
-the two-half task library the bundled catalogue and user-written tasks form), `docs/mongodb-schema.md`
+the two-half task library the bundled catalogue and user-written tasks form), `docs/publishing.md` (channels, the delivery outbox, the Gmail email publisher, connection types), `docs/mongodb-schema.md`
 / `docs/opensearch-index.md` (persistence), `docs/limitations.md` (L1–L10 accepted gaps — don't "fix"
 these unprompted; L11 is closed and kept as the record of why re-index re-fetches).
 `application.properties` is the tiebreaker for any config default, but **content** — prompts and

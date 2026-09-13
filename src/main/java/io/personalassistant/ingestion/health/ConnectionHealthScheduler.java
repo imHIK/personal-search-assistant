@@ -1,9 +1,9 @@
 package io.personalassistant.ingestion.health;
 
+import io.personalassistant.connection.ConnectionKindRegistry;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.service.ConnectionService;
-import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,14 +34,14 @@ public class ConnectionHealthScheduler {
 
     private final ConnectionRepository connections;
     private final ConnectionService service;
-    private final ConnectorRegistry connectors;
+    private final ConnectionKindRegistry kinds;
 
     @Inject
     public ConnectionHealthScheduler(ConnectionRepository connections, ConnectionService service,
-                                     ConnectorRegistry connectors) {
+                                     ConnectionKindRegistry kinds) {
         this.connections = connections;
         this.service = service;
-        this.connectors = connectors;
+        this.kinds = kinds;
     }
 
     @Scheduled(every = "{app.connections.health-interval}",
@@ -68,7 +68,7 @@ public class ConnectionHealthScheduler {
         // DISABLED is an operator decision; re-checking it would only produce noise, and the service
         // deliberately refuses to re-activate it anyway.
         if (connection.status() == ConnectionStatus.DISABLED
-                || !connectors.supports(connection.type())) {
+                || !kinds.supports(connection.type())) {
             return;
         }
         ConnectionStatus before = connection.status();

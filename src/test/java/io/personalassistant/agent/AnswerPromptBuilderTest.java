@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.agent.prompt.PromptCatalog;
+import io.personalassistant.agent.prompt.PromptTemplate;
 import io.personalassistant.agent.prompt.TaskSpec;
 import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.domain.model.search.SearchHit;
@@ -194,5 +195,31 @@ class AnswerPromptBuilderTest {
         assertEquals("Question: " + query().text() + "\n\nSources:\n",
                 builder().user(task(24_000, 10), query(), List.of()),
                 "no hits means an empty sources block; DefaultSearchAgent short-circuits before this");
+    }
+
+    /**
+     * The author of a task's prompt should not have to know which half of it the framework supplies a
+     * given value to. Both messages render from one map, so a placeholder written into the "other" half
+     * resolves rather than throwing — which, for a task a digest runs on a schedule, used to mean a run
+     * failing hours after the prompt was saved.
+     */
+    @Test
+    void rendersEveryValueIntoBothHalvesOfThePrompt() {
+        AnswerPromptBuilder builder = builder();
+        builder.clock = Clock.fixed(Instant.parse("2026-08-10T09:00:00Z"), ZoneOffset.UTC);
+        PromptTemplate prompt = new PromptTemplate("t", "swapped halves",
+                "Judge {{sources}} as of {{today}}", "{{query}} — fenced with {{fence}} on {{today}}",
+                List.of());
+
+        AnswerPromptBuilder.Rendered rendered = builder.render(prompt, task(24_000, 10), query(),
+                List.of(hit("Holidays 2026", "rows")), Map.of(), Map.of());
+
+        assertTrue(rendered.system().contains("[1] Holidays 2026"),
+                "sources must reach the system half too: " + rendered.system());
+        assertTrue(rendered.system().contains("2026-08-10"));
+        assertTrue(rendered.user().contains("2026-08-10"),
+                "today must reach the user half too: " + rendered.user());
+        assertTrue(rendered.user().contains("\"\"\""));
+        assertTrue(rendered.user().contains(query().text()));
     }
 }

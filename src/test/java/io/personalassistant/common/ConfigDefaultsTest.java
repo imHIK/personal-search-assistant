@@ -74,7 +74,12 @@ class ConfigDefaultsTest {
             "app.scheduler.discovery-interval",
             "app.retention.poll-interval",
             "app.digest.poll-interval",
-            "app.connections.health-interval");
+            "app.publishing.poll-interval",
+            "app.connections.health-interval",
+            // Composed per provider id by OAuthClients ("app.oauth." + id + ".client-id"), which is
+            // exactly what lets a new OAuth provider ship two properties and no resolution code.
+            "app.oauth.google.client-id",
+            "app.oauth.google.client-secret");
 
     @Test
     void codeDefaultsAgreeWithApplicationProperties() throws IOException {

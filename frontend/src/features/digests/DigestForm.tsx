@@ -15,7 +15,7 @@ import {
 } from '@/config/constants'
 import { labels } from '@/config/labels'
 import { buildFilters, filtersForSources, searchFilters } from '@/config/searchFilters'
-import { useEntity, useKnowledgeList, useTasks } from '@/hooks/queries'
+import { useChannels, useEntity, useKnowledgeList, useTasks } from '@/hooks/queries'
 import { SearchFilters } from '@/features/search/SearchFilters'
 import { DocumentPicker } from './DocumentPicker'
 
@@ -39,11 +39,13 @@ interface Props {
 export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }: Props) {
   const { data: sources } = useKnowledgeList()
   const { data: tasks } = useTasks()
+  const { data: channels } = useChannels()
 
   const [name, setName] = useState(initial?.name ?? '')
   const [query, setQuery] = useState(initial?.query ?? '')
   const [sourceEntityId, setSourceEntityId] = useState(initial?.sourceEntityId ?? '')
   const [knowledgeIds, setKnowledgeIds] = useState<string[]>(initial?.knowledgeIds ?? [])
+  const [channelIds, setChannelIds] = useState<string[]>(initial?.channelIds ?? [])
   // No time limit by default. The window filters on when something was last indexed, so a source
   // that is ingested once and then left alone falls out of a short window and stays out — a new
   // digest defaulted to "Last day" over a settled source was empty on every run, with nothing on
@@ -90,6 +92,11 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
       current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
     )
 
+  const toggleChannel = (id: string) =>
+    setChannelIds((current) =>
+      current.includes(id) ? current.filter((c) => c !== id) : [...current, id],
+    )
+
   const setFilter = (id: string, value: string | null) =>
     setFilterValues((current) => {
       const next = { ...current }
@@ -117,6 +124,7 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
       maxChunksPerEntity: onePerDocument ? 1 : null,
       collapseDuplicates,
       onlyNew,
+      channelIds,
     })
   }
 
@@ -320,6 +328,34 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
             label={labels.digests.groupDuplicates}
           />
         </div>
+
+        <fieldset className="space-y-1">
+          <legend className="text-xs font-medium text-[var(--text-muted)]">
+            {labels.digests.sendToLabel}
+          </legend>
+          <span className="block text-[11px] text-[var(--text-subtle)]">{labels.digests.sendToHint}</span>
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
+            {(channels ?? []).map((channel) => (
+              <label key={channel.id} className="flex items-center gap-1.5 text-xs">
+                <input
+                  type="checkbox"
+                  checked={channelIds.includes(channel.id)}
+                  onChange={() => toggleChannel(channel.id)}
+                  className="size-3.5 accent-[var(--accent)]"
+                />
+                {channel.name}
+              </label>
+            ))}
+            {channels && channels.length === 0 && (
+              <span className="text-xs text-[var(--text-subtle)]">
+                {labels.digests.sendToNone}{' '}
+                <Link to="/channels/new" className="text-[var(--accent)] hover:underline">
+                  {labels.digests.sendToAdd}
+                </Link>
+              </span>
+            )}
+          </div>
+        </fieldset>
 
         <div className="flex gap-2 pt-1">
           <Button type="submit" variant="primary" loading={pending} disabled={!valid}>

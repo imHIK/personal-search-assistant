@@ -1,5 +1,6 @@
-import { CalendarClock, Plug, Search, Sparkles, Library, Wrench } from 'lucide-react'
+import { CalendarClock, Plug, Search, Send, Sparkles, Library, Wrench } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { ReconnectBanner } from '@/components/ReconnectBanner'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useTechnicalDetailsToggle } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
@@ -12,6 +13,7 @@ const navItems = [
   { to: '/knowledge', label: labels.nav.sources, icon: Library, end: false },
   { to: '/digests', label: labels.nav.digests, icon: CalendarClock, end: false },
   { to: '/tasks', label: labels.nav.tasks, icon: Sparkles, end: false },
+  { to: '/channels', label: labels.nav.channels, icon: Send, end: false },
   { to: '/connections', label: labels.nav.accounts, icon: Plug, end: false },
 ]
 
@@ -21,6 +23,7 @@ export function Layout() {
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
+        <ReconnectBanner />
         <main className="flex-1 px-6 py-7 lg:px-10">
           <div className="mx-auto w-full max-w-[1400px]">
             <Outlet />

@@ -1,8 +1,9 @@
 import { Plug, Plus, Star, Trash2 } from 'lucide-react'
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
+import { readOAuthOutcome } from '@/api/oauth'
 import type { Connection } from '@/api/types'
 import { Technical, TechnicalPanel } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
@@ -11,7 +12,7 @@ import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
-import { connectorFor, connectorsNeedingAccounts } from '@/config/connectors'
+import { accountFor, accountTypes } from '@/config/accounts'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { presentConnection } from '@/config/presentation'
@@ -20,11 +21,40 @@ import { absoluteTime, relativeTime } from '@/lib/utils'
 
 export function AccountsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { data, isLoading, error, refetch } = useConnections()
   const { makeDefault, test, remove } = useConnectionMutations()
   const [pendingRemoval, setPendingRemoval] = useState<Connection | null>(null)
 
-  const needsAccounts = connectorsNeedingAccounts()
+  const needsAccounts = accountTypes()
+
+  // This page doubles as the landing spot for an OAuth callback, which arrives as a plain redirect
+  // carrying its result in the query string. Report it once, then strip the parameters so a reload
+  // or a back-navigation doesn't replay a stale outcome.
+  //
+  // The timeout is load-bearing, not defensive padding. An OAuth callback is a *fresh page load*, so
+  // this effect runs during the first commit — and React runs effects child-first, so it fires before
+  // <Toaster/> (a sibling of the router, mounted in main.tsx) has subscribed to sonner's store. A
+  // toast emitted in that gap is published to nobody and silently lost, which is exactly the message
+  // the user needs most: whether their reconnect actually worked. Deferring by a macrotask puts it
+  // after every effect in the commit, Toaster's included.
+  useEffect(() => {
+    const outcome = readOAuthOutcome(location.search)
+    if (!outcome) return
+    //
+    // Deliberately not cleaned up on unmount: the `navigate` below changes `location.search`, which
+    // re-runs this effect — and a cleanup would cancel the very toast the previous run scheduled. A
+    // toast is global state in sonner rather than this component's, so letting it land is correct.
+    window.setTimeout(() => {
+      if (outcome.status === 'ok') {
+        toast.success(labels.accounts.connectOk)
+      } else {
+        toast.error(labels.accounts.connectFailed, { description: outcome.reason })
+      }
+    }, 0)
+    if (outcome.status === 'ok') void refetch()
+    navigate('/connections', { replace: true })
+  }, [location.search, navigate, refetch])
 
   return (
     <>
@@ -145,7 +175,7 @@ function AccountRow({
   onMakeDefault: () => void
   onRemove: () => void
 }) {
-  const descriptor = connectorFor(connection.type)
+  const descriptor = accountFor(connection.type)
   const Icon = descriptor.icon
   const isDefault = isDefaultConnection(connection)
   const created = relativeTime(connection.createdAt)

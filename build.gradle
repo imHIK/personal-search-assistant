@@ -47,6 +47,14 @@ dependencies {
     // BOM (quarkus-scheduler already depends on it), so it stays aligned with the platform.
     implementation 'com.cronutils:cron-utils'
 
+    // MIME encoding for the EMAIL publisher, which sends a raw RFC 2822 message through the Gmail API.
+    // Only the encoder is used — there is no SMTP. Version managed by the Quarkus BOM.
+    implementation 'io.vertx:vertx-mail-client'
+
+    // Markdown → HTML for a digest task's summary in an email. HTML escaping and URL sanitising are
+    // built in, which is the part that matters for rendering model output.
+    implementation 'org.commonmark:commonmark:0.24.0'
+
     // OpenSearch clients (query engine). The typed client plus the stable low-level REST client
     // the SearchIndex adapter speaks the query DSL through.
     implementation 'org.opensearch.client:opensearch-java:2.13.0'

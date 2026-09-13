@@ -1,13 +1,13 @@
 package io.personalassistant.app;
 
 import io.personalassistant.common.id.Ids;
+import io.personalassistant.connection.ConnectionKind;
+import io.personalassistant.connection.ConnectionKindRegistry;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
-import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService;
-import io.personalassistant.ingestion.connector.ConnectorRegistry;
-import io.personalassistant.ingestion.connector.SourceConnector;
+import io.personalassistant.storage.repository.ChannelRepository;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -20,7 +20,7 @@ import java.util.Optional;
 import java.util.logging.Logger;
 
 /**
- * Default connection lifecycle orchestration. Creation verifies the credentials against the connector
+ * Default connection lifecycle orchestration. Creation verifies credentials via the type's ConnectionKind
  * (so a bad token fails fast at connect time, not on the first grab), then persists and assigns the
  * per-type default. Deletion enforces referential integrity against bound knowledges and keeps the
  * per-type default well-formed by promoting a survivor.
@@ -32,29 +32,29 @@ public class DefaultConnectionService implements ConnectionService {
 
     private final ConnectionRepository connections;
     private final KnowledgeRepository knowledge;
-    private final ConnectorRegistry connectors;
+    private final ChannelRepository channels;
+    private final ConnectionKindRegistry kinds;
 
     @Inject
     public DefaultConnectionService(ConnectionRepository connections, KnowledgeRepository knowledge,
-                                    ConnectorRegistry connectors) {
+                                    ChannelRepository channels, ConnectionKindRegistry kinds) {
         this.connections = connections;
         this.knowledge = knowledge;
-        this.connectors = connectors;
+        this.channels = channels;
+        this.kinds = kinds;
     }
 
     @Override
     public Connection create(NewConnection request) {
-        SourceConnector connector = connectors.get(request.type()); // unknown type → IllegalArgumentException
-        if (!connector.requiresConnection()) {
-            throw new IllegalArgumentException(request.type() + " does not use connections");
-        }
+        // Unknown type, or a connector that needs no connection → IllegalArgumentException → 400.
+        ConnectionKind kind = kinds.get(request.type());
 
         Instant now = Instant.now();
         Connection draft = new Connection(Ids.connection(), request.name(), request.type(),
                 request.auth(), request.config(), request.rateLimit(), false,
                 ConnectionStatus.ACTIVE, null, now, now);
 
-        verify(connector, draft); // bad credentials → throws → 400, nothing persisted
+        verify(kind, draft); // bad credentials → throws → 400, nothing persisted
 
         boolean makeDefault = request.makeDefault()
                 || connections.findDefault(request.type()).isEmpty(); // first-of-type is the default
@@ -78,7 +78,7 @@ public class DefaultConnectionService implements ConnectionService {
     }
 
     @Override
-    public List<Connection> listByType(SourceType type) {
+    public List<Connection> listByType(String type) {
         return connections.findByType(type);
     }
 
@@ -93,7 +93,7 @@ public class DefaultConnectionService implements ConnectionService {
                 Instant.now());
 
         if (edit.auth() != null && !edit.auth().equals(current.auth())) {
-            verify(connectors.get(current.type()), edited); // re-verify changed creds
+            verify(kinds.get(current.type()), edited); // re-verify changed creds
             edited = edited.withStatus(ConnectionStatus.ACTIVE, null);
         }
         return connections.save(edited);
@@ -102,12 +102,12 @@ public class DefaultConnectionService implements ConnectionService {
     @Override
     public Connection test(String id) {
         Connection current = require(id);
-        if (!connectors.supports(current.type())) {
+        if (!kinds.supports(current.type())) {
             return connections.save(current.withStatus(ConnectionStatus.ERROR,
-                    "No connector is installed for " + current.type()));
+                    "Nothing installed uses " + current.type() + " connections"));
         }
         try {
-            connectors.get(current.type()).verifyConnection(current);
+            kinds.get(current.type()).verify(current);
             // DISABLED is an operator decision, not a credential state — a passing check must not
             // silently re-enable a connection someone turned off.
             if (current.status() == ConnectionStatus.DISABLED) {
@@ -136,6 +136,11 @@ public class DefaultConnectionService implements ConnectionService {
             throw new IllegalStateException("Connection " + id + " is in use by " + bound.size()
                     + " knowledge(s); repoint or delete them first");
         }
+        int sending = channels.findByConnectionId(id).size();
+        if (sending > 0) {
+            throw new IllegalStateException("Connection " + id + " is used by " + sending
+                    + " channel(s); repoint or delete them first");
+        }
         connections.delete(id);
 
         // Keep the per-type default well-formed: if we removed the default, promote the oldest survivor.
@@ -161,9 +166,9 @@ public class DefaultConnectionService implements ConnectionService {
      * with no cause to display. The message is worded like {@link #test}'s {@code lastError} on purpose:
      * a rejected save and a failed re-test should read identically.
      */
-    private void verify(SourceConnector connector, Connection connection) {
+    private void verify(ConnectionKind kind, Connection connection) {
         try {
-            connector.verifyConnection(connection);
+            kind.verify(connection);
         } catch (IllegalArgumentException e) {
             throw e; // already the shape the resource turns into a 400
         } catch (RuntimeException e) {

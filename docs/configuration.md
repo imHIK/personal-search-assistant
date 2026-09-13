@@ -187,6 +187,14 @@ directly instead of standing up a container, and every path that produces one is
 > and turning it off to make a purged staged file fail loudly. `RefetchPolicy` is the one place that
 > reads both.
 
+> **A key composed from an identifier is the "dynamic by name" tier, and it has a cost.**
+> `OAuthClients` reads `app.oauth.<providerId>.client-id` / `.client-secret` by building the name at
+> runtime, the same shape as `LlmProfiles` — which is precisely what lets a new OAuth provider ship two
+> properties and no resolution code. The price is that `ConfigDefaultsTest`'s reverse check cannot see
+> the key: it scans for string literals, and a composed name is not one, so every such key has to be
+> listed in `REACHED_ANOTHER_WAY` or it reports as rename debris. Composing a name is a real trade —
+> take it when instances are open-ended (providers, profiles), not to save one injection point.
+
 > **A tier may legitimately resolve to nothing.** `RetentionResolver` returns `null` when no tier sets
 > a window, and callers must read that as *never expire* rather than *expire immediately*. Shipping
 > `app.retention.default-period` blank is a deliberate choice, not an oversight — a global default

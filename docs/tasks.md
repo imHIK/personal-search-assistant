@@ -77,6 +77,24 @@ asked for and the shape the console can render are the same object by constructi
 `RAW` mode supplies `system` and `user` verbatim and hands that responsibility back. It is surfaced
 in the console only under the technical-details toggle, with an explicit warning.
 
+## The placeholders a RAW prompt can use
+
+Five values are supplied by `AnswerPromptBuilder`, and **all five resolve in either message**:
+
+| Placeholder | What it holds |
+|---|---|
+| `{{sources}}` | the numbered, fenced results — required in `user`, see validation below |
+| `{{query}}` | the text the digest searched for |
+| `{{today}}` | the run date, ISO — without it "this week" is unanswerable |
+| `{{fence}}` | the `"""` wrapped around each source, so the prompt can name it |
+| `{{truncationMarker}}` | what a source cut to fit the budget ends with |
+
+System and user render from **one** map, built once per run by `AnswerPromptBuilder.render`. They used
+to render from two disjoint ones — date/fence/marker for `system`, query/sources for `user` — so a
+placeholder written into the other half threw at render time, which for a scheduled digest meant a run
+failing hours after the prompt was saved. The split survives only as presentation: the console offers
+each placeholder under the message it usually belongs to, and accepts it anywhere.
+
 ## Validation happens on save
 
 `PromptTemplate.render` throws on an unresolved `{{placeholder}}`, which for a scheduled digest would

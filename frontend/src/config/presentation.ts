@@ -1,8 +1,12 @@
 import type {
+  Channel,
+  ChannelStatus,
   ConnectionStatus,
   CursorDirection,
   CursorInfo,
   CursorStatus,
+  Delivery,
+  DeliveryStatus,
   EntityItem,
   EntityStatus,
   Knowledge,
@@ -231,4 +235,49 @@ export function presentIterableId(iterableId: string, fallback: string): string 
     if (value) return value.split('/').filter(Boolean).pop() ?? value
   }
   return iterableId
+}
+
+// ---- Publishing channel + delivery state ------------------------------------------------------
+
+const channelStates: Record<ChannelStatus, Presented> = {
+  ACTIVE: { label: 'Working', tone: 'ok' },
+  ERROR: {
+    label: 'Not delivering',
+    tone: 'alert',
+    hint: 'The last send was refused. Fix the problem, then send a test — queued messages wait until then.',
+  },
+}
+
+/** Paused wins over status: a paused channel is not sending whatever its last result was. */
+export function presentChannel(channel: Pick<Channel, 'status' | 'enabled'>): Presented {
+  if (!channel.enabled) {
+    return { label: 'Paused', tone: 'wait', hint: 'Messages stay queued until it is resumed.', raw: 'DISABLED' }
+  }
+  const status = channel.status
+  return channelStates[status] ? { ...channelStates[status], raw: status } : neutral(status)
+}
+
+const deliveryStates: Record<DeliveryStatus, Presented> = {
+  PENDING: { label: 'Queued', tone: 'busy', hint: 'Waiting to be sent.' },
+  SENT: { label: 'Sent', tone: 'ok' },
+  FAILED: {
+    label: 'Not delivered',
+    tone: 'alert',
+    hint: 'It failed too many times in a row and was set aside. Retry it once the problem is fixed.',
+  },
+}
+
+/** A queued delivery that has already failed is retrying, which reads differently from waiting. */
+export function presentDelivery(delivery: Pick<Delivery, 'status' | 'attempts' | 'nextAttemptAt'>): Presented {
+  const { status, attempts, nextAttemptAt } = delivery
+  if (status === 'PENDING' && attempts > 0) {
+    const when = relativeTime(nextAttemptAt)
+    return {
+      label: 'Retrying',
+      tone: 'wait',
+      hint: when ? `The last attempt failed. Next try ${when}.` : 'The last attempt failed.',
+      raw: status,
+    }
+  }
+  return deliveryStates[status] ? { ...deliveryStates[status], raw: status } : neutral(status)
 }

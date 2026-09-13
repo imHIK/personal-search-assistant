@@ -144,3 +144,5 @@ export const POLL_INTERVAL_MS = 5000
 export const HEALTH_INTERVAL_MS = 15000
 /** How long a mutation keeps its query polling, so async server work shows up on its own. */
 export const POLL_AFTER_MUTATION_MS = 30000
+/** How long a cited result stays ringed after a citation chip jumps to it. */
+export const CITATION_HIGHLIGHT_MS = 1200

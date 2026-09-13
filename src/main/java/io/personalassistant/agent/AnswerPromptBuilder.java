@@ -11,6 +11,7 @@ import jakarta.inject.Inject;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -94,30 +95,12 @@ public class AnswerPromptBuilder {
 
     /**
      * @param variables values for the prompt's own declared variables, supplied by the caller. The
-     *                  framework's own ({@code today}, {@code fence}, {@code truncationMarker}) are
-     *                  added here and win, so a caller cannot redefine what the assembly code emits
+     *                  framework's own are added in {@link #values} and win, so a caller cannot
+     *                  redefine what the assembly code emits
      */
     String system(TaskSpec task, Map<String, String> variables) {
-        return system(catalog.promptForTask(task.id()), variables);
-    }
-
-    /**
-     * Same, against a prompt supplied by the caller.
-     *
-     * <p>A user-written task has no entry in the bundled catalogue — its prompt is either a shipped
-     * wrapper rendered around the user's instruction, or text the user wrote outright — so the template
-     * arrives here rather than being looked up. {@code TaskLibrary} is what resolves the two cases.
-     */
-    String system(PromptTemplate prompt, Map<String, String> variables) {
-        // The fence and the truncation marker are supplied by this class rather than restated in the
-        // JSON: the prompt describes them, but the assembly code below is what actually emits them, so a
-        // single source of truth keeps the description and the output from drifting apart.
-        Map<String, String> values = new java.util.LinkedHashMap<>(
-                variables == null ? Map.of() : variables);
-        values.put("today", LocalDate.now(clock).format(DateTimeFormatter.ISO_DATE));
-        values.put("fence", FENCE);
-        values.put("truncationMarker", TRUNCATION_MARKER.trim());
-        return prompt.renderSystem(values);
+        return catalog.promptForTask(task.id())
+                .renderSystem(values(task, null, List.of(), Map.of(), variables));
     }
 
     String user(TaskSpec task, SearchQuery query, List<SearchHit> hits) {
@@ -131,15 +114,53 @@ public class AnswerPromptBuilder {
      */
     String user(TaskSpec task, SearchQuery query, List<SearchHit> hits,
                 Map<String, String> textByChunkId) {
-        return user(catalog.promptForTask(task.id()), task, query, hits, textByChunkId);
+        return catalog.promptForTask(task.id())
+                .renderUser(values(task, query, hits, textByChunkId, Map.of()));
     }
 
-    /** Same, against a caller-supplied prompt — see {@link #system(PromptTemplate, Map)}. */
-    String user(PromptTemplate prompt, TaskSpec task, SearchQuery query, List<SearchHit> hits,
-                Map<String, String> textByChunkId) {
-        return prompt.renderUser(Map.of(
-                "query", query.text() == null ? "" : query.text(),
-                "sources", sources(task, hits, textByChunkId)));
+    /** Both halves of one prompt, rendered together from a single set of values. */
+    record Rendered(String system, String user) { }
+
+    /**
+     * Render both messages of a prompt supplied by the caller.
+     *
+     * <p>A user-written task has no entry in the bundled catalogue — its prompt is either a shipped
+     * wrapper rendered around the user's instruction, or text the user wrote outright — so the template
+     * arrives here rather than being looked up. {@code TaskLibrary} is what resolves the two cases.
+     *
+     * <p>Both halves render from the <em>same</em> map on purpose. They used to be rendered from two
+     * disjoint ones — {@code today}, {@code fence} and {@code truncationMarker} for the system message,
+     * {@code query} and {@code sources} for the user message — so a placeholder written into the other
+     * half threw at render time. That is a reasonable mistake for someone writing a task's prompt in the
+     * console to make, and for a scheduled digest it surfaces hours later as a failed run rather than
+     * while its author is present to read the error. Assembling the sources block once and offering
+     * every value to both renders costs nothing and removes the trap; the console can then present each
+     * placeholder where it usually belongs without that placement being load-bearing.
+     */
+    Rendered render(PromptTemplate prompt, TaskSpec task, SearchQuery query, List<SearchHit> hits,
+                    Map<String, String> textByChunkId, Map<String, String> variables) {
+        Map<String, String> values = values(task, query, hits, textByChunkId, variables);
+        return new Rendered(prompt.renderSystem(values), prompt.renderUser(values));
+    }
+
+    /**
+     * The caller's variables first, then the framework's own, which overwrite them.
+     *
+     * <p>The fence and the truncation marker are supplied here rather than restated in the JSON: the
+     * prompt describes them, but the assembly code below is what actually emits them, so a single
+     * source of truth keeps the description and the output from drifting apart.
+     */
+    private Map<String, String> values(TaskSpec task, SearchQuery query, List<SearchHit> hits,
+                                       Map<String, String> textByChunkId,
+                                       Map<String, String> variables) {
+        Map<String, String> values = new LinkedHashMap<>(variables == null ? Map.of() : variables);
+        values.put("today", LocalDate.now(clock).format(DateTimeFormatter.ISO_DATE));
+        values.put("fence", FENCE);
+        values.put("truncationMarker", TRUNCATION_MARKER.trim());
+        values.put("query", query == null || query.text() == null ? "" : query.text());
+        values.put("sources", sources(task, hits == null ? List.of() : hits,
+                textByChunkId == null ? Map.of() : textByChunkId));
+        return values;
     }
 
     /**

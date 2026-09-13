@@ -37,7 +37,7 @@ class IngestionJobConnectionHealthTest {
     private IngestionJob job(ConnectionStatus status, boolean requiresConnection) {
         StubConnector connector = new StubConnector(TYPE, List.of(new SourceIterable("root", "root", Map.of())))
                 .withRequiresConnection(requiresConnection);
-        ConnectionResolver resolver = kn -> new Connection("conn_1", "Work", TYPE, Map.of(), Map.of(),
+        ConnectionResolver resolver = kn -> new Connection("conn_1", "Work", TYPE.name(), Map.of(), Map.of(),
                 null, true, status, null, Instant.now(), Instant.now());
         IngestionJob job = new IngestionJob(cursors, knowledge, null, null,
                 new SingleConnectorRegistry(connector), resolver);

@@ -203,6 +203,10 @@ Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1,
 ---
 
 ## Collection: `connections`
+
+> `type` is a **connection type** string: a `SourceType` name (`GMAIL`, `GOOGLE_DRIVE`) for a connector's
+> account, or a type something else uses (`GMAIL_SEND`, the email channel's send-only account). Existing
+> documents are unchanged — the enum name was already what was stored. The default flag is per type.
 Reusable credentials for a `SourceType`, shared across knowledges. Kept separate from `knowledge`
 so re-authenticating one account doesn't mean editing every knowledge that uses it.
 
@@ -295,6 +299,8 @@ A saved search plus a schedule, and one document per execution. Documented in
   search finds with the look-back window removed. Together they separate "nothing matched" from
   "everything matched was already seen" and from "the window is empty but the corpus is not"; all
   three are absent on runs written before they existed and read back as `items.size()`, `0` and `0`.
+- `digests.channelIds` lists the publishing channels each run is sent to (absent on older documents,
+  read as empty). Indexed, because deleting a channel is refused while a digest names it.
 - `digests.historyResetAt` bounds the newness read: runs before it are ignored when working out what
   has already been reported, so the seen-set can be cleared without deleting the history that is also
   the audit trail.
@@ -305,6 +311,31 @@ A saved search plus a schedule, and one document per execution. Documented in
   been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
   anything later.
 - History is unbounded — see [L8](./limitations.md).
+
+---
+
+## Collections: `channels` and `deliveries`
+
+Publishing destinations and the outbox that feeds them. Documented in [`publishing.md`](./publishing.md);
+the schema-relevant points are:
+
+- `channels.target` is an **opaque, publisher-defined** blob, like `connections.config`. For `EMAIL` it is
+  `{to, cc, subjectPrefix}`.
+- `channels.connectionId` is the account a channel sends through, or null for the default account of the
+  type its publisher uses. Indexed, because deleting a connection is refused while a channel names it.
+- Channel writes after creation are **field-level, split by owner**: a person edits `name` / `connectionId` /
+  `target` / `enabled`; sends and the test action write `status` / `lastError`. A whole-document save from either
+  side would clobber the other.
+- `channels` is indexed on `(enabled, status)`, the worker's "usable channels" read.
+- A delivery embeds its `message` as a **snapshot** (`title`, `intro`, `items[]{title, uri, text, fields}`,
+  `link`, and a Markdown `summary`), so a retry sends exactly what was queued.
+- `deliveries` indexes: `(status, channelId, nextAttemptAt)` for the claim; `(channelId, createdAt desc)`
+  and `createdAt desc` for history; `origin.refId` for a digest run's deliveries; and a **unique partial** index on `dedupeKey`, restricted to string
+  values so manual sends (null key) never collide. That index is what makes enqueueing idempotent.
+- `lease: {owner, expiresAt}` fences every post-claim write, exactly as on `entities` and `cursors`.
+  `attempts` is consecutive, reset by `markSent` and by a manual retry.
+- Deleting a channel cascades its deliveries. Delivery history is otherwise unbounded, like digest runs
+  ([L8](./limitations.md)).
 
 ---
 

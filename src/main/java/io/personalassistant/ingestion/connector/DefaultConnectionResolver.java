@@ -33,11 +33,11 @@ public class DefaultConnectionResolver implements ConnectionResolver {
         Connection connection = connectionId != null && !connectionId.isBlank()
                 ? connections.findById(connectionId).orElseThrow(() -> new NoSuchElementException(
                         "Knowledge " + knowledge.id() + " references unknown connection " + connectionId))
-                : connections.findDefault(type).orElseThrow(() -> new NoSuchElementException(
+                : connections.findDefault(type.name()).orElseThrow(() -> new NoSuchElementException(
                         "No default " + type + " connection configured; create one or set "
                                 + "connectorDetails.connectionId on the knowledge"));
 
-        if (connection.type() != type) {
+        if (!connection.type().equals(type.name())) {
             throw new NoSuchElementException("Connection " + connection.id() + " is a " + connection.type()
                     + " connection but knowledge " + knowledge.id() + " is " + type);
         }

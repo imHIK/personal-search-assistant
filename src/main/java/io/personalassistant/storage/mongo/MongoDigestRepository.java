@@ -71,6 +71,13 @@ public class MongoDigestRepository implements DigestRepository {
     }
 
     @Override
+    public List<Digest> findByChannelId(String channelId) {
+        List<Digest> out = new ArrayList<>();
+        collection().find(eq("channelIds", channelId)).forEach(d -> out.add(fromDoc(d)));
+        return out;
+    }
+
+    @Override
     public List<Digest> findDue(Instant now, int limit) {
         // A null nextRunAt means "never run, due now" — a freshly created digest must not wait a whole
         // interval before its first run.
@@ -178,7 +185,8 @@ public class MongoDigestRepository implements DigestRepository {
                 .append("nextRunAt", BsonSupport.date(d.nextRunAt()))
                 .append("createdAt", BsonSupport.date(d.createdAt()))
                 .append("updatedAt", BsonSupport.date(d.updatedAt()))
-                .append("historyResetAt", BsonSupport.date(d.historyResetAt()));
+                .append("historyResetAt", BsonSupport.date(d.historyResetAt()))
+                .append("channelIds", d.channelIds());
     }
 
     private Digest fromDoc(Document d) {
@@ -205,7 +213,9 @@ public class MongoDigestRepository implements DigestRepository {
                 BsonSupport.instant(d.get("nextRunAt")),
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
-                BsonSupport.instant(d.get("historyResetAt")));
+                BsonSupport.instant(d.get("historyResetAt")),
+                // Absent on digests written before they could publish: those send nowhere.
+                d.get("channelIds") == null ? List.of() : stringList(d.get("channelIds")));
     }
 
     private Document toRunDoc(DigestRun run) {

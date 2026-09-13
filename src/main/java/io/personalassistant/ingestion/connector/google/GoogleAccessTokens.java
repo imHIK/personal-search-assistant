@@ -9,8 +9,10 @@ import io.personalassistant.domain.model.Connection;
  *
  * <p>The OAuth material (access token, refresh token, expiry, optional client) travels in the opaque
  * {@link Connection#auth()} / {@link Connection#config()} blobs the core never inspects — see
- * {@link DefaultGoogleAccessTokens} for the exact keys. Taking a {@link Connection} (rather than a
- * {@code Knowledge}) is what lets several knowledges share one account's credentials and one refresh.
+ * {@link io.personalassistant.ingestion.connector.oauth.OAuthTokenService} for the exact keys and for
+ * the refresh, caching and write-back behaviour, which is shared with every other OAuth provider.
+ * Taking a {@link Connection} (rather than a {@code Knowledge}) is what lets several knowledges share
+ * one account's credentials and one refresh.
  */
 public interface GoogleAccessTokens {
 
@@ -21,7 +23,10 @@ public interface GoogleAccessTokens {
      *
      * @return credentials for calls on behalf of {@code connection}
      * @throws IllegalArgumentException if the connection carries no usable credentials
-     * @throws GoogleApiException       if a token refresh was attempted and failed
+     * @throws io.personalassistant.ingestion.connector.oauth.CredentialsRejectedException if the
+     *         refresh token has been revoked — the connection is marked {@code ERROR} before it throws
+     * @throws io.personalassistant.ingestion.connector.oauth.OAuthTransportException if a refresh was
+     *         attempted and failed for a transient reason
      */
     GoogleAuth authFor(Connection connection);
 }

@@ -35,6 +35,7 @@ export const labels = {
     accounts: nouns.accounts,
     digests: 'Digests',
     tasks: 'Tasks',
+    channels: 'Channels',
     technicalDetails: 'Technical details',
     technicalDetailsHint: 'Show ids, raw states and internal counters',
     theme: 'Theme',
@@ -148,6 +149,13 @@ export const labels = {
     legend: 'What these mean',
   },
 
+  reconnectBanner: {
+    one: (name: string) => `"${name}" needs reconnecting — nothing new is being imported from it.`,
+    many: (count: number) =>
+      `${count} accounts need reconnecting — nothing new is being imported from them.`,
+    action: 'Fix it',
+  },
+
   accounts: {
     title: nouns.accounts,
     subtitle: 'Sign-in details reused across sources.',
@@ -156,7 +164,7 @@ export const labels = {
     emptyHint: 'Google sources need an account before they can be connected.',
     makeDefault: 'Make default',
     isDefault: 'Default',
-    defaultHint: (type: string) => `Used automatically by new ${type} sources`,
+    defaultHint: (type: string) => `Used automatically wherever a ${type} account is needed and none is picked`,
     edit: 'Edit',
     remove: 'Remove',
     removeTitle: (name: string) => `Remove "${name}"?`,
@@ -171,6 +179,15 @@ export const labels = {
     reveal: 'Show',
     hide: 'Hide',
     helpTitle: 'How do I get these?',
+    connect: (service: string) => `Connect with ${service}`,
+    reconnect: (service: string) => `Reconnect with ${service}`,
+    connectHint:
+      'Opens the service in a new window to approve access. Nothing to copy or paste — the sign-in ' +
+      'is stored here when you come back.',
+    connectStarting: 'Opening…',
+    connectSaveFirst: 'Give this account a name first, then connect.',
+    connectOk: 'Account connected',
+    connectFailed: "That didn't complete — the account was not connected.",
     rateLimitTitle: 'Speed limit',
     rateLimitHint:
       'How fast this account may be called. Leave empty to use the server default. Most services ' +
@@ -309,6 +326,14 @@ export const labels = {
     running: 'Running…',
     lastRun: 'Last run',
     neverRun: 'Not run yet',
+    sendToLabel: 'Send results to',
+    sendToHint:
+      'Runs that find something new — or fail — are sent to the channels ticked here. Quiet runs send nothing.',
+    sendToNone: 'No channels yet.',
+    sendToAdd: 'Add one',
+    sendsTo: 'Sends to',
+    sendsToNone: 'Nowhere',
+    sentTo: 'Sent to',
     noResults: 'Nothing new',
     resultCount: (n: number) => `${n} new ${n === 1 ? 'result' : 'results'}`,
     // A digest that is not filtering by newness has no "new" to speak of; calling its matches new
@@ -370,6 +395,8 @@ export const labels = {
     widenWindow: 'Widen the look-back',
     runStreak: (n: number) => `${n}\u00d7`,
     rawOutput: 'Raw task reply',
+    summaryHeading: 'Summary',
+    citation: (n: number) => `Result ${n}`,
 
     resetHistory: 'Reset history',
     resetHistoryConfirm: 'Show everything again?',
@@ -391,6 +418,55 @@ export const labels = {
     changeDocument: 'Change',
     clearDocument: 'Clear',
     filtersLabel: 'Narrow it down',
+  },
+
+  channels: {
+    title: 'Channels',
+    subtitle: 'Where messages are sent — your inbox today, more places later.',
+    add: 'Add channel',
+    empty: 'No channels yet',
+    emptyHint: 'Add an email channel to receive messages in your inbox.',
+    edit: 'Edit',
+    remove: 'Remove',
+    removeTitle: (name: string) => `Remove "${name}"?`,
+    removeBody: 'Anything still waiting to be sent to it is discarded, along with its delivery history.',
+    removed: (name: string) => `Removed "${name}"`,
+    test: 'Send test',
+    testing: 'Sending…',
+    testOk: (name: string) => `Test message sent to "${name}"`,
+    testFailed: (name: string) => `"${name}" could not send`,
+    testHint:
+      'Sends a sample message right now. A successful test also releases anything that queued up while ' +
+      'the channel was not delivering.',
+    basics: 'Basics',
+    name: 'Name',
+    namePlaceholder: 'My inbox',
+    nameRequired: 'Give this channel a name so you can recognise it later',
+    type: 'Type',
+    notAvailable: 'coming later',
+    destination: 'Destination',
+    account: 'Send from',
+    accountDefault: (label: string) => `Default ${label} account`,
+    accountHint: 'The account messages are sent from. The default follows whichever account is marked default.',
+    accountNone: (label: string) => `No ${label} account is connected yet.`,
+    accountConnect: 'Connect one',
+    enabled: 'Sending enabled',
+    enabledHint: 'While paused, messages stay queued and are sent once it is resumed.',
+    create: 'Create channel',
+    save: 'Save changes',
+    created: 'Channel created',
+    saved: 'Channel updated',
+    editTitle: (name: string) => `Edit ${name}`,
+    deliveries: 'Recent deliveries',
+    deliveriesHint: 'Newest first. Queued messages are picked up within about half a minute.',
+    deliveriesEmpty: 'Nothing has been sent to this channel yet.',
+    untitled: '(untitled)',
+    itemCount: (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`,
+    queued: (when: string) => `queued ${when}`,
+    sent: (when: string) => `sent ${when}`,
+    failedAttempts: (n: number) => `${n} failed ${n === 1 ? 'attempt' : 'attempts'}`,
+    retry: 'Retry',
+    retried: 'Queued to send again',
   },
 
   tasks: {
@@ -447,6 +523,11 @@ export const labels = {
     rawSystem: 'System message',
     rawUser: 'User message',
     rawUserHint: 'Must contain {{sources}}, or the model is given nothing to work from.',
+    placeholdersLabel: 'Values you can drop in',
+    placeholdersHint: 'Click one to insert it, or type {{ in the box above.',
+    placeholderRequired: 'Required.',
+    placeholderUnknown:
+      'Not a value the assistant fills in, so this task will fail when it runs:',
     contextChars: 'Context budget (characters)',
     maxSources: 'Most results to send',
     builtInReadOnly: 'This task ships with the app and cannot be changed. Duplicate it to edit.',

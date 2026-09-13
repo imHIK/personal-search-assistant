@@ -2,7 +2,6 @@ package io.personalassistant.domain.service;
 
 import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,8 +17,8 @@ public interface ConnectionService {
      * Verify the credentials against the connector, persist the connection, and make it the default
      * for its type when requested (or when it is the first connection of that type).
      *
-     * @throws IllegalArgumentException if the type has no connector, the connector needs no
-     *                                  connection, or credential verification fails
+     * @throws IllegalArgumentException nothing registers the connection type, or credential
+     *                                  verification fails
      */
     Connection create(NewConnection request);
 
@@ -27,7 +26,7 @@ public interface ConnectionService {
 
     List<Connection> list();
 
-    List<Connection> listByType(SourceType type);
+    List<Connection> listByType(String type);
 
     /**
      * Edit a connection's user-facing fields (present fields only). Changing {@code auth} re-verifies
@@ -65,7 +64,7 @@ public interface ConnectionService {
      * if it was the type default, the oldest remaining connection of that type is promoted.
      *
      * @throws java.util.NoSuchElementException if no connection with {@code id} exists
-     * @throws IllegalStateException            if one or more knowledges still reference it
+     * @throws IllegalStateException            if knowledges or channels still reference it
      */
     void delete(String id);
 
@@ -73,13 +72,13 @@ public interface ConnectionService {
      * Inputs to register a connection.
      *
      * @param name        human-friendly label
-     * @param type        connector type
+     * @param type        connection type, e.g. {@code GMAIL} or {@code GMAIL_SEND}
      * @param auth        opaque credentials
      * @param config      opaque connector-level settings, or null
      * @param rateLimit   outbound call ceilings for this account, or null for the operator default
      * @param makeDefault force this to become the type default (first-of-type is default regardless)
      */
-    record NewConnection(String name, SourceType type, Map<String, Object> auth,
+    record NewConnection(String name, String type, Map<String, Object> auth,
                          Map<String, Object> config, RateLimitPolicy rateLimit,
                          boolean makeDefault) {}
 

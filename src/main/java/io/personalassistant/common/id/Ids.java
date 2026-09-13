@@ -18,6 +18,8 @@ public final class Ids {
     public static final String DIGEST_PREFIX = "dig_";
     public static final String DIGEST_RUN_PREFIX = "run_";
     public static final String TASK_PREFIX = "task_";
+    public static final String CHANNEL_PREFIX = "chn_";
+    public static final String DELIVERY_PREFIX = "dlv_";
 
     private Ids() {
     }
@@ -53,6 +55,14 @@ public final class Ids {
      */
     public static String task() {
         return TASK_PREFIX + token();
+    }
+
+    public static String channel() {
+        return CHANNEL_PREFIX + token();
+    }
+
+    public static String delivery() {
+        return DELIVERY_PREFIX + token();
     }
 
     /**

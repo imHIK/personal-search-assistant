@@ -16,14 +16,12 @@ import {
 import { labels } from '@/config/labels'
 import { buildFilters, filtersFor } from '@/config/searchFilters'
 import { useKnowledgeList } from '@/hooks/queries'
+import { useCitationJump } from '@/hooks/useCitationJump'
 import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
 import { SearchFilters } from './SearchFilters'
 import { useSearch } from './useSearch'
-
-/** How long a cited result keeps its ring — long enough to notice, short enough not to linger. */
-const HIGHLIGHT_MS = 1200
 
 /**
  * The landing screen. All state lives in the URL, so a search is shareable and the back button
@@ -33,11 +31,9 @@ export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const { data: sources } = useKnowledgeList()
   const search = useSearch()
-  const resultRefs = useRef<Record<number, HTMLElement | null>>({})
-  // The rank a citation just jumped to. Ranks only mean anything within one result set, so this is
-  // cleared whenever a new search runs.
-  const [citedRank, setCitedRank] = useState<number | null>(null)
-  const citedTimer = useRef<number | null>(null)
+  // Ranks only mean anything within one result set, so the highlight is cleared whenever a new
+  // search runs.
+  const { citedRank, jumpTo, register, clear: clearCitation } = useCitationJump()
 
   const urlQuery = params.get('q') ?? ''
   const mode = (params.get('mode') as SearchMode | null) ?? DEFAULT_SEARCH_MODE
@@ -62,25 +58,6 @@ export function SearchPage() {
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
 
-  // The highlight is a timer, so it has to be cancelled on unmount — otherwise a navigation during
-  // the flash sets state on a component that is gone.
-  useEffect(() => () => {
-    if (citedTimer.current !== null) window.clearTimeout(citedTimer.current)
-  }, [])
-
-  /** Scroll to a cited result, move focus there, and flash it so the jump is visible. */
-  const jumpToCitation = (rank: number) => {
-    const element = resultRefs.current[rank]
-    if (!element) return
-    // Focus first: focusing during a smooth scroll cancels it, even with preventScroll, so the page
-    // would stop partway to the result.
-    element.focus({ preventScroll: true })
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setCitedRank(rank)
-    if (citedTimer.current !== null) window.clearTimeout(citedTimer.current)
-    citedTimer.current = window.setTimeout(() => setCitedRank(null), HIGHLIGHT_MS)
-  }
-
   // Re-run whenever the URL changes, so back/forward replays the search rather than showing a
   // stale result set.
   const runRef = useRef(search.mutate)
@@ -97,7 +74,7 @@ export function SearchPage() {
       ...(Object.keys(filters).length > 0 ? { filters } : {}),
       ...(groupDuplicates ? { collapseDuplicates: true } : {}),
     }
-    setCitedRank(null)
+    clearCitation()
     runRef.current(body)
     // filterSpecs is derived from scope, which is already a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,7 +216,7 @@ export function SearchPage() {
               <AnswerCard
                 answer={result.answer}
                 hits={result.hits}
-                onCitationClick={jumpToCitation}
+                onCitationClick={jumpTo}
               />
             )}
 
@@ -256,9 +233,7 @@ export function SearchPage() {
                   query={urlQuery}
                   topScore={result.hits[0]?.score ?? 1}
                   highlighted={citedRank === index + 1}
-                  ref={(element) => {
-                    resultRefs.current[index + 1] = element
-                  }}
+                  ref={register(index + 1)}
                 />
               ))}
             </div>

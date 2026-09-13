@@ -409,3 +409,56 @@ and time cost; it is logged, and `refetch-on-reindex=never` opts out. Entities w
 individually. Setting `app.ingestion.google-drive.download-dir` to a durable directory still avoids
 the purge, at the price of an unbounded, uncollected on-disk dependency per file; parsing at ingestion
 and storing the extracted text remains the other alternative, and still drops `ParsedContent.blocks`.
+
+---
+
+## L12 — In-flight OAuth consents are held in memory on one node
+
+**Area:** OAuth connect flow · `ingestion.connector.oauth.OAuthStateStore`
+
+**What:** The `state` token that ties an OAuth callback back to the consent that started it — along
+with the connector type, the target connection and the redirect URI — lives in a `ConcurrentHashMap`
+inside one `@ApplicationScoped` bean, with a `app.oauth.state-ttl-seconds` (600) expiry. A restart
+between "Connect" and the provider's redirect loses it, and the callback lands on
+`/connections?oauth=error` saying the link has expired. A second node would reject any callback that
+did not happen to reach the node that issued the token.
+
+**Impact:** Negligible today. The window is the seconds a user spends on a consent screen, the cost of
+losing it is one click on Connect, and the deployment is single-node — the same assumption
+`InMemoryPermitService` already makes (invariant 7) and `SlidingWindowRateLimiter` makes in L9. The
+security property the token exists for is unaffected: an unknown token is rejected either way, so a
+lost map fails closed, never open.
+
+**Why we left it:** a Mongo collection for data whose whole life is ten minutes would need a schema, a
+startup index in `MongoIndexInitializer` and a sweeper, to protect against an event (restart mid-
+consent) whose remedy is already a single click. Persisting it would also mean writing a CSRF token to
+durable storage, which is a slightly worse posture than keeping it in memory.
+
+**Candidate approach:** the same Redis introduction L9 and invariant 7 already anticipate — a `SETEX`
+per token is a natural fit, and single-use consumption is a `GETDEL`. Worth doing at the moment a
+second replica appears, together with permits and rate-limit counters rather than separately.
+
+---
+
+## L13 — Publishing is at-least-once
+
+**Area:** publishing outbox · `publishing.job.DeliveryRunner`, `storage.mongo.MongoDeliveryRepository`
+
+**What:** A delivery is marked `SENT` in a separate write after the platform accepts it. A process that
+dies between the two — or a send that outlives `app.publishing.lease-seconds` — leaves the row `PENDING`
+with a lease that eventually expires, and the next claim sends it again. The stale worker's `markSent` is
+lease-fenced, so it cannot corrupt the row; it just cannot un-send the first copy.
+
+**Impact:** An occasional duplicate email, shown as two messages. Gmail assigns its own `Message-ID` on
+send and discards any the message carries, so there is no header that would let a client collapse the
+copies. Nothing is ever lost, which is the side worth erring on for a digest.
+
+**Why we left it:** exactly-once needs the platform to take part — an idempotency key it honours — and
+`users.messages.send` accepts none. Asking Gmail whether the message was already sent would need a read
+scope on the sending account, defeating the reason it is send-only. Sending *before* recording would lose
+messages instead of duplicating them.
+
+**Candidate approach:** for a platform whose API accepts an idempotency key (Slack's `client_msg_id`,
+most HTTP messaging APIs), pass the delivery id as `reference` and the window closes for that publisher
+with no framework change. The scheduler is also single-node, like everything in invariant 7; the lease is
+what would keep a second replica honest.

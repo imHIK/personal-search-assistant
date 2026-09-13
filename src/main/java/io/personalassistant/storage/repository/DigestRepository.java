@@ -16,6 +16,9 @@ public interface DigestRepository {
 
     List<Digest> findAll();
 
+    /** Digests that send to this channel — the channel delete guard's question. */
+    List<Digest> findByChannelId(String channelId);
+
     /**
      * Enabled digests whose {@code nextRunAt} has passed (or is unset, meaning "due now"). Drives the
      * scheduler tick.

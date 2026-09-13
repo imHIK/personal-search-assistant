@@ -37,7 +37,9 @@
     { "key": "adzunaAppId", "value": "" },
     { "key": "adzunaAppKey", "value": "" },
     { "key": "opensearchUrl", "value": "http://localhost:9200" },
-    { "key": "chunksIndex", "value": "chunks" }
+    { "key": "chunksIndex", "value": "chunks" },
+    { "key": "channelId", "value": "" },
+    { "key": "deliveryId", "value": "" }
   ],
   "item": [
     {
@@ -217,7 +219,7 @@
     },
     {
       "name": "Connections",
-      "description": "Reusable, per-account connections holding the credentials a knowledge authenticates through. Register several accounts of the same connector (e.g. two Gmail logins) and bind different knowledges to whichever they want; one connection per type is the default used when a knowledge names none.",
+      "description": "Reusable, per-account connections holding the credentials a knowledge authenticates through. Register several accounts of the same connector (e.g. two Gmail logins) and bind different knowledges to whichever they want; one connection per type is the default used when a knowledge names none. Accounts are normally connected through the OAuth flow (Start OAuth sign-in) rather than by pasting a refresh token into Create connection — see docs/oauth.md.",
       "item": [
         {
           "name": "List connections",
@@ -246,6 +248,72 @@
               "path": ["api", "connections", ":id"],
               "variable": [{ "key": "id", "value": "{{connectionId}}" }]
             }
+          }
+        },
+        {
+          "name": "Start OAuth sign-in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"GOOGLE_DRIVE\",\n  \"connectionId\": \"{{connectionId}}\",\n  \"name\": \"Personal Google\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/oauth/google/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections",
+                "oauth",
+                "google",
+                "start"
+              ]
+            },
+            "description": "Begins an OAuth consent and returns {\"authorizeUrl\"} — open that URL in a browser to approve access. This is how an account is normally connected; Create connection below is the by-hand fallback.\n\n`connectionId` re-credentials an existing account (use this to fix one sitting in ERROR); remove it to create a new account instead, in which case `name` labels it. `type` must be a connector the provider authenticates — GMAIL or GOOGLE_DRIVE for google.\n\nThe `google` path segment is resolved from the registered OAuthProvider beans, so a future provider answers on the same route under its own id.\n\n400 when the provider or type is unknown, or when no OAuth client is configured (app.oauth.google.client-id / .client-secret, i.e. GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET).\n\nThe Origin header decides which console the callback returns to; Postman sends none, so it falls back to the first entry in app.oauth.allowed-origins. Useful for checking configuration — finish an actual sign-in from the console, not here. See docs/oauth.md."
+          }
+        },
+        {
+          "name": "OAuth callback (browser only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/oauth/google/callback?code=&state=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections",
+                "oauth",
+                "google",
+                "callback"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": ""
+                },
+                {
+                  "key": "state",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Where the provider redirects the browser after consent. Documented for completeness — not callable by hand: `state` is single-use and minted by Start OAuth sign-in, and `code` comes from the provider.\n\nAlways answers 303 to {console}/connections?oauth=ok&id=… or ?oauth=error&reason=…, never JSON — a person is looking at this mid-redirect, so both outcomes have to land on a page that can explain itself."
           }
         },
         {
@@ -430,7 +498,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"metadata.remote\": true },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true\n}",
+              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -438,7 +506,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "digests"]
             },
-            "description": "A digest needs EITHER query OR sourceEntityId; neither is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below."
+            "description": "A digest needs EITHER query OR sourceEntityId; neither is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
           }
         },
         {
@@ -529,6 +597,334 @@
             },
             "description": "Deletes the digest and its whole run history. 204."
           }
+        }
+      ]
+    },
+    {
+      "name": "Publishing",
+      "description": "Channels (where messages go) and the delivery outbox. See docs/publishing.md.",
+      "item": [
+        {
+          "name": "Channels",
+          "item": [
+            {
+              "name": "Connect sending account (Start OAuth sign-in)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"type\": \"GMAIL_SEND\",\n  \"name\": \"My Gmail (sending)\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/connections/oauth/google/start",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connections",
+                    "oauth",
+                    "google",
+                    "start"
+                  ]
+                },
+                "description": "Step 1 for email. Starts the Google consent for a GMAIL_SEND account — the gmail.send scope only, so it can send but never read mail. Open the returned authorizeUrl in a browser and approve; the callback stores the account and redirects to /connections. The consent screen must list gmail.send under Data access, and be published or the token dies after 7 days. See docs/publishing.md § Setting it up."
+              }
+            },
+            {
+              "name": "List channels",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels"
+                  ]
+                },
+                "description": "Every channel, newest first."
+              }
+            },
+            {
+              "name": "Create email channel",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels"
+                  ]
+                },
+                "description": "type is EMAIL (SLACK / WHATSAPP are declared but have no publisher yet — a 400).\n\nconnectionId is the GMAIL_SEND account to send from; null uses the default one (connect it with the request above). A connection of another type — e.g. the read-only GMAIL source account — is a 400.\n\ntarget is publisher-defined. EMAIL: to (one address or a list, required), cc (list, optional), subjectPrefix (optional). Replace you@example.com with your address. Sets the channelId collection variable.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"My inbox\",\n  \"type\": \"EMAIL\",\n  \"connectionId\": null,\n  \"target\": {\n    \"to\": [\n      \"you@example.com\"\n    ],\n    \"subjectPrefix\": \"[assistant]\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code < 300) {",
+                      "  pm.collectionVariables.set('channelId', pm.response.json().id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Get channel",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": ""
+              }
+            },
+            {
+              "name": "Edit channel (PATCH)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": "Absent / null fields are unchanged. {\"enabled\": false} pauses: queued deliveries wait, they are not failed. A new target replaces the whole target and is re-validated. {\"connectionId\": \"\"} switches back to the default sending account.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"enabled\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Test channel",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}/test",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}",
+                    "test"
+                  ]
+                },
+                "description": "Sends a sample message synchronously through the channel's account, bypassing the queue. Always 200 — read status and lastError (e.g. no GMAIL_SEND account connected, or the account never granted gmail.send). A success brings an ERROR channel back to ACTIVE, releasing everything queued for it."
+              }
+            },
+            {
+              "name": "Publish message",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}/publish",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}",
+                    "publish"
+                  ]
+                },
+                "description": "202 — the delivery is queued, not sent. The publishing worker picks it up within app.publishing.poll-interval (30s). Sets the deliveryId collection variable; poll Get delivery.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Hello from Personal Search Assistant\",\n  \"intro\": \"A manual message through the outbox.\",\n  \"items\": [\n    {\n      \"title\": \"Quarkus mailer guide\",\n      \"uri\": \"https://quarkus.io/guides/mailer\",\n      \"text\": \"How the SMTP transport is configured.\",\n      \"fields\": {\n        \"why\": \"setup reference\"\n      }\n    }\n  ],\n  \"link\": null\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code < 300) {",
+                      "  pm.collectionVariables.set('deliveryId', pm.response.json().id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete channel",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": "Deletes the channel and every delivery queued or sent to it. 409 while a digest still sends to it — remove it from the digest's channelIds first."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deliveries",
+          "item": [
+            {
+              "name": "List deliveries",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries?channelId={{channelId}}&refId=&status=&limit=50",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries"
+                  ],
+                  "query": [
+                    {
+                      "key": "channelId",
+                      "value": "{{channelId}}"
+                    },
+                    {
+                      "key": "refId",
+                      "value": "",
+                      "description": "a digest run id — what that run was sent to"
+                    },
+                    {
+                      "key": "status",
+                      "value": ""
+                    },
+                    {
+                      "key": "limit",
+                      "value": "50"
+                    }
+                  ]
+                },
+                "description": "Newest first. status: PENDING | SENT | FAILED (blank = all). refId: a digest run id, to see what that run was sent to. limit capped at 100."
+              }
+            },
+            {
+              "name": "Get delivery",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries/{{deliveryId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries",
+                    "{{deliveryId}}"
+                  ]
+                },
+                "description": "status PENDING → SENT once the worker has sent it. attempts / lastError / nextAttemptAt show a retry in progress."
+              }
+            },
+            {
+              "name": "Retry failed delivery",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries/{{deliveryId}}/retry",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries",
+                    "{{deliveryId}}",
+                    "retry"
+                  ]
+                },
+                "description": "FAILED → PENDING with attempts reset. 409 for any other status."
+              }
+            }
+          ]
         }
       ]
     },

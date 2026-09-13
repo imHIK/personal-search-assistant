@@ -45,6 +45,9 @@ import java.util.Map;
  *                     deleting runs to replay a backlog would also destroy the record of what was sent
  *                     — and the record is half of why runs are kept. Bounding the read instead leaves
  *                     the history intact and visible while the next run starts from nothing
+ * @param channelIds   publishing channels each run is sent to when it found something or failed; empty
+ *                     sends nowhere. A list because one digest reaching an inbox and a chat is ordinary,
+ *                     and a single id would need a migration the day it is not
  */
 public record Digest(
         String id,
@@ -64,12 +67,13 @@ public record Digest(
         Instant nextRunAt,
         Instant createdAt,
         Instant updatedAt,
-        Instant historyResetAt) {
+        Instant historyResetAt,
+        List<String> channelIds) {
 
     /** Default result count, matching the search API's own default. */
     public static final int DEFAULT_TOP_K = 10;
 
-    /** A digest whose history has never been reset — the shape every caller but the reset used. */
+    /** A digest whose history has never been reset and that sends nowhere. */
     public Digest(String id, String name, String query, String sourceEntityId,
                   List<String> knowledgeIds, Map<String, Object> filters, String window,
                   SyncSchedule schedule, String taskId, int topK, boolean collapseDuplicates,
@@ -77,7 +81,18 @@ public record Digest(
                   Instant createdAt, Instant updatedAt) {
         this(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
-                updatedAt, null);
+                updatedAt, null, List.of());
+    }
+
+    /** A digest that sends nowhere — the shape every caller used before digests could publish. */
+    public Digest(String id, String name, String query, String sourceEntityId,
+                  List<String> knowledgeIds, Map<String, Object> filters, String window,
+                  SyncSchedule schedule, String taskId, int topK, boolean collapseDuplicates,
+                  Integer maxChunksPerEntity, boolean onlyNew, boolean enabled, Instant nextRunAt,
+                  Instant createdAt, Instant updatedAt, Instant historyResetAt) {
+        this(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+                collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
+                updatedAt, historyResetAt, List.of());
     }
 
     public Digest {
@@ -99,6 +114,9 @@ public record Digest(
             topK = DEFAULT_TOP_K;
         }
         schedule = schedule == null ? SyncSchedule.NONE : schedule;
+        // Distinct, so ticking a channel twice cannot queue two copies of every run.
+        channelIds = channelIds == null ? List.of()
+                : channelIds.stream().filter(c -> c != null && !c.isBlank()).distinct().toList();
     }
 
     /** The look-back window as a duration, or null when the digest has no time bound. */
@@ -115,26 +133,26 @@ public record Digest(
     public Digest withNextRunAt(Instant next) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, next,
-                createdAt, updatedAt, historyResetAt);
+                createdAt, updatedAt, historyResetAt, channelIds);
     }
 
     public Digest withEnabled(boolean nowEnabled, Instant updatedAt) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, nowEnabled, nextRunAt,
-                createdAt, updatedAt, historyResetAt);
+                createdAt, updatedAt, historyResetAt, channelIds);
     }
 
     /** The same digest, marked as edited at {@code at}. */
     public Digest withTouched(Instant at) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
-                createdAt, at, historyResetAt);
+                createdAt, at, historyResetAt, channelIds);
     }
 
     /** Start the already-seen set again from {@code at}, keeping every recorded run. */
     public Digest withHistoryResetAt(Instant at) {
         return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
-                createdAt, at, at);
+                createdAt, at, at, channelIds);
     }
 }

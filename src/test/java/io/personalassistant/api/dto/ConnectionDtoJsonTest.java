@@ -11,7 +11,6 @@ import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import io.personalassistant.common.ratelimit.RateLimitRule;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
-import io.personalassistant.domain.model.enums.SourceType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +50,7 @@ class ConnectionDtoJsonTest {
         assertEquals(2, dto.rateLimit().rules().size());
         assertEquals(new RateLimitRule(10, 1), dto.rateLimit().rules().get(0));
         assertEquals(500, dto.toRequest().rateLimit().rules().get(1).permits());
-        assertEquals(SourceType.GMAIL, dto.toRequest().type());
+        assertEquals("GMAIL", dto.toRequest().type());
     }
 
     @Test
@@ -81,7 +80,7 @@ class ConnectionDtoJsonTest {
      */
     @Test
     void serializesTheStoredPolicyBackInTheSameShapeItAccepts() throws Exception {
-        Connection connection = new Connection("conn_1", "Work Gmail", SourceType.GMAIL, Map.of(),
+        Connection connection = new Connection("conn_1", "Work Gmail", "GMAIL", Map.of(),
                 Map.of(), new RateLimitPolicy(List.of(new RateLimitRule(500, 60))), true,
                 ConnectionStatus.ACTIVE, null, Instant.now(), Instant.now());
 

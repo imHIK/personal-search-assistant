@@ -35,7 +35,8 @@ public record DigestPatch(
         Patched<Boolean> collapseDuplicates,
         Patched<Integer> maxChunksPerEntity,
         Patched<Boolean> onlyNew,
-        Patched<Boolean> enabled) {
+        Patched<Boolean> enabled,
+        Patched<List<String>> channelIds) {
 
     /** Normalize any {@code null} to its absent form so callers can pass either. */
     public DigestPatch {
@@ -52,6 +53,17 @@ public record DigestPatch(
         maxChunksPerEntity = Patched.orAbsent(maxChunksPerEntity);
         onlyNew = Patched.orAbsent(onlyNew);
         enabled = Patched.orAbsent(enabled);
+        channelIds = Patched.orAbsent(channelIds);
+    }
+
+    /** An edit that leaves the digest's channels alone. */
+    public DigestPatch(Patched<String> name, Patched<String> query, Patched<String> sourceEntityId,
+                       Patched<List<String>> knowledgeIds, Patched<Map<String, Object>> filters,
+                       Patched<String> window, Patched<SyncSchedule> schedule, Patched<String> taskId,
+                       Patched<Integer> topK, Patched<Boolean> collapseDuplicates,
+                       Patched<Integer> maxChunksPerEntity, Patched<Boolean> onlyNew, Patched<Boolean> enabled) {
+        this(name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+                collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, null);
     }
 
     /**
@@ -83,7 +95,9 @@ public record DigestPatch(
                 existing.nextRunAt(),
                 existing.createdAt(),
                 existing.updatedAt(),
-                existing.historyResetAt());
+                existing.historyResetAt(),
+                // A cleared list sends nowhere; the Digest constructor makes an empty list of the null.
+                channelIds.orElse(existing.channelIds()));
     }
 
     private int topKOr(int current) {

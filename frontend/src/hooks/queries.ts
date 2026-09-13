@@ -1,22 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { channelsApi } from '@/api/channels'
 import { connectionsApi } from '@/api/connections'
+import { deliveriesApi } from '@/api/deliveries'
 import { digestsApi } from '@/api/digests'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
 import { tasksApi } from '@/api/tasks'
 import type {
   Connection,
+  CreateChannelBody,
   CreateConnectionBody,
   CreateDigestBody,
   CreateKnowledgeBody,
   CursorInfo,
+  DeliveryStatus,
   EntityStatus,
   Knowledge,
+  PatchChannelBody,
   PatchConnectionBody,
   PatchDigestBody,
   PatchKnowledgeBody,
-  SourceType,
   TaskBody,
 } from '@/api/types'
 import {
@@ -45,8 +49,14 @@ export const keys = {
   llmProfiles: ['llm-profiles'] as const,
   entity: (id: string) => ['entities', id] as const,
   connections: ['connections'] as const,
-  connectionsOfType: (type?: SourceType) => ['connections', type ?? 'all'] as const,
+  connectionsOfType: (type?: string) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
+  channels: ['channels'] as const,
+  channelOne: (id: string) => ['channels', id] as const,
+  deliveries: (channelId: string, status: DeliveryStatus | null, limit: number, offset: number) =>
+    ['deliveries', channelId, status ?? 'all', limit, offset] as const,
+  deliveriesAll: ['deliveries'] as const,
+  runDeliveries: (runId: string) => ['deliveries', 'run', runId] as const,
 }
 
 /**
@@ -231,7 +241,7 @@ export function useEntityActions(knowledgeId: string) {
 
 // ---- Connections ----------------------------------------------------------------------------
 
-export function useConnections(type?: SourceType) {
+export function useConnections(type?: string) {
   return useQuery({
     queryKey: keys.connectionsOfType(type),
     queryFn: () => connectionsApi.list(type),
@@ -289,6 +299,79 @@ export function useConnectionsById(): Map<string, Connection> {
   const map = useRef(new Map<string, Connection>())
   map.current = new Map((data ?? []).map((connection) => [connection.id, connection]))
   return map.current
+}
+
+// ---- Publishing channels ----------------------------------------------------------------------
+
+export function useChannels() {
+  return useQuery({ queryKey: keys.channels, queryFn: channelsApi.list })
+}
+
+export function useChannel(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.channelOne(id!),
+    queryFn: () => channelsApi.get(id!),
+    enabled: Boolean(id),
+  })
+}
+
+export function useChannelMutations() {
+  const client = useQueryClient()
+  const invalidate = useCallback(() => {
+    void client.invalidateQueries({ queryKey: keys.channels })
+    void client.invalidateQueries({ queryKey: keys.deliveriesAll })
+  }, [client])
+
+  const create = useMutation({
+    mutationFn: (body: CreateChannelBody) => channelsApi.create(body),
+    onSuccess: invalidate,
+  })
+  const patch = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: PatchChannelBody }) => channelsApi.patch(id, body),
+    onSuccess: invalidate,
+  })
+  const test = useMutation({
+    mutationFn: (id: string) => channelsApi.test(id),
+    onSuccess: invalidate,
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => channelsApi.remove(id),
+    onSuccess: invalidate,
+  })
+  return { create, patch, test, remove }
+}
+
+/**
+ * A channel's recent deliveries. Polls while anything is still queued, since the worker sends in the
+ * background and there is no push channel to say it has.
+ */
+export function useDeliveries(channelId: string | undefined, limit = 20) {
+  return useQuery({
+    queryKey: keys.deliveries(channelId!, null, limit, 0),
+    queryFn: () => deliveriesApi.list({ channelId, limit }),
+    enabled: Boolean(channelId),
+    refetchInterval: (q) =>
+      q.state.data?.some((delivery) => delivery.status === 'PENDING') ? POLL_INTERVAL_MS : false,
+  })
+}
+
+export function useRetryDelivery() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deliveriesApi.retry(id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: keys.deliveriesAll }),
+  })
+}
+
+/** What a digest run was sent to. Polls while any of it is still queued. */
+export function useRunDeliveries(runId: string | undefined) {
+  return useQuery({
+    queryKey: keys.runDeliveries(runId!),
+    queryFn: () => deliveriesApi.list({ refId: runId, limit: 20 }),
+    enabled: Boolean(runId),
+    refetchInterval: (q) =>
+      q.state.data?.some((delivery) => delivery.status === 'PENDING') ? POLL_INTERVAL_MS : false,
+  })
 }
 
 // ---- Health ---------------------------------------------------------------------------------

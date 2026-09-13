@@ -38,15 +38,21 @@ export interface ConnectorDescriptor {
   configFields: FieldSpec[]
   /** Rendered in the "how do I get these?" panel on the account form. */
   credentialHelp?: { title: string; steps: string[]; scopes?: string[] }
+  /**
+   * Connect this account through the backend's OAuth flow instead of pasting a token by hand. The
+   * value is the provider's server-side id (`OAuthProvider.id()`), used as a path segment — so a new
+   * OAuth application is this one field plus one bean, and no component changes.
+   */
+  oauth?: { provider: string }
 }
 
-const googleAuthFields: FieldSpec[] = [
+export const googleAuthFields: FieldSpec[] = [
   {
     name: 'refreshToken',
     kind: 'secret',
     label: 'Refresh token',
-    hint: 'Long-lived token used to stay signed in. Stored on this machine only.',
-    required: true,
+    hint: 'Normally filled in for you by Connect with Google. Paste one only if you obtained it by hand.',
+    technical: true,
   },
   {
     name: 'accessToken',
@@ -64,7 +70,7 @@ const googleAuthFields: FieldSpec[] = [
   },
 ]
 
-const googleConfigFields: FieldSpec[] = [
+export const googleConfigFields: FieldSpec[] = [
   {
     name: 'clientId',
     kind: 'text',
@@ -81,10 +87,10 @@ const googleConfigFields: FieldSpec[] = [
 ]
 
 const googleHelpSteps = [
-  'In Google Cloud Console, create an OAuth 2.0 Client ID of type "Desktop app".',
-  'Enable the Gmail API and the Google Drive API for that project.',
-  'Run the OAuth consent flow for your own account and copy the refresh token it returns.',
-  'Paste the refresh token above. Client ID and secret are only needed if the server has none configured.',
+  'Click Connect with Google above and approve the access — that is the whole flow.',
+  'The first time, Google shows a "Google hasn\'t verified this app" screen: choose Advanced, then continue.',
+  'One-off setup in Google Cloud Console: enable the Gmail and Drive APIs, and create an OAuth client of type "Web application" whose authorised redirect URIs include this console\'s address followed by /api/connections/oauth/google/callback.',
+  'Publish the consent screen (OAuth consent screen → Publish app). While it stays in Testing, Google cuts the connection off after 7 days no matter what.',
 ]
 
 export const connectors: ConnectorDescriptor[] = [
@@ -137,6 +143,7 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: googleAuthFields,
     configFields: googleConfigFields,
+    oauth: { provider: 'google' },
     credentialHelp: {
       title: 'Connecting Gmail',
       steps: googleHelpSteps,
@@ -161,6 +168,7 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: googleAuthFields,
     configFields: googleConfigFields,
+    oauth: { provider: 'google' },
     credentialHelp: {
       title: 'Connecting Google Drive',
       steps: googleHelpSteps,

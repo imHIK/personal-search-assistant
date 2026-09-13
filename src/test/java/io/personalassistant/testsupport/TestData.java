@@ -43,7 +43,7 @@ public final class TestData {
     public static Connection connection(String id, SourceType type, boolean isDefault,
                                         Map<String, Object> auth) {
         Instant now = Instant.now();
-        return new Connection(id, "test-" + id, type, auth, Map.of(), null, isDefault,
+        return new Connection(id, "test-" + id, type.name(), auth, Map.of(), null, isDefault,
                 ConnectionStatus.ACTIVE, null, now, now);
     }
 

@@ -7,16 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import io.personalassistant.common.ratelimit.RateLimitRules;
+import io.personalassistant.connection.CdiConnectionKindRegistry;
+import io.personalassistant.domain.model.Channel;
 import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.enums.ChannelStatus;
+import io.personalassistant.domain.model.enums.ChannelType;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService.ConnectionEdit;
 import io.personalassistant.domain.service.ConnectionService.NewConnection;
+import io.personalassistant.testsupport.InMemoryChannelRepository;
 import io.personalassistant.testsupport.InMemoryConnectionRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
 import io.personalassistant.testsupport.TestData;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -25,6 +31,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class DefaultConnectionServiceTest {
+
+    private final InMemoryChannelRepository channels = new InMemoryChannelRepository();
 
     private InMemoryConnectionRepository connections;
     private InMemoryKnowledgeRepository knowledge;
@@ -36,11 +44,12 @@ class DefaultConnectionServiceTest {
         connections = new InMemoryConnectionRepository();
         knowledge = new InMemoryKnowledgeRepository();
         connector = new StubConnector(SourceType.SLACK, List.of()).withRequiresConnection(true);
-        service = new DefaultConnectionService(connections, knowledge, new SingleConnectorRegistry(connector));
+        service = new DefaultConnectionService(connections, knowledge, channels,
+                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
     }
 
     private Connection create(String name, boolean makeDefault) {
-        return service.create(new NewConnection(name, SourceType.SLACK,
+        return service.create(new NewConnection(name, "SLACK",
                 Map.of("token", name), Map.of(), null, makeDefault));
     }
 
@@ -57,7 +66,7 @@ class DefaultConnectionServiceTest {
         Connection second = create("personal", false);
         assertTrue(connections.findById(first.id()).orElseThrow().isDefault());
         assertFalse(second.isDefault());
-        assertEquals(first.id(), connections.findDefault(SourceType.SLACK).orElseThrow().id());
+        assertEquals(first.id(), connections.findDefault("SLACK").orElseThrow().id());
     }
 
     @Test
@@ -105,6 +114,10 @@ class DefaultConnectionServiceTest {
     @Test
     void createRejectsConnectorThatNeedsNoConnection() {
         connector.withRequiresConnection(false);
+        // Connection kinds are read from the connectors once, at construction — a connector does not change
+        // whether it needs credentials at runtime — so the service is rebuilt over the changed stub.
+        service = new DefaultConnectionService(connections, knowledge, channels,
+                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
         assertThrows(IllegalArgumentException.class, () -> create("pointless", false));
     }
 
@@ -122,7 +135,7 @@ class DefaultConnectionServiceTest {
         Connection first = create("work", false);   // default
         Connection second = create("personal", false);
         service.delete(first.id());
-        assertEquals(second.id(), connections.findDefault(SourceType.SLACK).orElseThrow().id(),
+        assertEquals(second.id(), connections.findDefault("SLACK").orElseThrow().id(),
                 "the surviving connection is promoted to default");
     }
 
@@ -148,7 +161,7 @@ class DefaultConnectionServiceTest {
 
     @Test
     void anAccountsRateLimitRoundTrips() {
-        Connection c = service.create(new NewConnection("work", SourceType.SLACK, Map.of("token", "t"),
+        Connection c = service.create(new NewConnection("work", "SLACK", Map.of("token", "t"),
                 Map.of(), RateLimitRules.parse("10/1s,500/1m"), false));
 
         RateLimitPolicy stored = connections.findById(c.id()).orElseThrow().rateLimit();
@@ -176,7 +189,7 @@ class DefaultConnectionServiceTest {
      */
     @Test
     void anEmptyRuleListClearsALimitWhileNullLeavesItAlone() {
-        Connection c = service.create(new NewConnection("work", SourceType.SLACK, Map.of("token", "t"),
+        Connection c = service.create(new NewConnection("work", "SLACK", Map.of("token", "t"),
                 Map.of(), RateLimitRules.parse("10/1s"), false));
 
         service.update(c.id(), new ConnectionEdit("Renamed", null, null, null));
@@ -234,5 +247,18 @@ class DefaultConnectionServiceTest {
     @Test
     void testReportsAnUnknownConnection() {
         Assertions.assertThrows(NoSuchElementException.class, () -> service.test("conn_nope"));
+    }
+
+    @Test
+    void deleteIsBlockedWhileAChannelSendsThroughIt() {
+        Connection c = create("work", false);
+        Instant now = Instant.now();
+        channels.insert(new Channel("chn_1", "Inbox", ChannelType.EMAIL, c.id(), Map.of(), true,
+                ChannelStatus.ACTIVE, null, now, now));
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> service.delete(c.id()));
+
+        assertTrue(thrown.getMessage().contains("channel"), thrown.getMessage());
+        assertTrue(connections.findById(c.id()).isPresent());
     }
 }

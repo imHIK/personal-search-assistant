@@ -16,6 +16,8 @@ import java.util.Map;
  * @param taskId   a prompt-catalogue task to run over the results, or null for results only
  * @param onlyNew  drop results an earlier run already reported. Defaults true — that is what makes a
  *                 digest a digest rather than a repeated search
+ * @param channelIds publishing channels each run that finds something or fails is sent to; null or
+ *                 empty sends nowhere
  * @param historyResetAt when the already-seen set was last cleared, or null. Read-only; set by
  *                 {@code POST /api/digests/{id}/reset-history}
  */
@@ -38,7 +40,8 @@ public record DigestDto(
         Instant nextRunAt,
         Instant createdAt,
         Instant updatedAt,
-        Instant historyResetAt) {
+        Instant historyResetAt,
+        List<String> channelIds) {
 
     /**
      * @throws IllegalArgumentException if it names neither a query nor a source document — a digest
@@ -65,7 +68,8 @@ public record DigestDto(
                 maxChunksPerEntity,
                 onlyNew == null || onlyNew,
                 enabled == null || enabled,
-                null, null, null);
+                null, null, null, null,
+                channelIds == null ? List.of() : channelIds);
     }
 
     /**
@@ -91,6 +95,7 @@ public record DigestDto(
                 d.filters(), d.window(), d.schedule().cron(),
                 d.schedule().interval() == null ? null : d.schedule().interval().toString(),
                 d.taskId(), d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(), d.onlyNew(),
-                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt());
+                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt(),
+                d.channelIds());
     }
 }

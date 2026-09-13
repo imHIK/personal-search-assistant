@@ -3,7 +3,6 @@ import type {
   Connection,
   CreateConnectionBody,
   PatchConnectionBody,
-  SourceType,
 } from './types'
 
 /**
@@ -16,7 +15,7 @@ export function isDefaultConnection(connection: Connection): boolean {
 }
 
 export const connectionsApi = {
-  list: (type?: SourceType) => http<Connection[]>('/api/connections' + query({ type })),
+  list: (type?: string) => http<Connection[]>('/api/connections' + query({ type })),
 
   get: (id: string) => http<Connection>(`/api/connections/${encodeURIComponent(id)}`),
 

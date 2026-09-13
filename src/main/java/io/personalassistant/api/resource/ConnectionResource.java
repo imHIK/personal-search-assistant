@@ -3,7 +3,6 @@ package io.personalassistant.api.resource;
 import io.personalassistant.api.dto.ConnectionDto;
 import io.personalassistant.api.dto.ConnectionEditDto;
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -37,11 +36,7 @@ public class ConnectionResource {
         if (type == null || type.isBlank()) {
             return connectionService.list();
         }
-        try {
-            return connectionService.listByType(SourceType.valueOf(type));
-        } catch (IllegalArgumentException e) {
-            throw ApiErrors.badRequest("Unknown connector type: " + type);
-        }
+        return connectionService.listByType(type.trim());
     }
 
     @GET

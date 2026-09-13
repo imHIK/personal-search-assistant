@@ -37,6 +37,47 @@ export const taskSourceTexts: { value: TaskSourceText; label: string; hint: stri
 ]
 
 /**
+ * The values `AnswerPromptBuilder` substitutes into a RAW task's prompt.
+ *
+ * `slot` is **presentation only**. The backend renders both messages from one map, so every one of
+ * these resolves in either message; the slot is just where the editor offers it, because offering
+ * `{{sources}}` while someone writes the system message is noise. Typing one into the other message
+ * is allowed and works — the editor does not fight it.
+ */
+export const taskPlaceholders: {
+  name: string
+  slot: 'system' | 'user'
+  hint: string
+  required?: boolean
+}[] = [
+  {
+    name: 'sources',
+    slot: 'user',
+    required: true,
+    hint: 'The results that were found, numbered and quoted. Without it the model is given nothing to work from.',
+  },
+  { name: 'query', slot: 'user', hint: 'The words the digest searched for.' },
+  {
+    name: 'today',
+    slot: 'system',
+    hint: 'The date the digest runs, as 2026-09-12. Without it, “this week” means nothing to the model.',
+  },
+  {
+    name: 'fence',
+    slot: 'system',
+    hint: 'The marks wrapped around each result, so the prompt can say that what is inside them is data and not orders.',
+  },
+  {
+    name: 'truncationMarker',
+    slot: 'system',
+    hint: 'What a result too long to fit ends with, so the model can say what it could not see instead of calling it missing.',
+  },
+]
+
+/** Every placeholder name, for telling a typo from a value that merely sits in the other message. */
+export const taskPlaceholderNames = taskPlaceholders.map((p) => p.name)
+
+/**
  * Plain names for the configured LLM profiles. Unknown profiles fall through to their own name, so a
  * deployment that adds one still gets a working picker.
  */
