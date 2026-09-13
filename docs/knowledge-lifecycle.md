@@ -62,6 +62,12 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
   and `interval` `null` to inherit the **connector default** (LOCAL_FS = 1 day) and then the
   **global default** (`app.scheduler.default-interval`, 1 day); set one to override (cron wins over
   interval). `scheduleEnabled: false` turns forward scheduling off entirely. See `ScheduleResolver`.
+  A `cron` is evaluated in **UTC** and may be 5-field Unix (`0 9,18 * * *`) or 6/7-field Quartz
+  (`0 0 9,18 * * ?`). One neither dialect parses is a **`400`** on create and on edit — the only
+  validation that rejects a create outright instead of parking the knowledge in `ERROR`, because it
+  is checked before the DRAFT is stored. A bad cron already in Mongo from before that check does not
+  break the scheduler: that knowledge falls back to `app.scheduler.default-interval` (with a warning
+  logged) until its cron is replaced.
 - `backfillEnabled` controls whether history is walked backward on activation.
 
 ### What happens synchronously (`DefaultKnowledgeService.add`)

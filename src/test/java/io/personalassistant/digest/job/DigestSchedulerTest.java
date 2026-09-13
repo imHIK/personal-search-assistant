@@ -160,4 +160,18 @@ class DigestSchedulerTest {
 
         Assertions.assertNotNull(repository.store.get("dig_nocadence").nextRunAt());
     }
+
+    @Test
+    void aStoredUnparseableCronStillRunsAndIsRescheduled() {
+        repository.save(new Digest("dig_badcron", "d", "engineer", null, List.of(), Map.of(), "1d",
+                SyncSchedule.ofCron("every morning"), null, 10, false, null, true, true, null,
+                Instant.now(), Instant.now()));
+        DigestScheduler scheduler = scheduler();
+
+        scheduler.tick();
+        scheduler.tick();
+
+        Assertions.assertEquals(List.of("dig_badcron"), service.ran, "rescheduled by the global default");
+        Assertions.assertNotNull(repository.store.get("dig_badcron").nextRunAt());
+    }
 }

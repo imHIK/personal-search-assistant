@@ -9,6 +9,7 @@ import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -49,7 +50,13 @@ public class ForwardCursorScheduler {
             if (!schedulingEnabled(kn) || !isDue(kn, now)) {
                 continue;
             }
-            armAndReschedule(kn, now);
+            // One knowledge that cannot be rescheduled must not stop the rest: an exception escaping
+            // here aborts the loop, and every knowledge after it silently stops syncing.
+            try {
+                armAndReschedule(kn, now);
+            } catch (RuntimeException e) {
+                LOG.log(Level.WARNING, "Could not re-arm knowledge " + kn.id() + "; retrying next tick", e);
+            }
         }
     }
 

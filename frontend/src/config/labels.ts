@@ -226,6 +226,11 @@ export const labels = {
     addNewAccount: 'Add a new account',
     backfill: 'Also import everything already there',
     backfillHint: 'Off means only items added from now on are indexed.',
+    changeType: 'Change type',
+    discardTitle: `Discard this ${nouns.source.toLowerCase()}?`,
+    discardBody: "You've started filling this in. Leaving now loses everything you entered.",
+    discardConfirm: 'Discard',
+    keepEditing: 'Keep editing',
   },
 
   settings: {
@@ -253,6 +258,9 @@ export const labels = {
     every6h: 'Every 6 hours',
     daily: 'Once a day',
     custom: 'Custom',
+    cronLabel: 'Cron expression',
+    cronHint:
+      'Standard 5-field cron (0 9,18 * * *) or Quartz 6-field (0 0 9,18 * * ?). Times are UTC. Takes precedence over any interval.',
   },
 
   common: {
@@ -284,6 +292,8 @@ export const labels = {
     filter: 'Type to filter…',
     noMatch: 'Nothing matches. Add it below instead.',
     add: 'Add',
+    selectAll: (n: number) => `Select all ${n}`,
+    deselectAll: 'Deselect all',
   },
 
   errors: {

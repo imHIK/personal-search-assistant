@@ -19,6 +19,7 @@ import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
 import io.personalassistant.ingestion.connector.SourceIterable;
+import io.personalassistant.ingestion.schedule.ScheduleResolver;
 import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.DiscoveryStatusRepository;
 import io.personalassistant.storage.repository.EntityRepository;
@@ -94,6 +95,12 @@ public class DefaultKnowledgeService implements KnowledgeService {
     public Knowledge add(NewKnowledge request) {
         Instant now = Instant.now();
         Knowledge.Config config = request.config() != null ? request.config() : Knowledge.Config.defaults();
+        // Checked before the DRAFT is persisted, unlike the activation failures below: a cron the
+        // scheduler cannot run is a bad request, not a source that failed to connect, and parking it in
+        // ERROR would leave a record the user can only fix by deleting it.
+        if (config.scheduleSettings() != null) {
+            ScheduleResolver.requireValidCron(config.scheduleSettings().cron());
+        }
         Knowledge draft = new Knowledge(
                 Ids.knowledge(),
                 request.name(),
@@ -151,6 +158,11 @@ public class DefaultKnowledgeService implements KnowledgeService {
         if (patch.type().present() && patch.type().value() != current.connectorDetails().type()) {
             throw new IllegalArgumentException(
                     "connectorDetails.type is immutable; delete and recreate to change connector");
+        }
+        // Only a cron this edit sends is checked. Validating the merged record would also reject a cron
+        // stored before this check existed, and so block the unrelated edits (or the new cron) that fix it.
+        if (patch.schedule().cron().present()) {
+            ScheduleResolver.requireValidCron(patch.schedule().cron().value());
         }
 
         // Classify the edit by diffing the patch against the stored record.

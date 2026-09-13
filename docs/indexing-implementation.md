@@ -263,7 +263,7 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.ingestion.permits.ttl-seconds` | `14400` | Ingestion permit TTL; renewed per page like the lease, so keep `>= app.ingestion.lease-seconds` |
 | `app.scheduler.forward-interval` | `1m` | Scheduler **tick** granularity — how often it checks which knowledges are due. Bounds the finest schedule, not how often any one source syncs |
 | `app.scheduler.default-interval` | `1d` | Global-default forward-sync interval (last resort: used when a knowledge has no custom schedule and its connector declares no `defaultSchedule()`) |
-| `app.scheduler.default-cron` | _(empty)_ | Optional global-default cron; if set, wins over `default-interval`. Cron beats interval at every tier |
+| `app.scheduler.default-cron` | _(empty)_ | Optional global-default cron; if set, wins over `default-interval`. Cron beats interval at every tier. Every cron (all tiers, digests too) is evaluated in **UTC** and may be 5-field Unix (`0 9 * * *`) or 6/7-field Quartz (`0 0 9 * * ?`) — `ScheduleResolver` picks the dialect by field count |
 | `app.scheduler.discovery-interval` | `60m` | How often dynamic-iterable sources are re-discovered (new folders/channels) |
 | `app.indexing.poll-interval` | `5s` | Indexing loop tick |
 | `app.indexing.batch` | `20` | Global budget of entities indexed per tick |

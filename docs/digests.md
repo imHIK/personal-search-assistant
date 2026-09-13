@@ -131,7 +131,8 @@ records no items, so it also cannot poison the already-seen set.
 `DigestScheduler` follows the ingestion schedulers' shape: a fixed tick (`app.digest.poll-interval`)
 bounds resolution, and each digest carries its own `nextRunAt`. Cadence resolves through the same
 `ScheduleResolver`, so a digest accepts the cron and interval forms already documented rather than
-inventing a second syntax.
+inventing a second syntax: a cron is UTC, 5-field Unix or 6/7-field Quartz, and one that parses as
+neither is a `400` on create or on an edit that sends a schedule.
 
 Two details worth knowing:
 

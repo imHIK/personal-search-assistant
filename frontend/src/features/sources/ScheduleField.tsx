@@ -52,8 +52,8 @@ export function ScheduleField({
 
       {value.preset === 'custom' && (
         <Field
-          label="Cron expression"
-          hint="Standard 5-field cron. Takes precedence over any interval."
+          label={labels.schedule.cronLabel}
+          hint={labels.schedule.cronHint}
           required
           htmlFor="schedule-cron"
         >

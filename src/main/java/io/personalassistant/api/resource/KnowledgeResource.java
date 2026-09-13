@@ -47,9 +47,18 @@ public class KnowledgeResource {
                 .orElseThrow(() -> ApiErrors.notFound("No source with id " + id));
     }
 
+    /**
+     * Create and activate a knowledge. An activation failure is still a {@code 200} with
+     * {@code status: "ERROR"}; only a request the service rejects before persisting anything (an
+     * unparseable cron) is a {@code 400}.
+     */
     @POST
     public Knowledge create(KnowledgeDto dto) {
-        return knowledgeService.add(dto.toRequest());
+        try {
+            return knowledgeService.add(dto.toRequest());
+        } catch (IllegalArgumentException e) {
+            throw ApiErrors.badRequest(e.getMessage());
+        }
     }
 
     /**

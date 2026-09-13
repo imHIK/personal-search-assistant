@@ -66,13 +66,15 @@ public class DigestScheduler {
     }
 
     private void rollForward(Digest digest, Instant from) {
-        SyncSchedule schedule = digest.schedule();
-        Instant next = schedule != null && schedule.isPresent()
-                ? schedules.nextDueAt(schedule, from)
-                // No cadence of its own: fall back to the global default rather than leaving it
-                // permanently due, which would run it every tick.
-                : schedules.nextDueAt(schedules.globalDefault(), from);
+        // Computing the due time sits inside the try with the save: thrown from here it would end the
+        // loop, and every digest after this one would miss its run.
         try {
+            SyncSchedule schedule = digest.schedule();
+            Instant next = schedule != null && schedule.isPresent()
+                    ? schedules.nextDueAt(schedule, from)
+                    // No cadence of its own: fall back to the global default rather than leaving it
+                    // permanently due, which would run it every tick.
+                    : schedules.nextDueAt(schedules.globalDefault(), from);
             digests.save(digest.withNextRunAt(next));
         } catch (RuntimeException e) {
             LOG.log(Level.WARNING, "Could not advance the due time for digest " + digest.id(), e);

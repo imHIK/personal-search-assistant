@@ -72,6 +72,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel = labels.common.confirm,
+  cancelLabel = labels.common.cancel,
   confirmText,
   confirmHint,
   onConfirm,
@@ -82,6 +83,7 @@ export function ConfirmDialog({
   title: string
   description?: React.ReactNode
   confirmLabel?: string
+  cancelLabel?: string
   confirmText?: string
   confirmHint?: string
   onConfirm: () => void
@@ -104,7 +106,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            {labels.common.cancel}
+            {cancelLabel}
           </Button>
           <Button variant="danger" onClick={onConfirm} disabled={!armed} loading={loading}>
             {confirmLabel}

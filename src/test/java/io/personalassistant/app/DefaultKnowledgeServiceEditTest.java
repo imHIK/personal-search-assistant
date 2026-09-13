@@ -121,6 +121,37 @@ class DefaultKnowledgeServiceEditTest {
     }
 
     @Test
+    void anUnparseableCronIsRejectedAndNothingIsWritten() {
+        Knowledge kn = add(Map.of());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.update(kn.id(), KnowledgePatch.builder().cron("every morning").build()));
+
+        assertEquals(null, knowledge.findById(kn.id()).orElseThrow().config().scheduleSettings().cron());
+    }
+
+    @Test
+    void aFiveFieldCronIsAccepted() {
+        Knowledge kn = add(Map.of());
+
+        service.update(kn.id(), KnowledgePatch.builder().cron("0 9,18 * * *").build());
+
+        assertEquals("0 9,18 * * *", knowledge.findById(kn.id()).orElseThrow().config().scheduleSettings().cron());
+    }
+
+    @Test
+    void anUnparseableCronOnCreateIsRejectedBeforeADraftIsStored() {
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(new Knowledge.ScheduleSettings("every morning", null, true),
+                defaults.webhookSettings(), defaults.backfill());
+
+        assertThrows(IllegalArgumentException.class, () -> service.add(new KnowledgeService.NewKnowledge(
+                "team slack", SourceType.SLACK, null, Map.of(), Map.of(), config)));
+
+        assertTrue(knowledge.findAll().isEmpty(), "no DRAFT (or ERROR) record left behind");
+    }
+
+    @Test
     void enablingScheduleReArmsForwardCursors() {
         Knowledge kn = add(Map.of()); // add defaults scheduleEnabled=false
         // Simulate a forward cursor that has caught up and is waiting for the scheduler.

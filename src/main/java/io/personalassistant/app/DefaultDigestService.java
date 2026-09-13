@@ -9,6 +9,7 @@ import io.personalassistant.domain.model.Delivery;
 import io.personalassistant.domain.model.Digest;
 import io.personalassistant.domain.model.DigestRun;
 import io.personalassistant.domain.model.PublishMessage;
+import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
@@ -16,6 +17,7 @@ import io.personalassistant.domain.service.DigestPatch;
 import io.personalassistant.domain.service.DigestService;
 import io.personalassistant.domain.service.PublishingService;
 import io.personalassistant.domain.service.SearchService;
+import io.personalassistant.ingestion.schedule.ScheduleResolver;
 import io.personalassistant.storage.repository.ChannelRepository;
 import io.personalassistant.storage.repository.DigestRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -84,6 +86,7 @@ public class DefaultDigestService implements DigestService {
     @Override
     public Digest create(Digest digest) {
         requireChannels(digest.channelIds());
+        requireValidSchedule(digest.schedule());
         Instant now = Instant.now();
         Digest stored = new Digest(
                 digest.id() == null || digest.id().isBlank() ? Ids.digest() : digest.id(),
@@ -130,7 +133,19 @@ public class DefaultDigestService implements DigestService {
         if (patch.channelIds().present()) {
             requireChannels(merged.channelIds());
         }
+        // Like channels, only a schedule the edit sends: a cron stored before validation existed must not
+        // block the edit that replaces it.
+        if (patch.schedule().present()) {
+            requireValidSchedule(merged.schedule());
+        }
         return digests.save(merged);
+    }
+
+    /** A cron the scheduler cannot parse is a 400 now, rather than a warning on every tick later. */
+    private static void requireValidSchedule(SyncSchedule schedule) {
+        if (schedule != null) {
+            ScheduleResolver.requireValidCron(schedule.cron());
+        }
     }
 
     /**

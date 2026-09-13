@@ -231,6 +231,16 @@ class DefaultDigestServiceTest {
     }
 
     @Test
+    void anUnparseableCronIsRejectedOnCreate() {
+        DefaultDigestService svc = service(new StubSearchAgent(""));
+        Digest bad = new Digest(null, "New postings", "engineer", null, List.of(), Map.of(), "1d",
+                SyncSchedule.ofCron("every morning"), null, 10, false, null, true, true, null, null, null);
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> svc.create(bad));
+        Assertions.assertTrue(repository.findAll().isEmpty());
+    }
+
+    @Test
     void aDisabledDigestIsNeverDueButStillRunsByHand() {
         DefaultDigestService svc = service(new StubSearchAgent(""));
         Digest created = svc.create(digest("1d", null, true, 10));

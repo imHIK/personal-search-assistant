@@ -8,6 +8,7 @@ import { SchemaForm, type FormValues } from '@/components/SchemaForm'
 import { CompanyLookup } from './CompanyLookup'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card'
+import { ConfirmDialog } from '@/components/ui/Dialog'
 import { Field, Input, Select } from '@/components/ui/Input'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { ErrorState } from '@/components/ui/States'
@@ -16,9 +17,12 @@ import { connectors, connectorFor } from '@/config/connectors'
 import { initialValues, pruneEmpty, schemaFor } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnections, useCreateKnowledge } from '@/hooks/queries'
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { cn } from '@/lib/utils'
 import { ChunkingFields } from './ChunkingFields'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
+
+const DEFAULT_SCHEDULE: ScheduleValue = { preset: '1h', cron: '' }
 
 /**
  * Add a source. Rendered entirely from the connector descriptors — there is no branch on
@@ -34,7 +38,7 @@ export function AddSourcePage() {
   const [connectionId, setConnectionId] = useState<string>('')
   const [inputs, setInputs] = useState<FormValues>({})
   const [inputErrors, setInputErrors] = useState<Record<string, string>>({})
-  const [schedule, setSchedule] = useState<ScheduleValue>({ preset: '1h', cron: '' })
+  const [schedule, setSchedule] = useState<ScheduleValue>(DEFAULT_SCHEDULE)
   const [backfill, setBackfill] = useState(true)
   const [chunking, setChunking] = useState<FormValues>({})
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -62,6 +66,23 @@ export function AddSourcePage() {
     setInputs(initialValues(descriptor.inputFields))
     setInputErrors({})
   }, [descriptor])
+
+  // Dirty means "differs from what picking the type gave you", not "was touched" — so undoing an
+  // edit un-dirties the form. The account is excluded: it is preselected, not entered.
+  const dirty = useMemo(
+    () =>
+      descriptor !== null &&
+      JSON.stringify({ name, inputs, schedule, backfill, chunking }) !==
+        JSON.stringify({
+          name: descriptor.label,
+          inputs: initialValues(descriptor.inputFields),
+          schedule: DEFAULT_SCHEDULE,
+          backfill: true,
+          chunking: {},
+        }),
+    [descriptor, name, inputs, schedule, backfill, chunking],
+  )
+  const unsaved = useUnsavedChangesGuard(dirty)
 
   if (!type || !descriptor) {
     return (
@@ -159,9 +180,22 @@ export function AddSourcePage() {
           return
         }
         toast.success(`Connected "${knowledge.name}"`)
+        unsaved.allowNavigation()
         navigate(`/knowledge/${knowledge.id}`)
       },
     })
+  }
+
+  // Everything goes back to its default, not just the type — otherwise a schedule or account picked
+  // for the previous type leaks into the next one (and a stale connectionId skips the preselect).
+  const changeType = () => {
+    setType(null)
+    setConnectionId('')
+    setSchedule(DEFAULT_SCHEDULE)
+    setBackfill(true)
+    setChunking({})
+    setShowAdvanced(false)
+    setActivationError(null)
   }
 
   return (
@@ -172,10 +206,18 @@ export function AddSourcePage() {
         backTo="/knowledge"
         backLabel={labels.sources.title}
         actions={
-          <Button variant="ghost" size="sm" onClick={() => setType(null)}>
-            Change type
+          <Button variant="ghost" size="sm" onClick={() => unsaved.guard(changeType)}>
+            {labels.wizard.changeType}
           </Button>
         }
+      />
+
+      <ConfirmDialog
+        {...unsaved.dialogProps}
+        title={labels.wizard.discardTitle}
+        description={labels.wizard.discardBody}
+        confirmLabel={labels.wizard.discardConfirm}
+        cancelLabel={labels.wizard.keepEditing}
       />
 
       <form onSubmit={submit} className="space-y-5">

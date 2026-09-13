@@ -260,6 +260,11 @@ function PicklistInput({
       )
     : options
 
+  // Bulk actions follow the filter, so "type remote, select all" picks just the remote rows.
+  const matchingEntries = matching.flatMap(entriesOf)
+  const allMatchingSelected = matchingEntries.every(has)
+  const anyMatchingSelected = matchingEntries.some(has)
+
   return (
     <div className="space-y-2.5">
       {selected.length > 0 && (
@@ -312,6 +317,26 @@ function PicklistInput({
                 autoComplete="off"
                 onChange={(event) => setFilter(event.target.value)}
               />
+              {matching.length > 0 && (
+                <div className="mt-2 flex items-center justify-between px-2 text-xs">
+                  <button
+                    type="button"
+                    disabled={disabled || allMatchingSelected}
+                    className="font-medium text-[var(--accent)] transition-colors hover:underline disabled:cursor-default disabled:text-[var(--text-subtle)] disabled:no-underline"
+                    onClick={() => add(...matchingEntries)}
+                  >
+                    {labels.picklist.selectAll(matching.length)}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled || !anyMatchingSelected}
+                    className="text-[var(--text-muted)] transition-colors hover:text-[var(--text)] disabled:cursor-default disabled:text-[var(--text-subtle)]"
+                    onClick={() => remove(...matchingEntries)}
+                  >
+                    {labels.picklist.deselectAll}
+                  </button>
+                </div>
+              )}
               <ul className="mt-2 max-h-56 space-y-0.5 overflow-y-auto">
                 {matching.map((option) => (
                   <li key={option.value}>
