@@ -6,12 +6,16 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.personalassistant.common.ConfigText;
 import io.personalassistant.common.ProviderImpl;
+import io.personalassistant.common.http.HttpCall;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimit;
+import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Embedding;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +44,10 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
 
     private static final Logger LOG = Logger.getLogger(OpenAiCompatibleEmbeddingProvider.class.getName());
 
+    /** Gemini's asymmetric-retrieval task types. Indexing embeds documents; searching embeds queries. */
+    private static final String DOCUMENT_TASK = "RETRIEVAL_DOCUMENT";
+    private static final String QUERY_TASK = "RETRIEVAL_QUERY";
+
     @ConfigProperty(name = "app.embedding.openai.base-url",
             defaultValue = "https://generativelanguage.googleapis.com/v1beta/openai")
     String baseUrl;
@@ -57,7 +65,7 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.openai.api-key")
     Optional<String> apiKey;
 
-    @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
+    @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
     /**
@@ -71,18 +79,44 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
      * index width would silently start truncating vectors the moment someone edited the mapping, and
      * a server that ignores the parameter (some OpenAI-compatible backends reject unknown fields
      * instead) must fail loudly rather than write mis-sized vectors — hence the explicit check below.
+     *
+     * <p>The default tracks {@code application.properties} (the tiebreaker for any config default) rather
+     * than the "omit it" sentinel. It used to be {@code 0}, which meant an install missing this property
+     * silently requested {@code gemini-embedding-001}'s native 3072 width against a 768 {@code knn_vector}
+     * mapping — the failure mode invariant 5 exists to prevent. {@code 0} remains a legal value.
      */
-    @ConfigProperty(name = "app.embedding.openai.dimensions", defaultValue = "0")
+    @ConfigProperty(name = "app.embedding.openai.dimensions", defaultValue = "768")
     int requestedDimensions;
 
     @ConfigProperty(name = "app.embedding.openai.timeout-seconds", defaultValue = "60")
     long timeoutSeconds;
 
+    /**
+     * Whether to send {@code task_type}, distinguishing a query embedding from a document one.
+     *
+     * <p><strong>Off by default, and the default is the important part.</strong> {@code task_type} is a
+     * <em>native</em> Gemini parameter. The OpenAI-compatible endpoint this provider ships against
+     * ({@code /v1beta/openai}) validates strictly and rejects it outright — {@code 400 Invalid JSON
+     * payload received. Unknown name "task_type": Cannot find field.} — which fails every embedding call
+     * and therefore all indexing. Enable it only against an endpoint documented to accept it.
+     *
+     * <p>The asymmetry is real and worth having (both configured models are asymmetrically trained), but
+     * on this endpoint it is unreachable: the compat layer exposes no way to signal query vs document.
+     * The ONNX provider gets it through {@code app.embedding.onnx.query-instruction} instead.
+     */
+    @ConfigProperty(name = "app.embedding.openai.task-type-enabled", defaultValue = "false")
+    boolean taskTypeEnabled;
+
     private final ObjectMapper mapper = new ObjectMapper();
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
     private final AtomicBoolean configLogged = new AtomicBoolean();
+    private final OutboundHttp http;
+    private final RateLimitPolicies policies;
+
+    @Inject
+    public OpenAiCompatibleEmbeddingProvider(OutboundHttp http, RateLimitPolicies policies) {
+        this.http = http;
+        this.policies = policies;
+    }
 
     @Override
     public String providerId() {
@@ -104,8 +138,28 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         return embedAll(List.of(text == null ? "" : text)).get(0);
     }
 
+    /**
+     * Embeds with {@code task_type=RETRIEVAL_QUERY} rather than {@code RETRIEVAL_DOCUMENT}. Gemini's
+     * embedding models are asymmetrically trained, so telling the model which side it is embedding is
+     * what the model expects; sending both through the document path is a silent quality loss.
+     */
+    @Override
+    public Embedding embedQuery(String text) {
+        return embed(List.of(text == null ? "" : text), QUERY_TASK, RateLimitMode.FAIL_FAST).get(0);
+    }
+
     @Override
     public List<Embedding> embedAll(List<String> texts) {
+        return embed(texts, DOCUMENT_TASK, RateLimitMode.WAIT);
+    }
+
+    /**
+     * The two entry points differ in more than the task type: {@code embedQuery} is only ever reached
+     * from a user's search request, and {@code embedAll} only from the indexing runner. That existing
+     * split is exactly the rate-limit boundary, so a throttled backfill slows down while a throttled
+     * search still answers — without a limit ever having to be threaded through the callers.
+     */
+    private List<Embedding> embed(List<String> texts, String taskType, RateLimitMode mode) {
         logConfigOnce();
         try {
             ObjectNode body = mapper.createObjectNode();
@@ -113,41 +167,57 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
             if (requestedDimensions > 0) {
                 body.put("dimensions", requestedDimensions);
             }
+            // Only sent when enabled: task_type is a Gemini extension to the OpenAI schema, and a strict
+            // OpenAI-compatible endpoint may reject an unknown field outright.
+            if (taskTypeEnabled) {
+                body.put("task_type", taskType);
+            }
             ArrayNode input = body.putArray("input");
             for (String t : texts) {
                 input.add(t == null ? "" : t);
             }
 
-            HttpRequest.Builder request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl.replaceAll("/+$", "") + "/embeddings"))
-                    .timeout(Duration.ofSeconds(timeoutSeconds))
+            RateLimit limit = policies.forEmbedding(providerId(), mode);
+            HttpCall call = HttpCall
+                    .post(baseUrl.replaceAll("/+$", "") + "/embeddings",
+                            mapper.writeValueAsString(body), Duration.ofSeconds(timeoutSeconds), limit)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
-            String key = ConfigText.orNull(apiKey);
-            if (key != null) {
-                request.header("Authorization", "Bearer " + key);
-            }
+                    .header("Authorization",
+                            ConfigText.isSet(apiKey) ? "Bearer " + ConfigText.orNull(apiKey) : null);
 
             LOG.fine(() -> "Embedding request: " + texts.size() + " input(s) -> " + configSummary());
-            HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2) {
-                // The resolved config travels with the error on purpose: vendors report a missing key
-                // as things that read like other faults (Gemini answers an unauthenticated call with
-                // 404 "Requested entity was not found", i.e. exactly like a bad model id), so the
-                // status alone sends you looking in the wrong place.
-                throw new IllegalStateException("Embedding API " + response.statusCode() + ": "
-                        + snippet(response.body()) + " [" + configSummary() + "]");
-            }
-
-            JsonNode data = mapper.readTree(response.body()).path("data");
+            JsonNode data = http.json(call).path("data");
             if (!data.isArray() || data.size() != texts.size()) {
                 throw new IllegalStateException("Embedding API returned " + data.size()
                         + " vectors for " + texts.size() + " inputs");
             }
-            // Place each vector at its reported index so order matches the input regardless of API ordering.
+            // Place each vector at its reported index so order matches the input regardless of API
+            // ordering. Every slot is then checked for null below: the size check above does not
+            // catch a payload whose indices collide, and the resulting hole used to travel all the
+            // way into the index as a chunk with no vector — reported as a success and permanently
+            // unfindable by semantic search.
             Embedding[] ordered = new Embedding[texts.size()];
+            int position = 0;
             for (JsonNode item : data) {
-                int idx = item.path("index").asInt();
+                // `index` is genuinely absent on some items. Gemini's /embeddings serializes protobuf,
+                // where 0 is the proto3 default and default-valued fields are dropped — so the *first*
+                // item comes back as {"object","embedding"} with no "index" at all, while items 1..n
+                // carry theirs. Verified against the live endpoint, not inferred.
+                //
+                // Falling back to payload position is therefore correct twice over: the OpenAI schema
+                // returns `data` in input order, so position == index, and it also covers a server
+                // that omits the field entirely. Treating absence as an error instead breaks every
+                // batch on its first element. An index that is *present* and out of range is still
+                // rejected — that is the case that silently drops a vector.
+                int idx = item.hasNonNull("index") ? item.path("index").asInt(-1) : position;
+                position++;
+                if (idx < 0 || idx >= ordered.length) {
+                    throw new IllegalStateException("Embedding API reported index " + idx
+                            + " for a request of " + texts.size() + " inputs");
+                }
+                if (ordered[idx] != null) {
+                    throw new IllegalStateException("Embedding API reported index " + idx + " twice");
+                }
                 float[] vector = toVector(item.path("embedding"));
                 if (vector.length != dimension) {
                     throw new IllegalStateException(widthMismatch(vector.length));
@@ -155,10 +225,18 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 ordered[idx] = new Embedding(modelName, dimension, vector);
             }
             List<Embedding> out = new ArrayList<>(ordered.length);
-            for (Embedding e : ordered) {
-                out.add(e);
+            for (int i = 0; i < ordered.length; i++) {
+                if (ordered[i] == null) {
+                    throw new IllegalStateException("Embedding API returned no vector for input " + i);
+                }
+                out.add(ordered[i]);
             }
             return out;
+        } catch (RateLimitedException e) {
+            throw e;
+        } catch (OutboundHttpException e) {
+            throw new IllegalStateException("Embedding API " + e.status() + ": " + e.bodySnippet()
+                    + " [" + configSummary() + "]", e);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -211,10 +289,4 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         return v;
     }
 
-    private static String snippet(String body) {
-        if (body == null) {
-            return "";
-        }
-        return body.length() <= 500 ? body : body.substring(0, 500) + "…";
-    }
 }

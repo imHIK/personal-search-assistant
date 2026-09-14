@@ -1,5 +1,6 @@
 package io.personalassistant.api.resource;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.api.dto.CursorDto;
 import io.personalassistant.api.dto.EntityPageDto;
 import io.personalassistant.api.dto.KnowledgeDto;
@@ -8,20 +9,16 @@ import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.service.KnowledgeService;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -46,12 +43,22 @@ public class KnowledgeResource {
     @GET
     @Path("/{id}")
     public Knowledge get(@PathParam("id") String id) {
-        return knowledgeService.get(id).orElseThrow(NotFoundException::new);
+        return knowledgeService.get(id)
+                .orElseThrow(() -> ApiErrors.notFound("No source with id " + id));
     }
 
+    /**
+     * Create and activate a knowledge. An activation failure is still a {@code 200} with
+     * {@code status: "ERROR"}; only a request the service rejects before persisting anything (an
+     * unparseable cron) is a {@code 400}.
+     */
     @POST
     public Knowledge create(KnowledgeDto dto) {
-        return knowledgeService.add(dto.toRequest());
+        try {
+            return knowledgeService.add(dto.toRequest());
+        } catch (IllegalArgumentException e) {
+            throw ApiErrors.badRequest(e.getMessage());
+        }
     }
 
     /**
@@ -61,15 +68,20 @@ public class KnowledgeResource {
      */
     @PATCH
     @Path("/{id}")
-    public Knowledge update(@PathParam("id") String id, KnowledgePatchDto dto) {
+    public Knowledge update(@PathParam("id") String id, JsonNode body) {
+        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
+        // this endpoint's contract, and binding loses it. KnowledgePatchDto explains why.
+        if (body == null || !body.isObject()) {
+            throw ApiErrors.badRequest("a patch body is required");
+        }
         try {
-            return knowledgeService.update(id, dto.toPatch());
+            return knowledgeService.update(id, new KnowledgePatchDto(body).toPatch());
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) {          // immutable type change / unknown type value
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         } catch (IllegalStateException e) {             // knowledge is DELETED
-            throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+            throw ApiErrors.conflict(e.getMessage());
         }
     }
 
@@ -88,9 +100,9 @@ public class KnowledgeResource {
             EntityStatus filter = status == null || status.isBlank() ? null : EntityStatus.valueOf(status);
             return EntityPageDto.from(knowledgeService.listEntities(id, filter, limit, offset));
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) {          // unknown status name / negative offset
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
@@ -101,7 +113,7 @@ public class KnowledgeResource {
         try {
             return knowledgeService.listCursors(id).stream().map(CursorDto::from).toList();
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 

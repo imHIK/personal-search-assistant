@@ -2,6 +2,7 @@ package io.personalassistant.ingestion.connector.google.gmail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
@@ -13,6 +14,8 @@ import io.personalassistant.ingestion.connector.SourceIterable;
 import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
+import io.personalassistant.ingestion.connector.google.GoogleApiException;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
@@ -22,6 +25,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Gmail connector. Where the local filesystem is a no-auth walk, Gmail is the interesting case that
@@ -101,7 +105,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     public void verifyConnection(Connection connection) {
-        String token = tokens.bearer(connection);
+        GoogleAuth token = tokens.authFor(connection);
         JsonNode profile = api.getProfile(token);
         if (!profile.hasNonNull("emailAddress")) {
             throw new IllegalArgumentException(
@@ -121,7 +125,7 @@ public class GmailConnector extends TokenWindowGrabber {
         if (configured.isEmpty()) {
             return List.of(new SourceIterable(ALL_MAIL_ITERABLE, "All mail", Map.of()));
         }
-        String token = tokens.bearer(connections.resolve(knowledge));
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
         Map<String, String> labelNames = labelNames(token);
         List<SourceIterable> iterables = new ArrayList<>(configured.size());
         for (String labelId : configured) {
@@ -133,7 +137,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     protected Page fetchWindow(GrabContext ctx, TimeWindow window, String pageToken, int cap) {
-        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        GoogleAuth token = tokens.authFor(connections.resolve(ctx.knowledge()));
         Object labelId = ctx.attributes().get(LABEL_KEY);
         List<String> labelIds = labelId == null ? List.of() : List.of(labelId.toString());
         String query = combine(str(ctx.knowledge().inputs(), "query"), windowQuery(window));
@@ -168,9 +172,29 @@ public class GmailConnector extends TokenWindowGrabber {
         return q.toString();
     }
 
+    /**
+     * Re-read one message by id. Gmail bodies are stored inline in Mongo, so this connector stays
+     * {@code REINDEX_ONLY} and nothing calls this unless fetching has been forced on globally — but
+     * {@code messages.get} is exactly what the walk already uses per message, so the re-listed item
+     * is byte-for-byte what a walk would have produced. A deleted message 404s, which is the one
+     * signal this source gives that a message is gone.
+     */
+    @Override
+    public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
+        try {
+            return Optional.ofNullable(fetchAndMap(token, entity.externalId()));
+        } catch (GoogleApiException e) {
+            if (e.isNotFound()) {
+                return Optional.empty();
+            }
+            throw e;
+        }
+    }
+
     // ---- message -> RawItem ------------------------------------------------------------------
 
-    private RawItem fetchAndMap(String token, String id) {
+    private RawItem fetchAndMap(GoogleAuth token, String id) {
         if (id == null || id.isBlank()) {
             return null;
         }
@@ -214,7 +238,7 @@ public class GmailConnector extends TokenWindowGrabber {
         metadata.put("modifiedAt", modifiedAt);
 
         return new RawItem(id, EntityType.EMAIL, "text/plain", subject, uri, checksum,
-                modifiedAt, raw, text, null, metadata, false);
+                modifiedAt, raw, text, null, metadata, null, false);
     }
 
     private static String buildSearchText(String subject, String from, String to, String date,
@@ -314,7 +338,7 @@ public class GmailConnector extends TokenWindowGrabber {
         return List.of();
     }
 
-    private Map<String, String> labelNames(String token) {
+    private Map<String, String> labelNames(GoogleAuth token) {
         Map<String, String> names = new LinkedHashMap<>();
         for (JsonNode label : api.listLabels(token).path("labels")) {
             names.put(label.path("id").asText(), label.path("name").asText());

@@ -1,7 +1,9 @@
 package io.personalassistant.ingestion.schedule;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Knowledge;
@@ -105,5 +107,51 @@ class ScheduleResolverTest {
     void globalCronWinsOverGlobalIntervalWhenBothConfigured() {
         ScheduleResolver resolver = resolverWith(SyncSchedule.NONE, "1d", "0 0 * * * ?");
         assertTrue(resolver.globalDefault().usesCron());
+    }
+
+    // ---- cron dialects -----------------------------------------------------------------------
+
+    @Test
+    void fiveFieldUnixCronIsAccepted() {
+        ScheduleResolver resolver = resolverWith(SyncSchedule.NONE, "1d", "");
+        Instant from = Instant.parse("2026-06-28T10:15:30Z");
+        // The expression the console hint promised and that used to throw on every tick.
+        assertEquals(Instant.parse("2026-06-28T18:00:00Z"),
+                resolver.nextDueAt(SyncSchedule.ofCron("0 9,18 * * *"), from));
+    }
+
+    @Test
+    void weekdaysMeanTheSameDayInBothDialects() {
+        ScheduleResolver resolver = resolverWith(SyncSchedule.NONE, "1d", "");
+        Instant sunday = Instant.parse("2026-06-28T10:15:30Z");
+        Instant monday9 = Instant.parse("2026-06-29T09:00:00Z");
+        // Monday is 1 in Unix and 2 in Quartz — the numbering a string rewrite between them would get wrong.
+        assertEquals(monday9, resolver.nextDueAt(SyncSchedule.ofCron("0 9 * * 1"), sunday));
+        assertEquals(monday9, resolver.nextDueAt(SyncSchedule.ofCron("0 0 9 ? * 2"), sunday));
+    }
+
+    @Test
+    void requireValidCronAcceptsBothDialectsAndNoCron() {
+        assertDoesNotThrow(() -> ScheduleResolver.requireValidCron("0 9,18 * * *"));
+        assertDoesNotThrow(() -> ScheduleResolver.requireValidCron("0 0 9,18 * * ?"));
+        assertDoesNotThrow(() -> ScheduleResolver.requireValidCron(null));
+        assertDoesNotThrow(() -> ScheduleResolver.requireValidCron("  "));
+    }
+
+    @Test
+    void requireValidCronRejectsGarbageWithTheAcceptedForms() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ScheduleResolver.requireValidCron("every morning"));
+        assertTrue(e.getMessage().contains("every morning") && e.getMessage().contains("5 fields"),
+                "the message names the bad expression and the forms that work: " + e.getMessage());
+    }
+
+    @Test
+    void unparseableStoredCronFallsBackToGlobalIntervalInsteadOfThrowing() {
+        // A cron saved before validation existed must not throw on every scheduler tick.
+        ScheduleResolver resolver = resolverWith(SyncSchedule.NONE, "6h", "");
+        Instant from = Instant.parse("2026-06-28T10:15:30Z");
+        assertEquals(from.plus(Duration.ofHours(6)),
+                resolver.nextDueAt(SyncSchedule.ofCron("every morning"), from));
     }
 }

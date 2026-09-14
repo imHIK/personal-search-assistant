@@ -43,6 +43,14 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
 
 ## Tier 2 — Breadth & correctness
 
+- **Automatic OAuth token refresh for connections.** `ConnectionHealthScheduler` now *detects* a dead
+  credential — it re-verifies every connection on `app.connections.health-interval`, marks it `ERROR`,
+  and `IngestionJob` skips that connection's knowledges rather than failing on every tick. What it
+  cannot do is fix one. A Google refresh token that expires still needs the user to paste a new one.
+  The refresh path exists for access tokens (`DefaultGoogleAccessTokens` refreshes and persists them);
+  what is missing is handling a *refresh token* that has itself been revoked or expired — re-prompting
+  through the OAuth consent flow, which needs a redirect endpoint and somewhere to land the callback.
+
 3. **Knowledge-edit Phase 2 purge** (M). Tracked gap L2: after a scope shrink, stale entities /
    chunks stay searchable. The staleness marks (`syncGeneration` / `lastSeenGeneration`) are already
    written, so this is the deliberate completion-gated cleanup path.
@@ -56,6 +64,16 @@ Still missing: **no reranker, no auth, no evaluation harness, no OCR.**
 
 6. **Auth & access control** (M–L). None today; `DESCRIPTION.md` calls it "critical for private
    personal data."
+
+- **Adzuna as a job aggregator** (S). Free keyed API with a live India endpoint. Deferred, not
+  rejected: five direct ATS platforms now give both better data and more breadth than an aggregator
+  (`docs/job-discovery.md` has the measured comparison), and Adzuna does not reach Naukri's inventory
+  either. Its real value is *discovering companies not already on the watchlist*, which then get added
+  as `JOB_BOARDS` companies. Outbound rate limiting is **no longer a blocker**: it now lives in the
+  shared HTTP layer (`common.http.OutboundHttp` + `common.ratelimit`), so Adzuna would set
+  `app.ratelimit.connector.ADZUNA.rules` and name its bucket — no per-connector throttling code.
+  Note this is unrelated to the *inbound* rate limiting in #17. Give it a low `sourceRank` so
+  duplicate collapsing keeps the direct board listing.
 
 ## Tier 3 — Productionization
 

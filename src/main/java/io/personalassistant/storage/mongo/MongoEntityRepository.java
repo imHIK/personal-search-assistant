@@ -2,8 +2,10 @@ package io.personalassistant.storage.mongo;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.gt;
 import static com.mongodb.client.model.Filters.lt;
 import static com.mongodb.client.model.Filters.lte;
+import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.nin;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Sorts.ascending;
@@ -14,7 +16,6 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
-import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.Entity;
@@ -60,17 +61,48 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public Entity upsert(Entity entity) {
-        Document existing = collection().find(
-                and(eq("knowledgeId", entity.knowledgeId()), eq("externalId", entity.externalId()))).first();
-        String id = existing != null ? existing.getString("_id") : entity.id();
-        Instant createdAt = existing != null ? BsonSupport.instant(existing.get("createdAt")) : entity.createdAt();
+        // One atomic findOneAndUpdate on the natural key rather than find-then-replaceOne. Two
+        // reasons: the unique (knowledgeId, externalId) index makes the old read-then-write racy
+        // (two walkers that both miss produce a duplicate-key error on the second write), and a
+        // whole-document replace clobbers indexer-owned fields — see the lease unset in upsertUpdate.
+        Bson filter = and(eq("knowledgeId", entity.knowledgeId()), eq("externalId", entity.externalId()));
+        Document stored = collection().findOneAndUpdate(filter, upsertUpdate(entity),
+                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+        return fromDoc(stored);
+    }
 
-        Entity toStore = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
-                entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
-                entity.status(), entity.needsReindex(), entity.index(), entity.lease(), entity.retry(),
-                createdAt, entity.updatedAt(), entity.lastSeenGeneration());
-        collection().replaceOne(eq("_id", id), toDoc(toStore), new ReplaceOptions().upsert(true));
-        return toStore;
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    Bson upsertUpdate(Entity entity) {
+        Entity.Content c = entity.content() == null ? new Entity.Content(null, null) : entity.content();
+        return Updates.combine(
+                Updates.setOnInsert("_id", entity.id()),
+                Updates.setOnInsert("createdAt", BsonSupport.date(entity.createdAt())),
+                // --- ingestion-owned: the item's content and change-detection state ---
+                Updates.set("iterableId", entity.iterableId()),
+                Updates.set("entityType", BsonSupport.enumName(entity.entityType())),
+                Updates.set("raw", BsonSupport.toBsonMap(entity.raw())),
+                Updates.set("content", new Document("text", c.text()).append("fileRef", c.fileRef())),
+                Updates.set("metadata", BsonSupport.toBsonMap(entity.metadata())),
+                Updates.set("checksum", entity.checksum()),
+                // Ingestion-owned like the rest of this block: only the source knows when an item
+                // stops being valid, and a re-walk that no longer reports one must clear a stale value.
+                Updates.set("expiresAt", BsonSupport.date(entity.expiresAt())),
+                Updates.set("lastSeenGeneration", entity.lastSeenGeneration()),
+                Updates.set("updatedAt", BsonSupport.date(entity.updatedAt())),
+                // --- new content invalidates whatever was in flight: reset the work queue ---
+                Updates.set("status", EntityStatus.INGESTED.name()),
+                Updates.set("needsReindex", false),
+                // The content above is freshly materialized, so whatever made us distrust the stored
+                // copy is now spent. Clearing it here and nowhere else is what keeps the flag from
+                // forcing a re-fetch on every subsequent walk.
+                Updates.set("needsRefetch", false),
+                Updates.set("retry", zeroRetry()),
+                Updates.set("index.error", null),
+                // --- and fence out a worker still chewing on the OLD text ---
+                // Its markIndexed is lease-fenced, so dropping the lease here makes that write a
+                // no-op. Without this the indexer finishes on stale content, marks the entity
+                // INDEXED with needsReindex=false, and the new content never reaches OpenSearch.
+                Updates.unset("lease"));
     }
 
     @Override
@@ -116,8 +148,14 @@ public class MongoEntityRepository implements EntityRepository {
         Bson backoffReady = or(eq("retry.nextAttemptAt", null), lte("retry.nextAttemptAt", BsonSupport.date(now)));
         return and(backoffReady, or(
                 eq("status", EntityStatus.INGESTED.name()),
+                // FAILED is excluded even with needsReindex set: it is the dead-letter state, and a
+                // dead-lettered entity has a null nextAttemptAt that reads as "backoff elapsed", so
+                // it would otherwise be re-claimed every tick with no retry budget left to spend.
+                // markFailed also clears the flag; this clause is what protects rows already written
+                // by an older build. flagNeedsReindex is the sanctioned way back in.
                 and(eq("needsReindex", true),
-                        nin("status", EntityStatus.DELETED.name(), EntityStatus.INDEXING.name())),
+                        nin("status", EntityStatus.DELETED.name(), EntityStatus.INDEXING.name(),
+                                EntityStatus.FAILED.name())),
                 and(eq("status", EntityStatus.INDEXING.name()), lt("lease.expiresAt", BsonSupport.date(now)))));
     }
 
@@ -153,43 +191,119 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
-    public void markIndexed(String id, int chunkCount, String embeddingModel, Instant indexedAt) {
-        collection().updateOne(eq("_id", id), Updates.combine(
+    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt) {
+        var result = collection().updateOne(ownedBy(id, owner),
+                indexedUpdate(chunkCount, embeddingModel, indexedAt));
+        return result.getMatchedCount() > 0;
+    }
+
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    Bson indexedUpdate(int chunkCount, String embeddingModel, Instant indexedAt) {
+        return Updates.combine(
                 Updates.set("status", EntityStatus.INDEXED.name()),
                 Updates.set("needsReindex", false),
                 Updates.set("index", new Document("chunkCount", chunkCount)
                         .append("embeddingModel", embeddingModel)
                         .append("indexedAt", BsonSupport.date(indexedAt))
                         .append("error", null)),
+                // Success ends the streak: retry.count is CONSECUTIVE failures, not lifetime ones.
+                // Without this an entity that fails once a month is dead-lettered after five months
+                // of otherwise-successful indexing.
+                Updates.set("retry", zeroRetry()),
                 Updates.unset("lease"),
-                Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+                Updates.set("updatedAt", BsonSupport.date(Instant.now())));
     }
 
     @Override
-    public void markDeletionComplete(String id, Instant cleanedAt) {
-        collection().updateOne(eq("_id", id), Updates.combine(
+    public boolean markDeletionComplete(String id, String owner, Instant cleanedAt) {
+        var result = collection().updateOne(ownedBy(id, owner), Updates.combine(
                 Updates.set("needsReindex", false),
                 Updates.set("index.chunkCount", 0),
                 Updates.set("index.indexedAt", BsonSupport.date(cleanedAt)),
+                Updates.set("retry", zeroRetry()),
                 Updates.unset("lease"),
                 Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+        return result.getMatchedCount() > 0;
     }
 
     @Override
-    public void markFailed(String id, EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt) {
-        collection().updateOne(eq("_id", id), Updates.combine(
+    public boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                              int retryCount, Instant nextAttemptAt) {
+        var result = collection().updateOne(ownedBy(id, owner),
+                failUpdate(restingStatus, error, retryCount, nextAttemptAt));
+        return result.getMatchedCount() > 0;
+    }
+
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    Bson failUpdate(EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt) {
+        List<Bson> updates = new ArrayList<>(List.of(
                 Updates.set("status", restingStatus.name()),
                 Updates.set("index.error", error),
                 Updates.set("retry", new Document("count", retryCount)
                         .append("nextAttemptAt", BsonSupport.date(nextAttemptAt))),
                 Updates.unset("lease"),
                 Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+        if (restingStatus == EntityStatus.FAILED) {
+            // Dead-letter: leave the indexing queue for good. Without this the entity still matches
+            // indexingFilter's needsReindex clause and — since a null nextAttemptAt reads as "backoff
+            // elapsed" — is re-claimed on every single tick, forever, burning the batch budget.
+            updates.add(Updates.set("needsReindex", false));
+        }
+        return Updates.combine(updates);
+    }
+
+    @Override
+    public boolean markContentMissing(String id, String owner, String error) {
+        var result = collection().updateOne(ownedBy(id, owner), contentMissingUpdate(error));
+        return result.getMatchedCount() > 0;
+    }
+
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    Bson contentMissingUpdate(String error) {
+        return Updates.combine(
+                // Terminal on the first attempt, unlike failUpdate: the staged copy is gone and no
+                // amount of backoff brings it back, so the retry ladder would only delay the signal.
+                Updates.set("status", EntityStatus.FAILED.name()),
+                Updates.set("needsReindex", false),
+                // ... but the entity is recoverable, just not from here. This is what makes the next
+                // walk re-materialize it despite an unchanged checksum, so the dead letter heals.
+                Updates.set("needsRefetch", true),
+                Updates.set("index.error", error),
+                Updates.set("retry", new Document("count", 0).append("nextAttemptAt", null)),
+                Updates.unset("lease"),
+                Updates.set("updatedAt", BsonSupport.date(Instant.now())));
+    }
+
+    @Override
+    public int flagNeedsRefetchByKnowledge(String knowledgeId) {
+        // File-backed entities only: inline text lives in this document and needs no re-fetch, so
+        // flagging it would buy a download per item and change nothing. Served by the existing
+        // (knowledgeId, status) index; content.fileRef is the residual filter.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                ne("status", EntityStatus.DELETED.name()),
+                ne("content.fileRef", null));
+        var result = collection().updateMany(filter, Updates.combine(
+                Updates.set("needsRefetch", true),
+                Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+        return (int) result.getModifiedCount();
     }
 
     @Override
     public void flagNeedsReindex(String id) {
+        // Revive a dead-lettered entity first: FAILED is excluded from indexingFilter, so flagging it
+        // without this would strand the entity instead of re-queueing it. Scoped to FAILED so a
+        // healthy entity's status is untouched.
+        collection().updateOne(and(eq("_id", id), eq("status", EntityStatus.FAILED.name())),
+                Updates.combine(
+                        Updates.set("status", EntityStatus.INGESTED.name()),
+                        Updates.set("index.error", null)));
+        // Fresh retry budget — a manual reindex of a dead-lettered entity that kept its exhausted
+        // counter would fail again on the first hiccup. Deliberately does NOT touch the lease: an
+        // entity mid-run stays out of the queue (indexingFilter excludes INDEXING) until it lapses.
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("needsReindex", true),
+                Updates.set("retry", zeroRetry()),
                 Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
     }
 
@@ -201,11 +315,70 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        var result = collection().updateMany(
+                and(eq("knowledgeId", knowledgeId), eq("status", EntityStatus.FAILED.name())),
+                Updates.combine(
+                        Updates.set("status", EntityStatus.INGESTED.name()),
+                        Updates.set("retry", zeroRetry()),
+                        Updates.set("index.error", null),
+                        Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
+        // needsReindex is deliberately left alone: INGESTED already matches indexingFilter's first
+        // clause, so setting it would be redundant state with nothing to clear it.
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
     public void markDeleted(String id, Instant updatedAt) {
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("status", EntityStatus.DELETED.name()),
                 Updates.set("needsReindex", true),
                 Updates.set("updatedAt", BsonSupport.date(updatedAt))));
+    }
+
+    @Override
+    public int flagNeedsReindexByKnowledge(String knowledgeId) {
+        Instant now = Instant.now();
+        // A live lease means a worker is mid-run; flagging it would race its terminal write. Those
+        // entities are simply left, and a second call after the lease lapses picks them up.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                ne("status", EntityStatus.DELETED.name()),
+                or(eq("lease", null), lt("lease.expiresAt", BsonSupport.date(now))));
+        var result = collection().updateMany(filter, Updates.combine(
+                Updates.set("needsReindex", true),
+                Updates.set("retry", zeroRetry()),
+                Updates.set("index.error", null),
+                Updates.set("updatedAt", BsonSupport.date(now))));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public List<Entity> findExpired(int limit, Instant now) {
+        Bson filter = and(
+                ne("expiresAt", null),
+                lte("expiresAt", BsonSupport.date(now)),
+                ne("status", EntityStatus.DELETED.name()));
+        return find(filter, limit);
+    }
+
+    @Override
+    public List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit) {
+        // Only entities without their own expiry: an explicit expiresAt is the source's own
+        // statement about validity and findExpired already owns that case, so applying the
+        // knowledge window here too would age out an item the source said is still good.
+        Bson filter = and(
+                eq("knowledgeId", knowledgeId),
+                eq("expiresAt", null),
+                lt("createdAt", BsonSupport.date(cutoff)),
+                ne("status", EntityStatus.DELETED.name()));
+        return find(filter, limit);
+    }
+
+    private List<Entity> find(Bson filter, int limit) {
+        List<Entity> out = new ArrayList<>();
+        collection().find(filter).limit(limit).forEach(d -> out.add(fromDoc(d)));
+        return out;
     }
 
     @Override
@@ -225,7 +398,7 @@ public class MongoEntityRepository implements EntityRepository {
                 // reads them. _id comes back implicitly.
                 .projection(Projections.include("knowledgeId", "externalId", "entityType", "status",
                         "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
-                        "needsReindex", "updatedAt"))
+                        "needsReindex", "createdAt", "updatedAt"))
                 // _id is the tiebreak so two entities touched in the same millisecond can't swap
                 // places between pages. Served by the (knowledgeId, updatedAt, _id) compound index.
                 .sort(orderBy(descending("updatedAt"), ascending("_id")))
@@ -264,36 +437,27 @@ public class MongoEntityRepository implements EntityRepository {
         return new Document("owner", owner).append("expiresAt", BsonSupport.date(expiresAt));
     }
 
+    private static Document zeroRetry() {
+        return new Document("count", 0).append("nextAttemptAt", null);
+    }
+
+    /**
+     * Lease fence, mirroring {@code MongoCursorRepository.ownedBy}: matches the entity only if
+     * {@code owner} still holds a live (non-expired) lease. A worker whose lease lapsed — and whose
+     * entity was re-claimed by someone else — matches nothing, so its late writes are no-ops rather
+     * than marking a half-written entity INDEXED and unsetting the new owner's lease mid-run.
+     */
+    // Package-private so the emitted BSON can be asserted without a live MongoDB.
+    static Bson ownedBy(String id, String owner) {
+        return and(eq("_id", id), eq("lease.owner", owner),
+                gt("lease.expiresAt", BsonSupport.date(Instant.now())));
+    }
+
     // ---- mapping -----------------------------------------------------------------------------
 
-    private Document toDoc(Entity e) {
-        Entity.Content c = e.content() == null ? new Entity.Content(null, null) : e.content();
-        Entity.IndexInfo idx = e.index() == null ? Entity.IndexInfo.empty() : e.index();
-        Entity.Retry retry = e.retry() == null ? Entity.Retry.zero() : e.retry();
-        Document lease = e.lease() == null ? null
-                : leaseDoc(e.lease().owner(), e.lease().expiresAt());
-        return new Document("_id", e.id())
-                .append("knowledgeId", e.knowledgeId())
-                .append("iterableId", e.iterableId())
-                .append("entityType", BsonSupport.enumName(e.entityType()))
-                .append("externalId", e.externalId())
-                .append("raw", BsonSupport.toBsonMap(e.raw()))
-                .append("content", new Document("text", c.text()).append("fileRef", c.fileRef()))
-                .append("metadata", BsonSupport.toBsonMap(e.metadata()))
-                .append("checksum", e.checksum())
-                .append("status", BsonSupport.enumName(e.status()))
-                .append("needsReindex", e.needsReindex())
-                .append("index", new Document("chunkCount", idx.chunkCount())
-                        .append("embeddingModel", idx.embeddingModel())
-                        .append("indexedAt", BsonSupport.date(idx.indexedAt()))
-                        .append("error", idx.error()))
-                .append("lease", lease)
-                .append("retry", new Document("count", retry.count())
-                        .append("nextAttemptAt", BsonSupport.date(retry.nextAttemptAt())))
-                .append("lastSeenGeneration", e.lastSeenGeneration())
-                .append("createdAt", BsonSupport.date(e.createdAt()))
-                .append("updatedAt", BsonSupport.date(e.updatedAt()));
-    }
+    // There is deliberately no toDoc(): every write is a field-level update so that ingestion and the
+    // indexer can own disjoint field sets on the same document (see upsert). A whole-document mapper
+    // would be a standing invitation to reintroduce the clobber it was removed to fix.
 
     private Entity fromDoc(Document d) {
         Document content = BsonSupport.sub(d, "content");
@@ -313,6 +477,7 @@ public class MongoEntityRepository implements EntityRepository {
                 d.getString("checksum"),
                 BsonSupport.enumOf(EntityStatus.class, d.get("status")),
                 Boolean.TRUE.equals(d.getBoolean("needsReindex")),
+                Boolean.TRUE.equals(d.getBoolean("needsRefetch")),
                 idx == null ? Entity.IndexInfo.empty() : new Entity.IndexInfo(
                         intValue(idx.get("chunkCount")), idx.getString("embeddingModel"),
                         BsonSupport.instant(idx.get("indexedAt")), idx.getString("error")),
@@ -322,6 +487,7 @@ public class MongoEntityRepository implements EntityRepository {
                         intValue(retry.get("count")), BsonSupport.instant(retry.get("nextAttemptAt"))),
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
+                BsonSupport.instant(d.get("expiresAt")),
                 longValue(d.get("lastSeenGeneration")));
     }
 
@@ -348,6 +514,7 @@ public class MongoEntityRepository implements EntityRepository {
                         BsonSupport.instant(idx.get("indexedAt")), idx.getString("error")),
                 retry == null ? 0 : intValue(retry.get("count")),
                 Boolean.TRUE.equals(d.getBoolean("needsReindex")),
+                BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")));
     }
 

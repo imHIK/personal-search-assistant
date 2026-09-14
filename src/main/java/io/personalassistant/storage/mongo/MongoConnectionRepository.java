@@ -9,7 +9,6 @@ import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
-import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.storage.repository.ConnectionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -60,22 +59,22 @@ public class MongoConnectionRepository implements ConnectionRepository {
     }
 
     @Override
-    public List<Connection> findByType(SourceType type) {
+    public List<Connection> findByType(String type) {
         List<Connection> out = new ArrayList<>();
-        collection().find(eq("type", type.name())).forEach(d -> out.add(fromDoc(d)));
+        collection().find(eq("type", type)).forEach(d -> out.add(fromDoc(d)));
         return out;
     }
 
     @Override
-    public Optional<Connection> findDefault(SourceType type) {
+    public Optional<Connection> findDefault(String type) {
         return Optional.ofNullable(
-                        collection().find(and(eq("type", type.name()), eq("isDefault", true))).first())
+                        collection().find(and(eq("type", type), eq("isDefault", true))).first())
                 .map(this::fromDoc);
     }
 
     @Override
-    public void clearDefault(SourceType type) {
-        collection().updateMany(and(eq("type", type.name()), eq("isDefault", true)),
+    public void clearDefault(String type) {
+        collection().updateMany(and(eq("type", type), eq("isDefault", true)),
                 Updates.set("isDefault", false));
     }
 
@@ -89,9 +88,10 @@ public class MongoConnectionRepository implements ConnectionRepository {
     private Document toDoc(Connection c) {
         return new Document("_id", c.id())
                 .append("name", c.name())
-                .append("type", BsonSupport.enumName(c.type()))
+                .append("type", c.type())
                 .append("auth", BsonSupport.toBsonMap(c.auth()))
                 .append("config", BsonSupport.toBsonMap(c.config()))
+                .append("rateLimit", BsonSupport.rateLimit(c.rateLimit()))
                 .append("isDefault", c.isDefault())
                 .append("status", BsonSupport.enumName(c.status()))
                 .append("lastError", c.lastError())
@@ -103,9 +103,10 @@ public class MongoConnectionRepository implements ConnectionRepository {
         return new Connection(
                 d.getString("_id"),
                 d.getString("name"),
-                BsonSupport.enumOf(SourceType.class, d.get("type")),
+                d.getString("type"),
                 BsonSupport.toPlainMap(d.get("auth")),
                 BsonSupport.toPlainMap(d.get("config")),
+                BsonSupport.rateLimitPolicy(d.get("rateLimit")),
                 Boolean.TRUE.equals(d.getBoolean("isDefault")),
                 BsonSupport.enumOf(ConnectionStatus.class, d.get("status")),
                 d.getString("lastError"),

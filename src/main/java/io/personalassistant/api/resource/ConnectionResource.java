@@ -3,22 +3,17 @@ package io.personalassistant.api.resource;
 import io.personalassistant.api.dto.ConnectionDto;
 import io.personalassistant.api.dto.ConnectionEditDto;
 import io.personalassistant.domain.model.Connection;
-import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.ConnectionService;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -41,17 +36,14 @@ public class ConnectionResource {
         if (type == null || type.isBlank()) {
             return connectionService.list();
         }
-        try {
-            return connectionService.listByType(SourceType.valueOf(type));
-        } catch (IllegalArgumentException e) {
-            throw new BadRequestException("Unknown connector type: " + type);
-        }
+        return connectionService.listByType(type.trim());
     }
 
     @GET
     @Path("/{id}")
     public Connection get(@PathParam("id") String id) {
-        return connectionService.get(id).orElseThrow(NotFoundException::new);
+        return connectionService.get(id)
+                .orElseThrow(() -> ApiErrors.notFound("No connection with id " + id));
     }
 
     /** Create a connection: verifies the credentials, then persists and assigns the type default. */
@@ -60,7 +52,7 @@ public class ConnectionResource {
         try {
             return connectionService.create(dto.toRequest());
         } catch (IllegalArgumentException e) { // unknown type, no-connection connector, or bad creds
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
@@ -70,9 +62,24 @@ public class ConnectionResource {
         try {
             return connectionService.update(id, dto.toEdit());
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) { // re-verification failed
-            throw new BadRequestException(e.getMessage());
+            throw ApiErrors.badRequest(e.getMessage());
+        }
+    }
+
+    /**
+     * Re-check the stored credentials and record the outcome. Returns 200 with the refreshed
+     * connection whether or not the check passed — read {@code status} and {@code lastError}. Bad
+     * credentials are a result to display, not a 4xx.
+     */
+    @POST
+    @Path("/{id}/test")
+    public Connection test(@PathParam("id") String id) {
+        try {
+            return connectionService.test(id);
+        } catch (NoSuchElementException e) {
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -83,7 +90,7 @@ public class ConnectionResource {
         try {
             return connectionService.setDefault(id);
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         }
     }
 
@@ -93,9 +100,9 @@ public class ConnectionResource {
         try {
             connectionService.delete(id);
         } catch (NoSuchElementException e) {
-            throw new NotFoundException(e.getMessage());
+            throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalStateException e) { // still bound to knowledges
-            throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+            throw ApiErrors.conflict(e.getMessage());
         }
     }
 }

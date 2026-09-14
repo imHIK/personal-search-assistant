@@ -43,8 +43,31 @@ public final class TestData {
     public static Connection connection(String id, SourceType type, boolean isDefault,
                                         Map<String, Object> auth) {
         Instant now = Instant.now();
-        return new Connection(id, "test-" + id, type, auth, Map.of(), isDefault,
+        return new Connection(id, "test-" + id, type.name(), auth, Map.of(), null, isDefault,
                 ConnectionStatus.ACTIVE, null, now, now);
+    }
+
+    /** A knowledge whose config carries an explicit retention window (null = inherit). */
+    public static Knowledge knowledgeWithRetention(String id, SourceType type, String retentionPeriod) {
+        Instant now = Instant.now();
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(defaults.scheduleSettings(),
+                defaults.webhookSettings(), defaults.backfill(), defaults.chunking(),
+                new Knowledge.Retention(retentionPeriod));
+        return new Knowledge(id, "test-" + id,
+                Knowledge.ConnectorDetails.of(type, Map.of()), Map.of(),
+                config, now, null, KnowledgeStatus.ACTIVE, null,
+                Knowledge.Stats.zero(), now, now, 0L);
+    }
+
+    /** An INDEXED entity with an explicit {@code createdAt} and optional source-declared expiry. */
+    public static Entity agedEntity(String id, String knowledgeId, String externalId,
+                                    Instant createdAt, Instant expiresAt) {
+        return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
+                Map.of(), Entity.Content.ofText("body"),
+                Map.of("title", externalId, "uri", "test://" + externalId),
+                "sha256:" + externalId, EntityStatus.INDEXED, false, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), createdAt, createdAt, expiresAt, 0L);
     }
 
     /** A knowledge whose config carries explicit {@link Knowledge.ChunkingSettings}. */
@@ -79,7 +102,7 @@ public final class TestData {
     public static Cursor cursor(String knowledgeId, String iterableId, Map<String, Object> attributes,
                                 CursorDirection direction, SourceType type) {
         return new Cursor("cur_" + knowledgeId + iterableId + direction, knowledgeId, iterableId,
-                attributes, direction, CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
+                iterableId, attributes, direction, CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
                 Cursor.Stats.zero(), new Cursor.Scope(type));
     }
 
@@ -88,16 +111,16 @@ public final class TestData {
         Instant now = Instant.now();
         return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText("body"), Map.of("title", externalId, "uri", "test://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 
     public static Entity ingestedText(String id, String knowledgeId, String externalId, String text) {
         Instant now = Instant.now();
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
                 Map.of(), Entity.Content.ofText(text), Map.of("title", externalId, "uri", "test://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 
     public static Entity ingestedFile(String id, String knowledgeId, String externalId, String fileRef, String contentType) {
@@ -105,7 +128,7 @@ public final class TestData {
         return new Entity(id, knowledgeId, "root", EntityType.FILE, externalId,
                 Map.of("contentType", contentType), Entity.Content.ofFile(fileRef),
                 Map.of("title", externalId, "uri", "file://" + externalId),
-                "sha256:" + externalId, EntityStatus.INGESTED, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), now, now, 0L);
+                "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), now, now, null, 0L);
     }
 }

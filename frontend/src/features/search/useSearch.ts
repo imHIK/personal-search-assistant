@@ -4,14 +4,17 @@ import { searchApi } from '@/api/search'
 import type { SearchBody, SearchResult } from '@/api/types'
 
 /**
- * Runs a search, with one important piece of damage control.
+ * Runs a search and reports when the written answer could not be produced.
  *
- * `POST /api/search` synthesizes the answer server-side *before* responding, so when the LLM
- * provider is missing or failing the whole request 500s — and the hits, which were retrieved
- * successfully, are lost with it. To a user that looks like "turning on answers broke search".
+ * The server now handles this itself: a failing LLM comes back as 200 with the hits intact and
+ * `answerError` set, so the normal path is simply to read that field. It did not always — answer
+ * synthesis used to run before the response was built and outside any try/catch, so an unavailable
+ * provider 500d the whole request and took the successfully-retrieved hits with it, which to a user
+ * looked like "turning on answers broke search".
  *
- * So: if a request with `answer: true` fails, retry once with `answer: false`. The user still
- * gets their results, plus a banner explaining why there is no written answer.
+ * The retry below is kept as a fallback for exactly that older shape (and for any other 500 that the
+ * answer flag turns out to trigger): if a request with `answer: true` fails outright, retry once with
+ * `answer: false` so the user still gets results plus a banner. Both paths set the same flag.
  */
 export function useSearch() {
   const [answerUnavailable, setAnswerUnavailable] = useState(false)
@@ -25,7 +28,11 @@ export function useSearch() {
       }
 
       try {
-        return await searchApi.search(body)
+        const result = await searchApi.search(body)
+        if (result.answerError) {
+          setAnswerUnavailable(true)
+        }
+        return result
       } catch (error) {
         // Only worth a retry if the answer flag is what could have broken it — a failure with
         // answers off is a genuine search failure and should surface as one.

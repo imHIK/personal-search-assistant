@@ -36,6 +36,80 @@ export const chunkingStrategies = [
 ]
 
 /**
+ * How far back a digest run looks. Separate from the schedule: "run daily, but consider the last
+ * week" is a normal thing to want, and an empty value means no time bound at all.
+ */
+/**
+ * How far back a run looks. "No time limit" leads because it is the safe default: the window filters
+ * on when a chunk was *indexed*, so a source that finishes ingesting and is then left alone drops out
+ * of a short window and never returns — a digest set to "Last day" over a static folder is empty on
+ * every run, forever. Newness is `onlyNew`'s job; the window is only an extra bound on top.
+ */
+export const digestWindows = [
+  { value: '', label: 'No time limit' },
+  { value: '1d', label: 'Last day' },
+  { value: '7d', label: 'Last week' },
+  { value: '30d', label: 'Last month' },
+] as const
+
+/**
+ * Cadences offered for a digest. Deliberately not `schedulePresets`: a digest has no "only when I
+ * ask" — that is what pausing it means — and hourly matters here in a way it does not for ingestion.
+ */
+export const digestIntervals = [
+  { value: '1h', label: 'Every hour' },
+  { value: '6h', label: 'Every 6 hours' },
+  { value: '1d', label: 'Once a day' },
+  { value: '7d', label: 'Once a week' },
+] as const
+
+/**
+ * Map an interval the API returned back onto one of the options above.
+ *
+ * The backend stores a `Duration` and serialises it ISO-8601, so a digest created with "1d" reads
+ * back as "PT24H". Without this the edit form's picker would match nothing, fall back to its first
+ * option, and quietly rewrite the cadence on save.
+ */
+export function digestIntervalValue(interval: string | null): string {
+  if (!interval) return '1d'
+  const direct = digestIntervals.find((option) => option.value === interval)
+  if (direct) return direct.value
+  const hours = interval.match(/^PT(\d+)H$/)
+  if (hours) {
+    const n = Number(hours[1])
+    if (n === 1) return '1h'
+    if (n === 6) return '6h'
+    if (n === 24) return '1d'
+    if (n === 168) return '7d'
+  }
+  return interval
+}
+
+/** How far back a run looks, in words — "Last week" rather than "P7D". */
+export function formatDigestWindow(window: string | null): string | null {
+  if (!window) return null
+  const direct = digestWindows.find((option) => option.value === window)
+  if (direct) return direct.label
+  const days = window.match(/^P(\d+)D$/)
+  if (days) {
+    const matched = digestWindows.find((option) => option.value === `${days[1]}d`)
+    if (matched) return matched.label
+  }
+  const hours = window.match(/^PT(\d+)H$/)
+  if (hours && Number(hours[1]) === 24) {
+    return digestWindows.find((option) => option.value === '1d')?.label ?? window
+  }
+  return window
+}
+
+/** How often a digest runs, in words. Never the raw ISO duration, which reads as a machine error. */
+export function formatDigestInterval(interval: string | null): string | null {
+  if (!interval) return null
+  const value = digestIntervalValue(interval)
+  return digestIntervals.find((option) => option.value === value)?.label ?? interval
+}
+
+/**
  * Check-frequency presets, mapped onto the `interval`/`scheduleEnabled` pair the API takes.
  * `cron` is deliberately not offered here — it is a technical-details field.
  */
@@ -70,3 +144,5 @@ export const POLL_INTERVAL_MS = 5000
 export const HEALTH_INTERVAL_MS = 15000
 /** How long a mutation keeps its query polling, so async server work shows up on its own. */
 export const POLL_AFTER_MUTATION_MS = 30000
+/** How long a cited result stays ringed after a citation chip jumps to it. */
+export const CITATION_HIGHLIGHT_MS = 1200

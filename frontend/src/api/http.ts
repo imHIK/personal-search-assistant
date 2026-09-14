@@ -103,7 +103,33 @@ async function extractMessage(response: Response): Promise<string> {
     const title = /<title>([^<]+)<\/title>/i.exec(text)?.[1]
     return title?.trim() || `${response.status} ${response.statusText}`
   }
+
+  const detail = quarkusDetail(text)
+  if (detail) return detail
+
   return text.length > 400 ? `${response.status} ${response.statusText}` : text.trim()
+}
+
+/**
+ * Dig the one useful line out of Quarkus' plain-text error page. It arrives as ~3 KB of stack trace
+ * shaped like:
+ *
+ *     500 - Internal Server Error
+ *     Details:
+ *     \tError id 0a469814-…-3, java.lang.IllegalStateException: ArC container not initialized: …
+ *     Stack:
+ *
+ * which is well past the length cap below, so without this every unmapped 500 collapsed to the
+ * useless "500 Internal Server Error". The error id and the package prefix are dropped — neither
+ * survives being read aloud, and the exception's own message is the part that says what happened.
+ */
+function quarkusDetail(text: string): string | undefined {
+  const line = /^[ \t]*Details:[ \t]*\r?\n[ \t]*(.+)$/m.exec(text)?.[1]?.trim()
+  if (!line) return undefined
+  return line
+    .replace(/^Error id \S+?,\s*/, '')
+    .replace(/^(?:[a-z0-9_]+\.)+([A-Z]\w*)/, '$1')
+    .slice(0, 400)
 }
 
 /** Build a query string, omitting undefined/null/empty values. */

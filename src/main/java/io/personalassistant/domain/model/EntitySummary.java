@@ -23,7 +23,11 @@ import java.time.Instant;
  * @param index        rollup of what was last indexed (chunk count, model, timestamp, error)
  * @param retryCount   indexing retry attempts so far
  * @param needsReindex set when content changed or config bumped; forces re-indexing
- * @param updatedAt    last-modified timestamp — the listing sort key
+ * @param createdAt    when this entity was first ingested; never moves, so it is the only honest
+ *                     answer to "when did this arrive"
+ * @param updatedAt    last write to the row from either stage — the listing sort key. Mostly indexing
+ *                     bookkeeping (a claim, a retry, a terminal write), so it is not a content date and
+ *                     must not be presented as one
  */
 public record EntitySummary(
         String id,
@@ -37,4 +41,5 @@ public record EntitySummary(
         Entity.IndexInfo index,
         int retryCount,
         boolean needsReindex,
+        Instant createdAt,
         Instant updatedAt) {}

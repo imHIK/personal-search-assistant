@@ -23,9 +23,33 @@ public interface EmbeddingProvider {
     /** Vector dimensionality; must match the OpenSearch {@code knn_vector} mapping. */
     int dimension();
 
-    /** Embed a single text (typically a query). */
+    /** Embed a single text as a <em>document</em> (the indexing side of the asymmetry below). */
     Embedding embed(String text);
 
-    /** Embed many texts in one call (batched indexing). Order matches the input. */
+    /**
+     * Embed a search query.
+     *
+     * <p>Modern retrieval embedding models are trained <em>asymmetrically</em>: a short question and a
+     * long passage are not the same kind of input, and the model is told which it is being given — BGE
+     * documents a query instruction to prepend, and Gemini takes a {@code task_type} of
+     * {@code RETRIEVAL_QUERY} versus {@code RETRIEVAL_DOCUMENT}. Both configured models here are of that
+     * kind, and both sides previously went through the identical code path, so the vector leg was not
+     * being used the way the model was trained.
+     *
+     * <p>A {@code default} delegating to {@link #embed} keeps symmetric providers (the offline hashing
+     * baseline) correct and unchanged; only providers with a real distinction to make override it.
+     */
+    default Embedding embedQuery(String text) {
+        return embed(text);
+    }
+
+    /**
+     * Embed many texts in one call (batched indexing).
+     *
+     * <p>Must return exactly {@code texts.size()} non-null embeddings, positionally aligned with the
+     * input. Implementations must fail loudly rather than return a short or hole-y list: a chunk that
+     * reaches the index without a vector is written without error and is then invisible to semantic
+     * search forever. Callers enforce this, but the burden is the implementation's.
+     */
     List<Embedding> embedAll(List<String> texts);
 }

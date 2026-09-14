@@ -3,10 +3,12 @@ package io.personalassistant.ingestion.connector.google.drive;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.personalassistant.common.ConfigText;
 import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.enums.EntityType;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectionResolver;
 import io.personalassistant.ingestion.connector.GrabContext;
@@ -15,6 +17,7 @@ import io.personalassistant.ingestion.connector.TimeWindow;
 import io.personalassistant.ingestion.connector.TokenWindowGrabber;
 import io.personalassistant.ingestion.connector.google.GoogleAccessTokens;
 import io.personalassistant.ingestion.connector.google.GoogleApiException;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
@@ -33,6 +36,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -62,9 +67,19 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * downloaded to a local scratch directory and referenced by {@link RawItem#fileRef()} so the existing
  * Tika indexing path parses them — exactly like a local file. Unsupported native types (forms, maps,
  * drawings) are skipped.
+ *
+ * <p>Neither transfer happens during the walk. Drive's checksum is its {@code version}, which the
+ * listing already carries, so {@link #fetchWindow} maps a file using metadata alone — the export or
+ * download is deferred to {@link #materialize}, which the runner calls only once change-detection has
+ * said the item is worth persisting. Since the boundary of a forward window is re-listed on every arm
+ * by design, fetching in the walk meant re-downloading those files on every arm just to have the bytes
+ * thrown away by the skip; a backfill or a membership re-walk re-fetched the entire corpus the same
+ * way.
  */
 @ApplicationScoped
 public class GoogleDriveConnector extends TokenWindowGrabber {
+
+    private static final Logger LOG = Logger.getLogger(GoogleDriveConnector.class.getName());
 
     static final String ROOT_ALIAS = "root";
     private static final String FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -135,7 +150,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public void verifyConnection(Connection connection) {
-        String token = tokens.bearer(connection);
+        GoogleAuth token = tokens.authFor(connection);
         JsonNode about = api.about(token);
         if (!about.path("user").hasNonNull("emailAddress")) {
             throw new IllegalArgumentException(
@@ -151,14 +166,14 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public List<SourceIterable> discover(Knowledge knowledge) {
-        String token = tokens.bearer(connections.resolve(knowledge));
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
         List<String> roots = configuredFolderIds(knowledge);
 
         List<SourceIterable> iterables = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         Deque<Folder> queue = new ArrayDeque<>();
         for (String root : roots) {
-            queue.add(new Folder(root, root.equals(ROOT_ALIAS) ? "My Drive" : root));
+            queue.add(new Folder(root, rootName(token, root)));
         }
 
         while (!queue.isEmpty() && iterables.size() < maxFolders) {
@@ -176,7 +191,31 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         return iterables;
     }
 
-    private List<Folder> listSubfolders(String token, String parentId) {
+    /**
+     * The display name of a configured root folder.
+     *
+     * <p>Sub-folders arrive from a listing that already carries names; a root is a bare id the user
+     * pasted in, and using it as its own label put a raw Drive id in front of the user as the folder's
+     * name — twice, on the source's overview and over its sync history. One extra metadata call per
+     * root per discovery pass is a fair price for a readable label.
+     *
+     * <p>Falls back to the id. A root that cannot be read is a discovery problem, and the walk itself
+     * will surface it; losing a label is not worth failing on.
+     */
+    private String rootName(GoogleAuth token, String root) {
+        if (ROOT_ALIAS.equals(root)) {
+            return "My Drive";
+        }
+        try {
+            String name = api.fileName(token, root);
+            return name == null || name.isBlank() ? root : name;
+        } catch (RuntimeException e) {
+            LOG.log(Level.FINE, "Could not read the name of Drive folder " + root, e);
+            return root;
+        }
+    }
+
+    private List<Folder> listSubfolders(GoogleAuth token, String parentId) {
         String query = "'" + parentId + "' in parents and trashed=false and mimeType='" + FOLDER_MIME + "'";
         List<Folder> folders = new ArrayList<>();
         String pageToken = null;
@@ -196,7 +235,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         if (folderId == null) {
             return Page.end();
         }
-        String token = tokens.bearer(connections.resolve(ctx.knowledge()));
+        GoogleAuth token = tokens.authFor(connections.resolve(ctx.knowledge()));
         String query = childrenQuery(folderId.toString()) + windowClause(window);
         // A forward (lower-bounded) window lists oldest-first so the high-water advances cleanly; a
         // backfill window lists newest-first. Either way the base drains the whole window, so the order
@@ -206,7 +245,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
         List<RawItem> items = new ArrayList<>();
         for (JsonNode f : page.path("files")) {
-            RawItem item = toRawItem(token, f);
+            RawItem item = toRawItem(f);
             if (item != null) {
                 items.add(item);
             }
@@ -232,7 +271,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     // ---- file -> RawItem ----------------------------------------------------------------------
 
-    private RawItem toRawItem(String token, JsonNode f) {
+    private RawItem toRawItem(JsonNode f) {
         String id = f.path("id").asText();
         String name = f.path("name").asText(id);
         String mimeType = f.path("mimeType").asText("application/octet-stream");
@@ -255,27 +294,35 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         metadata.put("modifiedAt", modifiedAt);
 
         if (mimeType.startsWith(NATIVE_PREFIX)) {
-            return nativeDoc(token, id, name, mimeType, uri, checksum, modifiedAt, raw, metadata);
+            return nativeDoc(id, name, mimeType, uri, checksum, modifiedAt, raw, metadata);
         }
-        return binaryFile(token, f, id, name, mimeType, uri, checksum, modifiedAt, raw, metadata);
+        return binaryFile(f, id, name, mimeType, uri, checksum, modifiedAt, raw, metadata);
     }
 
-    /** Google-native doc: export to text and carry inline. Unsupported native types are skipped. */
-    private RawItem nativeDoc(String token, String id, String name, String mimeType, String uri,
+    /**
+     * Google-native doc: exported to text, but <em>not here</em>. The export is an API call and the
+     * item may well be skipped as unchanged, so it is deferred to {@link #materialize}; the export
+     * mime is recorded as the item's content type so that call needs no second lookup. Unsupported
+     * native types are still rejected up front — that decision is pure mime-type and costs nothing.
+     */
+    private RawItem nativeDoc(String id, String name, String mimeType, String uri,
                               String checksum, Instant modifiedAt, Map<String, Object> raw,
                               Map<String, Object> metadata) {
         String exportMime = EXPORT_AS.get(mimeType);
         if (exportMime == null) {
             return null; // form / map / drawing — nothing textual to index
         }
-        byte[] bytes = api.export(token, id, exportMime);
-        String text = new String(bytes, StandardCharsets.UTF_8);
         return new RawItem(id, EntityType.PAGE, exportMime, name, uri, checksum, modifiedAt,
-                raw, text, null, metadata, false);
+                raw, null, null, metadata, null, false);
     }
 
-    /** Regular file: download bytes to local scratch and reference by fileRef (Tika reads it). */
-    private RawItem binaryFile(String token, JsonNode f, String id, String name, String mimeType,
+    /**
+     * Regular file: recorded by the scratch path its bytes <em>will</em> occupy, without downloading
+     * them. The download happens in {@link #materialize}, and only for items the runner decides to
+     * persist. The size cap still applies here because {@code size} comes from the listing, so an
+     * oversized file is skipped without ever being fetched.
+     */
+    private RawItem binaryFile(JsonNode f, String id, String name, String mimeType,
                                String uri, String checksum, Instant modifiedAt,
                                Map<String, Object> raw, Map<String, Object> metadata) {
         long size = f.path("size").asLong(-1);
@@ -284,21 +331,82 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         if (size > maxFileBytes) {
             return null; // too large to download/index; skip
         }
-        byte[] bytes = api.download(token, id);
-        Path path = writeScratch(id, name, bytes);
-        return RawItem.file(id, mimeType, name, uri, checksum, modifiedAt, path.toString(), raw, metadata);
+        return RawItem.file(id, mimeType, name, uri, checksum, modifiedAt,
+                stagedPath(id, name).toString(), raw, metadata);
     }
 
-    private Path writeScratch(String id, String name, byte[] bytes) {
+    /**
+     * Fetch the bytes for an item the runner has decided to keep — the only place this connector
+     * transfers content. Native docs export to text carried inline; binary files are staged at the
+     * very path {@link #binaryFile} already reported, so what is written and what is stored cannot
+     * drift apart.
+     */
+    @Override
+    public Entity.Content materialize(Knowledge knowledge, RawItem item) {
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
+        String mimeType = String.valueOf(item.raw().get("mimeType"));
+        if (mimeType.startsWith(NATIVE_PREFIX)) {
+            // contentType is the export mime nativeDoc resolved from EXPORT_AS.
+            byte[] bytes = api.export(token, item.externalId(), item.contentType());
+            return Entity.Content.ofText(new String(bytes, StandardCharsets.UTF_8));
+        }
+        byte[] bytes = api.download(token, item.externalId());
+        return Entity.Content.ofFile(stage(item.externalId(), Path.of(item.fileRef()), bytes).toString());
+    }
+
+    /**
+     * Drive is the one connector whose {@code fileRef} is a copy rather than the file itself: the
+     * bytes live under {@code app.ingestion.google-drive.download-dir}, which defaults into the
+     * per-user temp dir the OS purges. A re-index therefore has to fetch again.
+     */
+    @Override
+    public ReindexMode defaultReindexMode() {
+        return ReindexMode.FETCH_AND_REINDEX;
+    }
+
+    /**
+     * Re-read one file's listing row through {@code files.get}, mapped by the same {@link #toRawItem}
+     * the walk uses. Empty means "no longer indexable from here": the id stopped resolving, the file
+     * was trashed, or it now maps to nothing we index — a native type with no export, or a file that
+     * has grown past {@code max-file-bytes}. The walk treats all of those as absent too (its query
+     * excludes trashed files and {@code toRawItem} drops the rest), so tombstoning the entity keeps
+     * the two paths agreeing rather than leaving content indexed that no walk would produce again.
+     */
+    @Override
+    public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
+        GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
+        JsonNode file;
         try {
-            Path dir = scratchDir();
-            Files.createDirectories(dir);
-            Path path = dir.resolve(id + "-" + sanitize(name));
+            file = api.getFile(token, entity.externalId());
+        } catch (GoogleApiException e) {
+            if (e.isNotFound()) {
+                return Optional.empty();
+            }
+            throw e;
+        }
+        if (file == null || file.isMissingNode() || file.path("trashed").asBoolean(false)) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(toRawItem(file));
+    }
+
+    private Path stage(String id, Path path, byte[] bytes) {
+        try {
+            Files.createDirectories(path.getParent());
             Files.write(path, bytes);
             return path;
         } catch (IOException e) {
             throw new GoogleApiException("Failed to stage Drive file " + id + " to scratch dir", e);
         }
+    }
+
+    /**
+     * Where a file's bytes live once staged. Deterministic in {@code (id, name)} so the path can be
+     * named during the walk and written to later — and so a re-fetch of the same revision overwrites
+     * rather than accumulating.
+     */
+    private Path stagedPath(String id, String name) {
+        return scratchDir().resolve(id + "-" + sanitize(name));
     }
 
     private Path scratchDir() {

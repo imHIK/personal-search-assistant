@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
-import type { SourceType } from '@/api/types'
+import type { RateLimitPolicy } from '@/api/types'
 import { SchemaForm, type FormValues } from '@/components/SchemaForm'
 import { Technical } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
@@ -12,10 +12,12 @@ import { Field, Input, Select } from '@/components/ui/Input'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Toggle } from '@/components/ui/Toggle'
 import { ErrorState, SkeletonList } from '@/components/ui/States'
-import { connectorFor, connectorsNeedingAccounts } from '@/config/connectors'
+import { accountFor, accountTypes } from '@/config/accounts'
 import { initialValues, pruneEmpty, type FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnection, useConnectionMutations } from '@/hooks/queries'
+import { ConnectAccountButton } from './ConnectAccountButton'
+import { RateLimitFields } from './RateLimitFields'
 
 /**
  * Create or edit an account. Both modes render the same descriptor-driven form — the only
@@ -32,15 +34,16 @@ export function AccountFormPage() {
   const { data: existing, isLoading, error: loadError } = useConnection(id)
   const { create, patch } = useConnectionMutations()
 
-  const candidates = useMemo(() => connectorsNeedingAccounts(), [])
-  const [type, setType] = useState<SourceType>(candidates[0]?.id ?? 'GMAIL')
+  const candidates = useMemo(() => accountTypes(), [])
+  const [type, setType] = useState<string>(candidates[0]?.id ?? 'GMAIL')
   const [name, setName] = useState('')
   const [makeDefault, setMakeDefault] = useState(false)
   const [auth, setAuth] = useState<FormValues>({})
   const [config, setConfig] = useState<FormValues>({})
+  const [rateLimit, setRateLimit] = useState<RateLimitPolicy>({ rules: [] })
   const [nameError, setNameError] = useState<string>()
 
-  const descriptor = connectorFor(isEdit && existing ? existing.type : type)
+  const descriptor = accountFor(isEdit && existing ? existing.type : type)
 
   // Seed the form once the existing account arrives. Secrets round-trip from the server
   // unredacted, so they land in the masked `secret` controls rather than plain text.
@@ -49,15 +52,19 @@ export function AccountFormPage() {
     setName(existing.name)
     setType(existing.type)
     setMakeDefault(isDefaultConnection(existing))
-    const d = connectorFor(existing.type)
+    const d = accountFor(existing.type)
     setAuth(initialValues(d.authFields, existing.auth as Record<string, unknown>))
     setConfig(initialValues(d.configFields, existing.config as Record<string, unknown>))
+    // Rebuilt rather than assigned: the response also carries a derived `unlimited` flag (Jackson
+    // reads the record's isUnlimited() as a getter), and echoing unknown keys back on PATCH is
+    // sloppy even though the server tolerates them.
+    setRateLimit({ rules: existing.rateLimit?.rules ?? [] })
   }, [existing])
 
   // Reset the credential fields when the type changes on a new account — the field set differs.
   useEffect(() => {
     if (isEdit) return
-    const d = connectorFor(type)
+    const d = accountFor(type)
     setAuth(initialValues(d.authFields))
     setConfig(initialValues(d.configFields))
   }, [type, isEdit])
@@ -73,10 +80,13 @@ export function AccountFormPage() {
     }
     setNameError(undefined)
 
+    // Sent on every save, empty list included: absent means "unchanged" server-side, so an empty
+    // list is the only way to express that the user removed the limit they had.
     const body = {
       name: name.trim(),
       auth: pruneEmpty(auth),
       config: pruneEmpty(config),
+      rateLimit,
     }
 
     if (isEdit && id) {
@@ -150,7 +160,7 @@ export function AccountFormPage() {
                 <Select
                   id="account-type"
                   value={type}
-                  onChange={(event) => setType(event.target.value as SourceType)}
+                  onChange={(event) => setType(event.target.value)}
                 >
                   {candidates.map((candidate) => (
                     <option key={candidate.id} value={candidate.id}>
@@ -172,14 +182,30 @@ export function AccountFormPage() {
           </CardBody>
         </Card>
 
-        {descriptor.authFields.length > 0 && (
+        {(descriptor.authFields.length > 0 || descriptor.oauth) && (
           <Card>
             <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle>Sign-in details</CardTitle>
               {descriptor.credentialHelp && <CredentialHelp descriptor={descriptor} />}
             </CardHeader>
-            <CardBody>
-              <SchemaForm fields={descriptor.authFields} values={auth} onChange={setAuth} />
+            <CardBody className="space-y-4">
+              {/*
+                When the connector supports it, signing in is the primary path and the token fields
+                are a fallback for someone who obtained one by hand — which is why those fields are
+                marked `technical` in the descriptor and only appear behind the details toggle.
+              */}
+              {descriptor.oauth && (
+                <ConnectAccountButton
+                  descriptor={descriptor}
+                  type={isEdit && existing ? existing.type : type}
+                  connectionId={isEdit ? id : undefined}
+                  name={name.trim() || undefined}
+                  disabled={pending}
+                />
+              )}
+              {descriptor.authFields.length > 0 && (
+                <SchemaForm fields={descriptor.authFields} values={auth} onChange={setAuth} />
+              )}
             </CardBody>
           </Card>
         )}
@@ -201,6 +227,23 @@ export function AccountFormPage() {
             </CardBody>
           </Card>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{labels.accounts.rateLimitTitle}</CardTitle>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+              {labels.accounts.rateLimitHint}
+            </p>
+            <RateLimitFields value={rateLimit} onChange={setRateLimit} disabled={pending} />
+            {rateLimit.rules.length > 0 && (
+              <p className="text-xs leading-relaxed text-[var(--text-subtle)]">
+                {labels.accounts.rateLimitWarning}
+              </p>
+            )}
+          </CardBody>
+        </Card>
 
         {saveError && (
           <ErrorState
@@ -225,7 +268,7 @@ export function AccountFormPage() {
 }
 
 /** Collapsible, connector-specific instructions sourced from the descriptor. */
-function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof connectorFor> }) {
+function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof accountFor> }) {
   const [open, setOpen] = useState(false)
   const help = descriptor.credentialHelp
   if (!help) return null

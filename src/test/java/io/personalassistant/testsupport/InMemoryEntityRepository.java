@@ -23,10 +23,16 @@ public class InMemoryEntityRepository implements EntityRepository {
         Optional<Entity> existing = findByKnowledgeAndExternalId(entity.knowledgeId(), entity.externalId());
         String id = existing.map(Entity::id).orElse(entity.id());
         Instant createdAt = existing.map(Entity::createdAt).orElse(entity.createdAt());
+        // Mirrors the Mongo adapter's field ownership: the indexer's chunkCount/model/indexedAt
+        // survive (they describe what is in the index right now), index.error is cleared, and the
+        // work queue is reset with the lease dropped so an in-flight indexer is fenced out.
+        Entity.IndexInfo priorIndex = existing.map(Entity::index).orElse(Entity.IndexInfo.empty());
+        Entity.IndexInfo index = new Entity.IndexInfo(priorIndex.chunkCount(),
+                priorIndex.embeddingModel(), priorIndex.indexedAt(), null);
         Entity stored = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
-                entity.status(), entity.needsReindex(), entity.index(), entity.lease(), entity.retry(),
-                createdAt, entity.updatedAt(), entity.lastSeenGeneration());
+                EntityStatus.INGESTED, false, false, index, null, Entity.Retry.zero(),
+                createdAt, entity.updatedAt(), entity.expiresAt(), entity.lastSeenGeneration());
         store.put(id, stored);
         return stored;
     }
@@ -97,27 +103,63 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
-    public void markIndexed(String id, int chunkCount, String embeddingModel, Instant indexedAt) {
-        mutate(id, e -> rebuild(e, EntityStatus.INDEXED, false,
-                new Entity.IndexInfo(chunkCount, embeddingModel, indexedAt, null), null, e.retry()));
+    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt) {
+        return fenced(id, owner, e -> rebuild(e, EntityStatus.INDEXED, false,
+                new Entity.IndexInfo(chunkCount, embeddingModel, indexedAt, null), null, Entity.Retry.zero()));
     }
 
     @Override
-    public void markDeletionComplete(String id, Instant cleanedAt) {
-        mutate(id, e -> rebuild(e, e.status(), false,
-                new Entity.IndexInfo(0, e.index().embeddingModel(), cleanedAt, e.index().error()), null, e.retry()));
+    public boolean markDeletionComplete(String id, String owner, Instant cleanedAt) {
+        return fenced(id, owner, e -> rebuild(e, e.status(), false,
+                new Entity.IndexInfo(0, e.index().embeddingModel(), cleanedAt, e.index().error()),
+                null, Entity.Retry.zero()));
     }
 
     @Override
-    public void markFailed(String id, EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt) {
-        mutate(id, e -> rebuild(e, restingStatus, e.needsReindex(),
+    public boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                              int retryCount, Instant nextAttemptAt) {
+        // A terminal FAILED also clears needsReindex — mirrors the Mongo adapter's dead-letter exit.
+        boolean stillFlagged = restingStatus != EntityStatus.FAILED;
+        return fenced(id, owner, e -> rebuild(e, restingStatus, stillFlagged && e.needsReindex(),
                 new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(), e.index().indexedAt(), error),
                 null, new Entity.Retry(retryCount, nextAttemptAt)));
     }
 
     @Override
+    public boolean markContentMissing(String id, String owner, String error) {
+        // Terminal on the first attempt, with needsRefetch set — mirrors the Mongo adapter.
+        return fenced(id, owner, e -> rebuild(e, EntityStatus.FAILED, false, true,
+                new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(),
+                        e.index().indexedAt(), error),
+                null, Entity.Retry.zero()));
+    }
+
+    @Override
+    public int flagNeedsRefetchByKnowledge(String knowledgeId) {
+        int flagged = 0;
+        for (Entity e : List.copyOf(store.values())) {
+            if (!knowledgeId.equals(e.knowledgeId()) || e.status() == EntityStatus.DELETED
+                    || e.content() == null || !e.content().isFile()) {
+                continue;
+            }
+            store.put(e.id(), rebuild(e, e.status(), e.needsReindex(), true, e.index(), e.lease(),
+                    e.retry()));
+            flagged++;
+        }
+        return flagged;
+    }
+
+    @Override
     public void flagNeedsReindex(String id) {
-        mutate(id, e -> rebuild(e, e.status(), true, e.index(), e.lease(), e.retry()));
+        mutate(id, e -> {
+            // Revive a dead-lettered entity with a fresh retry budget; lease deliberately untouched.
+            EntityStatus status = e.status() == EntityStatus.FAILED ? EntityStatus.INGESTED : e.status();
+            String error = e.status() == EntityStatus.FAILED ? null : e.index().error();
+            return rebuild(e, status, true,
+                    new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(),
+                            e.index().indexedAt(), error),
+                    e.lease(), Entity.Retry.zero());
+        });
     }
 
     @Override
@@ -126,8 +168,60 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        int revived = 0;
+        for (Entity e : new ArrayList<>(store.values())) {
+            if (e.knowledgeId().equals(knowledgeId) && e.status() == EntityStatus.FAILED) {
+                store.put(e.id(), rebuild(e, EntityStatus.INGESTED, e.needsReindex(),
+                        new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(),
+                                e.index().indexedAt(), null),
+                        null, Entity.Retry.zero()));
+                revived++;
+            }
+        }
+        return revived;
+    }
+
+    @Override
     public void markDeleted(String id, Instant updatedAt) {
         mutate(id, e -> rebuild(e, EntityStatus.DELETED, true, e.index(), e.lease(), e.retry()));
+    }
+
+    @Override
+    public int flagNeedsReindexByKnowledge(String knowledgeId) {
+        int flagged = 0;
+        Instant now = Instant.now();
+        for (Entity e : List.copyOf(store.values())) {
+            if (!knowledgeId.equals(e.knowledgeId()) || e.status() == EntityStatus.DELETED) {
+                continue;
+            }
+            if (e.lease() != null && e.lease().isLiveAt(now)) {
+                continue;
+            }
+            store.put(e.id(), rebuild(e, e.status(), true, e.index(), e.lease(), Entity.Retry.zero()));
+            flagged++;
+        }
+        return flagged;
+    }
+
+    @Override
+    public List<Entity> findExpired(int limit, Instant now) {
+        return store.values().stream()
+                .filter(e -> e.expiresAt() != null && !e.expiresAt().isAfter(now))
+                .filter(e -> e.status() != EntityStatus.DELETED)
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit) {
+        return store.values().stream()
+                .filter(e -> knowledgeId.equals(e.knowledgeId()))
+                .filter(e -> e.expiresAt() == null)
+                .filter(e -> e.createdAt() != null && e.createdAt().isBefore(cutoff))
+                .filter(e -> e.status() != EntityStatus.DELETED)
+                .limit(limit)
+                .toList();
     }
 
     @Override
@@ -152,7 +246,7 @@ public class InMemoryEntityRepository implements EntityRepository {
                 e.title(), e.uri(), e.checksum(),
                 e.index() == null ? Entity.IndexInfo.empty() : e.index(),
                 e.retry() == null ? 0 : e.retry().count(),
-                e.needsReindex(), e.updatedAt());
+                e.needsReindex(), e.createdAt(), e.updatedAt());
     }
 
     @Override
@@ -191,10 +285,37 @@ public class InMemoryEntityRepository implements EntityRepository {
         if (e.status() == EntityStatus.INGESTED) {
             return true;
         }
-        if (e.needsReindex() && e.status() != EntityStatus.DELETED && e.status() != EntityStatus.INDEXING) {
+        // FAILED excluded: dead-letter, only flagNeedsReindex brings it back. Mirrors the Mongo filter.
+        if (e.needsReindex() && e.status() != EntityStatus.DELETED && e.status() != EntityStatus.INDEXING
+                && e.status() != EntityStatus.FAILED) {
             return true;
         }
         return e.status() == EntityStatus.INDEXING && (e.lease() == null || !e.lease().isLiveAt(now));
+    }
+
+    /**
+     * Put an entity exactly as given, bypassing the work-queue reset {@link #upsert} applies. For
+     * tests that want a <em>state</em> as a fixture rather than to exercise ingestion's contract.
+     */
+    public void seed(Entity entity) {
+        store.put(entity.id(), entity);
+    }
+
+    /**
+     * Fixture helper: drive an entity to {@code INDEXED} without going through the lease protocol.
+     * Callers that genuinely test the protocol should claim first and pass the real owner.
+     */
+    public void seedIndexed(String id, int chunkCount, String embeddingModel, Instant indexedAt) {
+        mutate(id, e -> rebuild(e, EntityStatus.INDEXED, false,
+                new Entity.IndexInfo(chunkCount, embeddingModel, indexedAt, null), null, Entity.Retry.zero()));
+    }
+
+    /** Fixture counterpart to {@link #seedIndexed} for a failure resting state. */
+    public void seedFailed(String id, EntityStatus restingStatus, String error, int retryCount) {
+        mutate(id, e -> rebuild(e, restingStatus, restingStatus != EntityStatus.FAILED && e.needsReindex(),
+                new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(),
+                        e.index().indexedAt(), error),
+                null, new Entity.Retry(retryCount, null)));
     }
 
     private void mutate(String id, java.util.function.UnaryOperator<Entity> op) {
@@ -204,10 +325,27 @@ public class InMemoryEntityRepository implements EntityRepository {
         }
     }
 
+    /** Lease fence mirroring the Mongo adapter's {@code ownedBy}: a stale worker's write is a no-op. */
+    private boolean fenced(String id, String owner, java.util.function.UnaryOperator<Entity> op) {
+        Entity e = store.get(id);
+        if (e == null || e.lease() == null || !owner.equals(e.lease().owner())
+                || !e.lease().isLiveAt(Instant.now())) {
+            return false;
+        }
+        store.put(id, op.apply(e));
+        return true;
+    }
+
     private static Entity rebuild(Entity e, EntityStatus status, boolean needsReindex,
                                   Entity.IndexInfo index, Entity.Lease lease, Entity.Retry retry) {
+        return rebuild(e, status, needsReindex, e.needsRefetch(), index, lease, retry);
+    }
+
+    private static Entity rebuild(Entity e, EntityStatus status, boolean needsReindex,
+                                  boolean needsRefetch, Entity.IndexInfo index, Entity.Lease lease,
+                                  Entity.Retry retry) {
         return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
-                e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, index, lease,
-                retry, e.createdAt(), Instant.now(), e.lastSeenGeneration());
+                e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, needsRefetch,
+                index, lease, retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration());
     }
 }

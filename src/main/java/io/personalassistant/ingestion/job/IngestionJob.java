@@ -5,13 +5,17 @@ import io.personalassistant.common.concurrency.PermitService;
 import io.personalassistant.common.concurrency.ScopeLimit;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
+import io.personalassistant.ingestion.connector.ConnectionResolver;
+import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +31,15 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * <p>The poll loop is intentionally simple: anything it can't start this tick (no permit, lost
  * the lease race) is simply retried next tick. Job mechanism is Mongo polling for now; the stage
  * boundary keeps a later swap to a broker from touching connectors.
+ *
+ * <p><b>Eligibility is decided before the query, not after it.</b> A cursor this loop skips is not
+ * written, so its {@code lastRunAt} never advances and it stays at the head of the least-recently-run
+ * ordering. Filtered only in {@link #tryRun}, twenty skipped cursors — an orphan left by a delete that
+ * raced activation, a knowledge in {@code ERROR}, a source whose token expired — would fill every
+ * batch and silently stop all ingestion (it did, for a week). So the batch is drawn only from
+ * {@code ACTIVE} knowledges whose connection is usable, plus {@code PAUSED} ones: those still need to
+ * reach the backstop in {@code tryRun}, which parks them and so takes them out of the batch itself.
+ * The checks in {@code tryRun} stay, for a knowledge that changes between the listing and the claim.
  */
 @ApplicationScoped
 public class IngestionJob {
@@ -37,6 +50,8 @@ public class IngestionJob {
     private final KnowledgeRepository knowledge;
     private final PermitService permits;
     private final IngestionRunner runner;
+    private final ConnectorRegistry connectors;
+    private final ConnectionResolver connections;
     private final String worker = "worker-" + UUID.randomUUID().toString().substring(0, 8);
 
     @ConfigProperty(name = "app.ingestion.poll-batch", defaultValue = "20")
@@ -53,23 +68,66 @@ public class IngestionJob {
 
     // Sized to the cursor lease: the permit is renewed per page alongside the lease, so it must
     // outlive a single page just as the lease does (keep >= app.ingestion.lease-seconds).
-    @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "900")
+    @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "14400")
     long permitTtlSeconds;
 
     @Inject
     public IngestionJob(CursorRepository cursors, KnowledgeRepository knowledge,
-                        PermitService permits, IngestionRunner runner) {
+                        PermitService permits, IngestionRunner runner,
+                        ConnectorRegistry connectors, ConnectionResolver connections) {
         this.cursors = cursors;
         this.knowledge = knowledge;
         this.permits = permits;
         this.runner = runner;
+        this.connectors = connectors;
+        this.connections = connections;
     }
 
     @Scheduled(every = "{app.ingestion.poll-interval}",
             concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void tick() {
-        for (Cursor candidate : cursors.findClaimable(pollBatch)) {
+        List<String> eligible = eligibleKnowledgeIds();
+        if (eligible.isEmpty()) {
+            return;
+        }
+        for (Cursor candidate : cursors.findClaimable(eligible, pollBatch)) {
             tryRun(candidate);
+        }
+    }
+
+    /** Knowledges whose cursors may enter the claim batch — see the class javadoc for why PAUSED is in. */
+    private List<String> eligibleKnowledgeIds() {
+        List<String> ids = new ArrayList<>();
+        for (Knowledge kn : knowledge.findByStatus(KnowledgeStatus.ACTIVE)) {
+            if (!connectionUnusable(kn)) {
+                ids.add(kn.id());
+            }
+        }
+        for (Knowledge kn : knowledge.findByStatus(KnowledgeStatus.PAUSED)) {
+            ids.add(kn.id());
+        }
+        return ids;
+    }
+
+    /**
+     * Whether this knowledge's credentials are known to be bad, so running it would only burn a lease
+     * and a permit to fail. {@code ConnectionHealthScheduler} is what marks a connection {@code ERROR};
+     * an expired Google refresh token otherwise fails on every single tick, forever.
+     *
+     * <p>Deliberately derived rather than stored: nothing is paused and no knowledge state is written,
+     * so a connection that starts working again resumes sync by itself — and a user's own pause is
+     * never fought over. Any doubt (missing connection, unknown type, lookup failure) runs the
+     * knowledge as before: this is an optimisation, and it must never be the reason a sync stops.
+     */
+    private boolean connectionUnusable(Knowledge kn) {
+        try {
+            var type = kn.connectorDetails().type();
+            if (!connectors.supports(type) || !connectors.get(type).requiresConnection()) {
+                return false;
+            }
+            return connections.resolve(kn).status() == ConnectionStatus.ERROR;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 
@@ -86,6 +144,9 @@ public class IngestionJob {
                 cursors.suspendByKnowledge(candidate.knowledgeId());
             }
             return; // not active — don't run
+        }
+        if (connectionUnusable(kn.get())) {
+            return; // credentials are known-bad; every page would fail
         }
 
         List<ScopeLimit> limits = List.of(

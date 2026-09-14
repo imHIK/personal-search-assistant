@@ -53,8 +53,9 @@ class DefaultKnowledgeServiceTest {
                 .withDynamicIterables(true);
         // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
+        SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors,
-                entities, new SingleConnectorRegistry(connector), connections, index, discovery);
+                entities, registry, connections, index, discovery, new RefetchPolicy(registry));
     }
 
     private Knowledge addKnowledge() {
@@ -110,6 +111,29 @@ class DefaultKnowledgeServiceTest {
                 .filter(c -> c.iterableId().equals("chan_b")).findFirst().orElseThrow();
         assertEquals(Map.of("channelId", "C999", "isPrivate", true), b.attributes(),
                 "the cursor carries the iterable's attributes so the runner needn't re-discover");
+    }
+
+    @Test
+    void createdCursorsSnapshotIterableDisplayNameAndReconcileRefreshesIt() {
+        Knowledge kn = addKnowledge();
+        connector.addIterable(new SourceIterable("chan_b", "Engineering", Map.of()));
+        service.reconcileCursors(kn.id());
+
+        assertEquals("Engineering", nameOf(kn.id(), "chan_b"),
+                "the cursor carries the label the console shows in place of the id");
+
+        // The channel is renamed at the source; reconcile is what catches up.
+        connector.removeIterable("chan_b");
+        connector.addIterable(new SourceIterable("chan_b", "Platform", Map.of()));
+        service.reconcileCursors(kn.id());
+
+        assertEquals("Platform", nameOf(kn.id(), "chan_b"), "a source-side rename is picked up");
+    }
+
+    private String nameOf(String knowledgeId, String iterableId) {
+        return cursors.findByKnowledge(knowledgeId).stream()
+                .filter(c -> c.iterableId().equals(iterableId)).findFirst().orElseThrow()
+                .iterableName();
     }
 
     @Test
@@ -169,14 +193,14 @@ class DefaultKnowledgeServiceTest {
     @Test
     void pauseParksClaimableCursorsSoTheyStopBeingPicked() {
         Knowledge kn = addKnowledge();
-        assertEquals(2, cursors.findClaimable(100).size(), "fresh cursors are claimable");
+        assertEquals(2, cursors.findClaimable(List.of(kn.id()), 100).size(), "fresh cursors are claimable");
 
         service.pause(kn.id());
 
         assertTrue(cursors.findByKnowledge(kn.id()).stream()
                         .allMatch(c -> c.status() == CursorStatus.SUSPENDED),
                 "pausing parks the knowledge's cursors");
-        assertEquals(0, cursors.findClaimable(100).size(),
+        assertEquals(0, cursors.findClaimable(List.of(kn.id()), 100).size(),
                 "parked cursors no longer pollute the claim batch");
     }
 
@@ -190,7 +214,7 @@ class DefaultKnowledgeServiceTest {
         assertTrue(cursors.findByKnowledge(kn.id()).stream()
                         .allMatch(c -> c.status() == CursorStatus.AVAILABLE),
                 "resuming re-arms parked cursors");
-        assertEquals(2, cursors.findClaimable(100).size(), "re-armed cursors are claimable again");
+        assertEquals(2, cursors.findClaimable(List.of(kn.id()), 100).size(), "re-armed cursors are claimable again");
     }
 
     @Test
@@ -261,8 +285,8 @@ class DefaultKnowledgeServiceTest {
         entities.upsert(TestData.entityInIterable("ent_1", kn.id(), "chan_a", "x1"));
         entities.upsert(TestData.entityInIterable("ent_2", kn.id(), "chan_a", "x2"));
         entities.upsert(TestData.entityInIterable("ent_3", kn.id(), "chan_a", "x3"));
-        entities.markIndexed("ent_1", 4, "m", Instant.now());
-        entities.markFailed("ent_2", EntityStatus.FAILED, "boom", 1, null);
+        entities.seedIndexed("ent_1", 4, "m", Instant.now());
+        entities.seedFailed("ent_2", EntityStatus.FAILED, "boom", 1);
 
         Knowledge.Stats stats = service.get(kn.id()).orElseThrow().stats();
         assertEquals(3, stats.entities(), "total reflects all entities");

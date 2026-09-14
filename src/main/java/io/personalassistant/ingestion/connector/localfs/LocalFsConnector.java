@@ -1,6 +1,8 @@
 package io.personalassistant.ingestion.connector.localfs;
 
+import io.personalassistant.common.ContentTypes;
 import io.personalassistant.domain.model.CursorPosition;
+import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.SyncSchedule;
@@ -21,6 +23,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -322,6 +325,26 @@ public class LocalFsConnector implements SourceConnector {
         return new FileKey(position.getLong(POS_MILLIS, 0L), position.getString(POS_PATH));
     }
 
+    /**
+     * Re-stat one known file. Nothing here is a copy — {@code externalId} and {@code fileRef} are both
+     * the absolute path of the user's own file — so this connector stays {@code REINDEX_ONLY} and
+     * this is only reached when the operator has forced fetching on globally. It is still worth
+     * having: it is the one path that notices a file deleted under us, since no walk emits tombstones.
+     */
+    @Override
+    public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
+        Path path = Path.of(entity.externalId());
+        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(toRawItem(
+                    new FileKey(Files.getLastModifiedTime(path).toMillis(), path.toString())));
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to stat " + path, e);
+        }
+    }
+
     // ---- mapping & helpers -------------------------------------------------------------------
 
     private List<RawItem> toItems(List<FileKey> keys) {
@@ -382,13 +405,14 @@ public class LocalFsConnector implements SourceConnector {
         }
     }
 
+    /**
+     * The type stored here is what picks the parser at indexing time, so a wrong answer silently changes
+     * how a file is extracted. {@link ContentTypes} sniffs name <em>and</em> bytes, unlike
+     * {@code Files.probeContentType} alone, which returns null for {@code .xlsx} on macOS and left every
+     * spreadsheet typed as {@code application/octet-stream}.
+     */
     private static String probeContentType(Path path) {
-        try {
-            String type = Files.probeContentType(path);
-            return type != null ? type : "application/octet-stream";
-        } catch (IOException e) {
-            return "application/octet-stream";
-        }
+        return ContentTypes.detect(path);
     }
 
     /** Ordering key: last-modified millis + absolute path (for deterministic, stable paging). */

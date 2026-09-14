@@ -38,14 +38,14 @@ There is no CI. Match surrounding layout by hand; never bulk-reformat a file you
 
 ## Architecture rules
 
-Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`, `ingestion`, `indexing`, `agent`).
+Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`, `ingestion`, `indexing`, `agent`, `publishing`).
 
 - **Use-case logic goes in `app/Default*Service`.** Resources only map DTO↔domain and exception↔status
   (`NoSuchElementException`→404, `IllegalArgumentException`→400, `IllegalStateException`→409) — there is no
   exception-mapper package.
-- **Nothing is registered in a central place.** Connectors, parsers, and chunking strategies are plain
-  `@ApplicationScoped` beans discovered by `CdiConnectorRegistry` / `CdiParserRegistry` /
-  `CdiChunkingStrategyRegistry`. Adding one = add the bean (+ a `SourceType` constant for a connector).
+- **Nothing is registered in a central place.** Connectors, publishers, parsers, and chunking strategies are plain
+  `@ApplicationScoped` beans discovered by `CdiConnectorRegistry` / `CdiPublisherRegistry` / `CdiConnectionKindRegistry` / `CdiParserRegistry` /
+  `CdiChunkingStrategyRegistry`. Adding one = add the bean (+ a `SourceType` constant for a connector, a `ChannelType` constant for a publisher).
 - **Never inject a concrete embedding or LLM provider.** They carry the `@ProviderImpl` qualifier
   (`common/ProviderImpl.java`), and the active one is produced by `EmbeddingProviderSelector` /
   `LlmProviderSelector` from `app.embedding.provider` / `app.llm.provider`.
@@ -70,30 +70,51 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
   behind the persisted top-bar toggle. When adding a field, decide which side of that line it is on.
 - **Two async traps the API sets** — both already handled, don't undo them: `POST /api/knowledge`
   returns **200 with `status: "ERROR"`** on a failed activation (check the body, not the HTTP status),
-  and `POST /api/search` with `answer: true` **500s and loses the hits** when the LLM is unavailable
-  (`useSearch` retries once without the flag).
+  and `POST /api/search` with `answer: true` returns **200 with `answerError` set** when the LLM is
+  unavailable — the hits are intact, so read that field rather than treating it as a failed search
+  (`useSearch` keeps a retry-without-answer fallback for older behaviour).
 - Things the backend lacks are flags in `src/config/features.ts`, not deletions.
 
 ## Invariants — breaking these corrupts data
 
 1. **Anchor.** Every knowledge gets `anchor = now` at creation and it never moves, including across edits.
    Forward grabs return items `>= anchor`, backward grabs `< anchor`. Violations create gaps or duplicates.
-2. **Cursor lease fencing.** `advancePosition` / `release` / `recordFailure` are compare-and-set on
-   `lease.owner` + not-expired. If one returns `false` the worker lost its lease and must stop touching the
-   cursor immediately.
+2. **Lease fencing, cursors *and* entities.** `advancePosition` / `release` / `recordFailure` on cursors,
+   and `markIndexed` / `markFailed` / `markDeletionComplete` on entities, are all compare-and-set on
+   `lease.owner` + not-expired. If one returns `false` the worker lost its lease and must stop touching that
+   record immediately — no compensation, the new owner redoes the work. Any new terminal write on either
+   must be fenced the same way; an unfenced one lets a stale worker mark half-finished work complete.
 3. **`checksum` is the only change signal.** A connector must make it change whenever the item changes
    (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail: `gmail:<id>;hist:<historyId>`).
-   Unchanged checksum + `INDEXED` status = skipped entirely.
+   Unchanged checksum + a status other than `FAILED` / `DELETED` + `needsRefetch` unset = skipped entirely.
+   The skip covers `INGESTED` and `INDEXING` too: those already carry that content, and re-upserting them
+   would reset the indexer's `retry` and `nextAttemptAt` out from under it. `needsRefetch` is the only
+   escape that is not about the source — it says the *stored* content is a staged copy we no longer
+   trust — and `upsert` clears it in the write that stores the fresh bytes.
 4. **`grab` is stateless and idempotent.** All pagination state lives in `CursorPosition`; the same page may
    be replayed after a crash. Files pass as `fileRef` (a path), never bytes — Mongo's 16 MB cap.
 5. **Embedding dimension is baked into the index mapping.** `app.embedding.dimension=768` is written into the
    `knn_vector` mapping by `OpenSearchIndexInitializer` at index creation. A different-width model needs a new
-   physical index (`chunks_v2`) + alias flip + full re-index. Code only ever talks to the `chunks` alias.
+   physical index (`chunks_v3_768` today) + alias flip + full re-index. Code only ever talks to the `chunks`
+   alias. This key deliberately has **no `defaultValue`** at any injection point — a guessed width builds an
+   index nothing fits, so an absent property must fail startup. `ConfigDefaultsTest` enforces both that and
+   general agreement between `@ConfigProperty` defaults and `application.properties`.
 6. **Indexing is an idempotent replace:** `deleteByEntity(id)` then `indexChunks(...)`, chunk id
    `entityId_ordinal`. Chunking config changes are direct updates — existing chunks are not re-chunked;
-   opt in per entity via `POST /api/index/entities/{id}/reindex`.
+   opt in via `POST /api/index/entities/{id}/reindex` or `.../knowledge/{id}/reindex`. Whether a
+   re-index re-fetches from the source is the **connector's** call (`defaultReindexMode`: `GOOGLE_DRIVE`
+   fetches because its `fileRef` is a staged copy), overridable by `app.indexing.refetch-on-reindex`.
+   Never expose it as a request parameter — the caller asks for a re-index, not for a fetch.
 7. Permits (`InMemoryPermitService`, scopes `global` / `connector:<TYPE>` / `knowledge:<id>`) are
    **single-node only**. Permit TTL must be `>=` lease TTL, and lease TTL must exceed worst-case single-page time.
+8. **Field ownership on `entities`.** Ingestion (`upsert`) owns content, `checksum`, `needsRefetch` and
+   `lastSeenGeneration`; the indexer owns `status`, `lease`, `retry` and `index.*`. Writes are field-level,
+   never whole-document — a document replace from one side clobbers the other's in-flight state. `upsert`
+   additionally drops the lease so new content fences out an indexer running on the previous revision.
+9. **Retry counts are consecutive, not cumulative.** Success resets them (`markIndexed`, cursor `release`),
+   so a retry limit means "n failures in a row". `FAILED` is a real dead-letter on both sides: nothing
+   auto-reclaims it, and the only ways back are `POST /api/index/entities/{id}/reindex` and
+   `POST /api/index/knowledge/{id}/retry-failed`.
 
 ## Style (differs from Java defaults)
 
@@ -125,12 +146,15 @@ adding `@QuarkusTest` + rest-assured tests for resources; the untested-adapter g
 
 ## Local dev
 
-`app.embedding.provider=onnx-bge` is the shipped default but `app.embedding.onnx.model-path` is empty, so
-embedding throws until a model is exported. For local dev set `app.embedding.provider=local-hashing`.
+`app.embedding.provider=openai-embed` is the shipped default and reads `GEMINI_API_KEY`. The local
+alternative `onnx-bge` has an empty `app.embedding.onnx.model-path`, so selecting it throws until a
+model is exported. For local dev with neither set `app.embedding.provider=local-hashing`.
 Optional env vars: `GROQ_API_KEY` (answers), `GEMINI_API_KEY` (hosted embeddings),
-`GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh). No `.env` file — bare env vars.
+`GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh and the email channel's sending account). No `.env` file — bare env vars.
 
-Credentials live on `Connection` (`connections` collection, one default per `SourceType`), not on `Knowledge`.
+Credentials live on `Connection` (`connections` collection, one default per connection type), not on `Knowledge`.
+A connection type is a `SourceType` name for a connector's account or a type registered by a `ConnectionKind`
+bean (`GMAIL_SEND`, the email channel's send-only Google account) — see `docs/publishing.md` § Accounts.
 
 ## Docs
 
@@ -145,9 +169,14 @@ Where things are documented: `docs/knowledge-lifecycle.md` and `docs/knowledge-e
 edit / pause / delete semantics), `docs/indexing-design.md` + `docs/indexing-implementation.md` (the
 two stages, and the config reference in §6), `docs/connectors.md` (the `SourceConnector` SPI and
 `Connection` auth), `docs/parsing-and-chunking.md`, `docs/providers.md` (embedding + LLM providers,
-including the ONNX model export), `docs/mongodb-schema.md` / `docs/opensearch-index.md`
-(persistence), `docs/limitations.md` (L1–L5 accepted gaps — don't "fix" these unprompted).
-`application.properties` is the tiebreaker for any config default.
+including the ONNX model export), `docs/digests.md` + `docs/tasks.md` (scheduled saved searches, and
+the two-half task library the bundled catalogue and user-written tasks form), `docs/publishing.md` (channels, the delivery outbox, the Gmail email publisher, connection types), `docs/deletion-flow.md`
+(every delete path today and its known gaps — input to the deletion redesign; don't patch those gaps one at a time), `docs/mongodb-schema.md`
+/ `docs/opensearch-index.md` (persistence), `docs/limitations.md` (L1–L10 accepted gaps — don't "fix"
+these unprompted; L11 is closed and kept as the record of why re-index re-fetches).
+`application.properties` is the tiebreaker for any config default, but **content** — prompts and
+metadata field sets — lives in `src/main/resources/config/*.json`; `docs/configuration.md` is the rule
+for which mechanism a new setting belongs in.
 
 ## Repo etiquette
 

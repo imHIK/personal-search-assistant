@@ -151,6 +151,13 @@ source enumeration plus indexing only the genuinely-new matches.
 > the anchor. If `backfill` is off there is no backward cursor, so those adds are unreachable without
 > temporarily creating one for the re-walk. (Forward-only re-walk still catches adds in `[anchor, now]`.)
 
+> **Staged content rides along.** A re-walk is the one moment the whole corpus passes back through
+> ingestion, so for a connector that declares `FETCH_AND_REINDEX` (Drive, whose `fileRef` is a copy in
+> a scratch dir the OS may empty) the re-walk also flags every file-backed entity `needsRefetch`,
+> before the rewind for the same reason the generation bump comes first. Without it the walk would
+> take the unchanged-checksum skip on those items and leave them pointing at bytes that may be gone.
+> See [L11](./limitations.md).
+
 **Mark (records the removes, defers the deletion).** To later remove the narrowed-out items without
 re-walking again, we stamp generations now:
 
@@ -209,7 +216,8 @@ Content-Type: application/json
 { "name": "...", "inputs": { ... }, "auth": { ... }, "cron": "...", "scheduleEnabled": true, ... }
 ```
 
-- Only present fields are treated as changes (patch semantics); absent fields are untouched.
+- Only present fields are treated as changes (patch semantics); absent fields are untouched, and a
+  field present as `null` is **cleared** back to inherit-the-default.
 - `type` present and different → `400`. `DELETED` → `409`/`404`.
 - Returns the updated `Knowledge` (in `ERROR` with `lastError` set if re-verify/discover failed,
   mirroring `add`).
@@ -217,19 +225,26 @@ Content-Type: application/json
 The DTO (`KnowledgePatchDto`) maps to a `KnowledgePatch` carrying only the provided fields, so the
 service can diff present-vs-changed precisely. `KnowledgePatch` mirrors `Knowledge`'s shape where that
 shape is real — the cohesive config groups get `SchedulePatch` / `WebhookPatch` sub-patches — but the
-`Optional<…>` optionality sits on the **leaves inside** each sub-patch (empty = "not provided",
-present = "set to this"), never on the group. That leaf granularity is deliberate: a group-level
-`Optional<ScheduleSettings>` could not express "flip just `enabled`" without a whole-group replace,
-whereas the routing needs exactly that (e.g. `scheduleEnabled` false→true, `backfill` false→true). The
-`Builder` exposes flat setters that fold into the sub-patches, so call sites stay ergonomic.
+`Patched<…>` optionality sits on the **leaves inside** each sub-patch (absent = "not provided",
+present = "set to this", present-with-null = "clear"), never on the group. That leaf granularity is
+deliberate: a group-level `Patched<ScheduleSettings>` could not express "flip just `enabled`" without a
+whole-group replace, whereas the routing needs exactly that (e.g. `scheduleEnabled` false→true,
+`backfill` false→true). The `Builder` exposes flat setters that fold into the sub-patches, so call
+sites stay ergonomic; it cannot express a clear, because a plain null already means "absent" there —
+the one caller that needs the third state builds the record directly.
 
-> **Wire caveat (Phase 1).** At the JSON boundary an *omitted* field and an explicit `null` both
-> deserialize to a `null` Java field, so `KnowledgePatchDto` treats `null` as "not provided /
-> unchanged" (the same boxed-nullable convention `KnowledgeDto` already uses for
-> `scheduleEnabled`/`backfillEnabled`). One consequence: `cron`/`interval` cannot be *cleared back to
-> inherit* through the patch API (a `null` there means "leave it"), only overwritten. The service-layer
-> `KnowledgePatch` can express the clear precisely; exposing it would need a typed-null wire format
-> (e.g. JSON-nullable), which is not built yet.
+> **How the third state survives the wire.** Jackson deserializes both an *omitted* field and an
+> explicit `null` to the same null Java field, so a bound DTO cannot tell them apart — and `Optional`
+> components do not help, since a missing key arrives as `Optional.empty()`, collapsing the two in the
+> other direction. `KnowledgePatchDto` therefore takes the raw `JsonNode` and reads it through
+> `api.dto.PatchBody`, which asks whether each key was *sent*.
+>
+> This is not a nicety. `cron: null` is how the console moves a source off a custom schedule and back
+> onto a preset interval; read as "leave it", the stored cron survived and went on winning over the
+> new interval, so a source could be put onto a custom schedule and never taken off it — answering 200
+> every time. The same held for every chunking override and for `retentionPeriod`: settable, never
+> removable. `name`, `auth`, `inputs` and `type` have no empty state and reject an explicit null with a
+> 400; clearing a map means sending `{}`, which is expressible and means something different.
 
 ---
 
@@ -261,11 +276,12 @@ Where each Phase 1 piece lives (all **framework**; the only source-side addition
 | Config-class in-place write + scheduling side-effects (clear `nextSyncDueAt`, re-arm on enable) | `DefaultKnowledgeService#applyConfigEdit` |
 | Provisioning pause → verify → discover → reconcile → restore | `DefaultKnowledgeService#reprovision` |
 | Park-don't-purge on shrink | `DefaultKnowledgeService#parkDisappearedIterables` (retire, no `deleteByIterable`) |
-| Membership re-walk (rewind cursors) | `DefaultKnowledgeService#rewalkForMembership` + `CursorRepository#resetToStart` |
+| Membership re-walk (rewind cursors) | `DefaultKnowledgeService#rewalkForMembershipChange` + `CursorRepository#resetToStart` |
+| Staged content refreshed by the same re-walk | `app/RefetchPolicy` + `EntityRepository#flagNeedsRefetchByKnowledge` |
 | `membershipSignature` connector hook | `ingestion.connector.SourceConnector#membershipSignature` (default hashes all inputs) |
 | `syncGeneration` on Knowledge, bumped on membership edits | `domain.model.Knowledge#syncGeneration` / `#bumpGeneration` |
 | `lastSeenGeneration` on Entity, stamped on every walk incl. the skip path | `domain.model.Entity#lastSeenGeneration`, `EntityRepository#stampLastSeen`, `IngestionRunner#persistItem` |
-| Patch model + wire DTO + endpoint | `domain.service.KnowledgePatch`, `api.dto.KnowledgePatchDto`, `api.resource.KnowledgeResource#update` (+ `api.resource.PATCH`) |
+| Patch model + wire DTO + endpoint | `domain.service.KnowledgePatch` (leaves are `domain.service.Patched`), `api.dto.KnowledgePatchDto` over `api.dto.PatchBody`, `api.resource.KnowledgeResource#update` (+ `api.resource.PATCH`) |
 
 Tests: `app/DefaultKnowledgeServiceEditTest` (covers every case in [§8](#8-test-plan-phase-1)).
 

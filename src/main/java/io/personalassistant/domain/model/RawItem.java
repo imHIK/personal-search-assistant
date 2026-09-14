@@ -22,6 +22,9 @@ import java.util.Map;
  * @param text        inline extracted text for text items, or null
  * @param fileRef     absolute local filesystem path for file items, or null
  * @param metadata    normalized + source-native attributes
+ * @param expiresAt   when the item should be aged out, if the source states one (a posting's close
+ *                    date); null when it does not, which is the common case — the knowledge-level
+ *                    retention window then governs instead
  * @param deleted     tombstone flag: the item was removed at the source
  */
 public record RawItem(
@@ -36,6 +39,7 @@ public record RawItem(
         String text,
         String fileRef,
         Map<String, Object> metadata,
+        Instant expiresAt,
         boolean deleted) {
 
     /** Builder-free convenience for a live (non-tombstone) file item. */
@@ -43,12 +47,12 @@ public record RawItem(
                                String checksum, Instant modifiedAt, String fileRef,
                                Map<String, Object> raw, Map<String, Object> metadata) {
         return new RawItem(externalId, EntityType.FILE, contentType, title, uri, checksum,
-                modifiedAt, raw, null, fileRef, metadata, false);
+                modifiedAt, raw, null, fileRef, metadata, null, false);
     }
 
     /** Convenience for a tombstone (deletion) of a previously ingested item. */
     public static RawItem tombstone(String externalId) {
         return new RawItem(externalId, EntityType.OTHER, null, null, null, null, null,
-                Map.of(), null, null, Map.of(), true);
+                Map.of(), null, null, Map.of(), null, true);
     }
 }

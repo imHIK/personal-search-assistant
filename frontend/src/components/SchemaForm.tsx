@@ -1,9 +1,10 @@
-import { Eye, EyeOff } from 'lucide-react'
+import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, X } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Textarea } from '@/components/ui/Input'
 import { useTechnicalDetails } from '@/components/TechnicalDetails'
 import type { FieldSpec } from '@/config/fields'
+import { labels } from '@/config/labels'
 import { cn } from '@/lib/utils'
 
 /**
@@ -165,6 +166,9 @@ function Control({
         />
       )
 
+    case 'picklist':
+      return <PicklistInput id={id} field={field} value={value} disabled={disabled} onChange={onChange} />
+
     case 'select':
       return (
         <Select
@@ -198,6 +202,206 @@ function Control({
         />
       )
   }
+}
+
+/**
+ * A checkbox list of known values plus a free-text row for anything else.
+ *
+ * It replaces a bare textarea for values the user cannot be expected to invent — a job board handle
+ * is "the name as it appears in their careers URL", which is unknowable without going and looking,
+ * and a typo is indistinguishable from a company that genuinely has no board. The catalog covers the
+ * common case; the add-your-own row keeps every value the textarea accepted, so nothing is lost and
+ * the lookup checker above still feeds the same list.
+ *
+ * The catalog panel expands inline rather than floating: it lives inside a card that scrolls, and an
+ * absolutely-positioned list of thirty rows would be clipped or would cover the fields under it.
+ */
+function PicklistInput({
+  id,
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string
+  field: FieldSpec
+  value: unknown
+  disabled?: boolean
+  onChange: (value: unknown) => void
+}) {
+  const selected = Array.isArray(value) ? (value as string[]) : []
+  const options = field.options ?? []
+  const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [draft, setDraft] = useState('')
+
+  const has = (candidate: string) =>
+    selected.some((entry) => entry.toLowerCase() === candidate.toLowerCase())
+
+  const add = (...candidates: string[]) => {
+    const additions = candidates.map((c) => c.trim()).filter((c) => c && !has(c))
+    if (additions.length === 0) return
+    onChange([...selected, ...additions])
+  }
+
+  const remove = (...candidates: string[]) => {
+    const dropped = new Set(candidates.map((c) => c.toLowerCase()))
+    onChange(selected.filter((entry) => !dropped.has(entry.toLowerCase())))
+  }
+
+  /** What one catalog row stands for — usually itself, sometimes a group of accepted spellings. */
+  const entriesOf = (option: { value: string; values?: string[] }) => option.values ?? [option.value]
+
+  const needle = filter.trim().toLowerCase()
+  const matching = needle
+    ? options.filter(
+        (option) =>
+          option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle),
+      )
+    : options
+
+  // Bulk actions follow the filter, so "type remote, select all" picks just the remote rows.
+  const matchingEntries = matching.flatMap(entriesOf)
+  const allMatchingSelected = matchingEntries.every(has)
+  const anyMatchingSelected = matchingEntries.some(has)
+
+  return (
+    <div className="space-y-2.5">
+      {selected.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5">
+          {selected.map((entry) => {
+            const known = options.find((option) => entriesOf(option).includes(entry))
+            return (
+              <li key={entry}>
+                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--bg-subtle)] py-1 pl-2.5 pr-1 text-xs">
+                  {known && entriesOf(known).length === 1 ? known.label : entry}
+                  {known?.note && (
+                    <span className="text-[var(--text-subtle)]">{known.note}</span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    aria-label={`${labels.common.remove} ${entry}`}
+                    className="rounded-full p-0.5 text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                    onClick={() => remove(entry)}
+                  >
+                    <X className="size-3" aria-hidden />
+                  </button>
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {options.length > 0 && (
+        <div className="rounded-lg border border-[var(--border)]">
+          <button
+            type="button"
+            id={id}
+            aria-expanded={open}
+            disabled={disabled}
+            className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+            onClick={() => setOpen((current) => !current)}
+          >
+            {labels.picklist.browse(options.length, field.browseNoun ?? labels.picklist.defaultNoun)}
+            {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          </button>
+
+          {open && (
+            <div className="border-t border-[var(--border)] p-2">
+              <Input
+                value={filter}
+                placeholder={labels.picklist.filter}
+                disabled={disabled}
+                autoComplete="off"
+                onChange={(event) => setFilter(event.target.value)}
+              />
+              {matching.length > 0 && (
+                <div className="mt-2 flex items-center justify-between px-2 text-xs">
+                  <button
+                    type="button"
+                    disabled={disabled || allMatchingSelected}
+                    className="font-medium text-[var(--accent)] transition-colors hover:underline disabled:cursor-default disabled:text-[var(--text-subtle)] disabled:no-underline"
+                    onClick={() => add(...matchingEntries)}
+                  >
+                    {labels.picklist.selectAll(matching.length)}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled || !anyMatchingSelected}
+                    className="text-[var(--text-muted)] transition-colors hover:text-[var(--text)] disabled:cursor-default disabled:text-[var(--text-subtle)]"
+                    onClick={() => remove(...matchingEntries)}
+                  >
+                    {labels.picklist.deselectAll}
+                  </button>
+                </div>
+              )}
+              <ul className="mt-2 max-h-56 space-y-0.5 overflow-y-auto">
+                {matching.map((option) => (
+                  <li key={option.value}>
+                    <label className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)]">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border-[var(--border-strong)] accent-[var(--accent)]"
+                        checked={entriesOf(option).every(has)}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          event.target.checked
+                            ? add(...entriesOf(option))
+                            : remove(...entriesOf(option))
+                        }
+                      />
+                      <span className="flex-1">{option.label}</span>
+                      {option.note && (
+                        <span className="text-xs text-[var(--text-subtle)]">{option.note}</span>
+                      )}
+                    </label>
+                  </li>
+                ))}
+                {matching.length === 0 && (
+                  <li className="px-2 py-3 text-xs text-[var(--text-muted)]">
+                    {labels.picklist.noMatch}
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Input
+          value={draft}
+          placeholder={field.placeholder}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter adds the entry instead of submitting the surrounding form — losing a
+            // half-typed list to an accidental submit is the worst outcome here.
+            if (event.key !== 'Enter') return
+            event.preventDefault()
+            add(draft)
+            setDraft('')
+          }}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={disabled || !draft.trim()}
+          onClick={() => {
+            add(draft)
+            setDraft('')
+          }}
+        >
+          <Plus />
+          {field.addOwnLabel ?? labels.picklist.add}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 /**

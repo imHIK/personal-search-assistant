@@ -2,6 +2,7 @@ package io.personalassistant.storage.cursor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Cursor;
@@ -29,8 +30,16 @@ class CursorParkingTest {
         cursors = new InMemoryCursorRepository();
     }
 
+    /** A cursor held by a rate limit until {@code until} — the shape recordFailure writes. */
+    private Cursor rateLimited(String id, String knowledgeId, Instant until) {
+        return new Cursor(id, knowledgeId, "iter", "iter", java.util.Map.of(), CursorDirection.FORWARD,
+                CursorPosition.start(), CursorStatus.RATE_LIMITED, null,
+                new Cursor.Retry(1, "Rate limited on connection:c1", until),
+                new Cursor.Stats(null, 0), new Cursor.Scope(SourceType.SLACK));
+    }
+
     private Cursor cursor(String id, String knowledgeId, CursorStatus status, Instant lastRunAt) {
-        return new Cursor(id, knowledgeId, "iter", java.util.Map.of(), CursorDirection.FORWARD,
+        return new Cursor(id, knowledgeId, "iter", "iter", java.util.Map.of(), CursorDirection.FORWARD,
                 CursorPosition.start(), status,
                 status == CursorStatus.IN_PROGRESS
                         ? new Cursor.Lease("worker-x", Instant.now().plusSeconds(60)) : null,
@@ -70,7 +79,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("a", "k1", CursorStatus.AVAILABLE, null));
         cursors.suspendByKnowledge("k1");
 
-        assertTrue(cursors.findClaimable(100).isEmpty(), "parked cursors are not claimable");
+        assertTrue(cursors.findClaimable(List.of("k1"), 100).isEmpty(), "parked cursors are not claimable");
     }
 
     @Test
@@ -86,6 +95,48 @@ class CursorParkingTest {
                 "terminal cursors are not resurrected by resume");
     }
 
+    /**
+     * The rate-limit hold is enforced by the claim query itself, not by a sweeper flipping the status
+     * back — so the persisted instant is the only state, and nothing can strand a cursor by dying.
+     */
+    @Test
+    void aRateLimitHoldGatesClaimingOnItsInstant() {
+        cursors.insertIfAbsent(rateLimited("held", "k1", Instant.now().plusSeconds(600)));
+        cursors.insertIfAbsent(rateLimited("elapsed", "k1", Instant.now().minusSeconds(1)));
+        cursors.insertIfAbsent(rateLimited("stranded", "k1", null));
+
+        List<String> claimable = cursors.findClaimable(List.of("k1"), 100).stream().map(Cursor::id).toList();
+
+        assertEquals(List.of("elapsed"), claimable);
+        assertTrue(cursors.claim("held", "w1", java.time.Duration.ofMinutes(5)).isEmpty(),
+                "claim applies the same gate atomically");
+        assertTrue(cursors.claim("stranded", "w1", java.time.Duration.ofMinutes(5)).isEmpty(),
+                "a missing instant reads as 'never', not as 'no hold' — unlike the entity filter");
+    }
+
+    @Test
+    void suspendParksRateLimitedCursorsToo() {
+        cursors.insertIfAbsent(rateLimited("held", "k1", Instant.now().plusSeconds(600)));
+
+        assertEquals(1, cursors.suspendByKnowledge("k1"),
+                "its hold would elapse mid-pause and put it back in the batch");
+        assertEquals(CursorStatus.SUSPENDED, cursors.findById("held").orElseThrow().status());
+    }
+
+    /** The console's only way to shorten a hold: the instant was computed against a limit the user
+     * has typically just raised. */
+    @Test
+    void retryFailedAlsoReleasesRateLimitedCursors() {
+        cursors.insertIfAbsent(rateLimited("held", "k1", Instant.now().plusSeconds(600)));
+        cursors.insertIfAbsent(cursor("dead", "k1", CursorStatus.FAILED, null));
+
+        assertEquals(2, cursors.retryFailedByKnowledge("k1"));
+        Cursor released = cursors.findById("held").orElseThrow();
+        assertEquals(CursorStatus.AVAILABLE, released.status());
+        assertNull(released.retry().nextAttemptAt(), "the hold is dropped, not merely stepped over");
+        assertEquals(0, released.retry().count(), "and the deferral streak restarts");
+    }
+
     @Test
     void findClaimableOrdersByLastRunAtNeverRunFirst() {
         Instant t1 = Instant.parse("2026-01-01T00:00:00Z");
@@ -95,7 +146,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("neverRun", "k1", CursorStatus.AVAILABLE, null));
         cursors.insertIfAbsent(cursor("older", "k1", CursorStatus.AVAILABLE, t1));
 
-        List<String> order = cursors.findClaimable(100).stream().map(Cursor::id).toList();
+        List<String> order = cursors.findClaimable(List.of("k1"), 100).stream().map(Cursor::id).toList();
 
         assertEquals(List.of("neverRun", "older", "recent"), order,
                 "never-run first, then least-recently-run");
@@ -108,7 +159,7 @@ class CursorParkingTest {
         cursors.insertIfAbsent(cursor("recent", "k1", CursorStatus.AVAILABLE, t2));
         cursors.insertIfAbsent(cursor("older", "k1", CursorStatus.AVAILABLE, t1));
 
-        List<String> top1 = cursors.findClaimable(1).stream().map(Cursor::id).toList();
+        List<String> top1 = cursors.findClaimable(List.of("k1"), 1).stream().map(Cursor::id).toList();
 
         assertEquals(List.of("older"), top1, "the limit keeps the oldest, not insertion order");
         assertFalse(top1.contains("recent"));

@@ -24,13 +24,17 @@ import java.util.Map;
  * @param id          stable id, e.g. {@code "cur_..."}
  * @param knowledgeId owning knowledge
  * @param iterableId  identifies the sub-stream (a channel, folder, label…)
+ * @param iterableName human-friendly label for that sub-stream, snapshotted from {@code discover}
+ *                    alongside the attributes so the console never has to render a raw id. Null on
+ *                    cursors written before names were stored; the reconcile pass refreshes it, so a
+ *                    renamed folder or label catches up on the next discovery rather than going stale
  * @param attributes  connector-specific iterable attributes snapshotted from {@code discover} (the
  *                    {@code grab} inputs, e.g. a folder path); empty for legacy cursors
  * @param direction   backward (backfill) or forward (incremental)
  * @param position    source-defined pagination state (page token, offset, timestamp+id, ...)
  * @param status      operational state
  * @param lease       current holder + expiry, or null when free
- * @param retry       retry bookkeeping
+ * @param retry       retry bookkeeping, including any rate-limit hold
  * @param stats       last-run bookkeeping
  * @param scope       hints used by the PermitService for scoped throttling
  */
@@ -38,6 +42,7 @@ public record Cursor(
         String id,
         String knowledgeId,
         String iterableId,
+        String iterableName,
         Map<String, Object> attributes,
         CursorDirection direction,
         CursorPosition position,
@@ -59,17 +64,25 @@ public record Cursor(
     }
 
     /**
-     * Retry bookkeeping for transient ingestion failures. {@code lastError} captures a compact
-     * summary of the most recent failure (the full stack trace goes to the log) so a stuck or
-     * {@code FAILED} cursor can be debugged straight from the stored record.
+     * Retry bookkeeping for transient ingestion failures. {@code count} is <em>consecutive</em>
+     * failures — a successful run resets it to zero — so the retry limit means "n failures in a row",
+     * not "n failures ever". {@code lastError} captures a compact summary of the most recent failure
+     * (the full stack trace goes to the log) so a stuck or {@code FAILED} cursor can be debugged
+     * straight from the stored record.
+     *
+     * <p>{@code nextAttemptAt} is the instant a {@link CursorStatus#RATE_LIMITED} cursor becomes
+     * claimable again — the reopening the limiter computed, persisted so the hold survives a restart
+     * and so the claim query, not a background sweeper, is what lets the cursor back in. It is null
+     * for every other status; a null on a {@code RATE_LIMITED} row would strand it, which is why
+     * dead-lettering to {@code FAILED} clears it rather than leaving a stale instant behind.
      */
-    public record Retry(int count, String lastError) {
+    public record Retry(int count, String lastError, Instant nextAttemptAt) {
         public static Retry zero() {
-            return new Retry(0, null);
+            return new Retry(0, null, null);
         }
 
         public Retry increment() {
-            return new Retry(count + 1, lastError);
+            return new Retry(count + 1, lastError, nextAttemptAt);
         }
     }
 

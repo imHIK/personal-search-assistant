@@ -1,4 +1,12 @@
-import { ChevronDown, ChevronRight, ExternalLink, FileQuestion, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  FileQuestion,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +17,7 @@ import { Card } from '@/components/ui/Card'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
 import { SegmentedControl } from '@/components/ui/Toggle'
+import { Tooltip } from '@/components/ui/Tooltip'
 import { PAGE_SIZE } from '@/config/constants'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
@@ -68,7 +77,8 @@ export function ItemsTab({ knowledgeId }: { knowledgeId: string }) {
         />
       ) : (
         <>
-          <Card className="divide-y divide-[var(--border)] overflow-hidden">
+          {/* No overflow-hidden: it would clip an item row's error tooltip. */}
+          <Card className="divide-y divide-[var(--border)]">
             {data.items.map((item) => (
               <ItemRow key={item.id} item={item} knowledgeId={knowledgeId} />
             ))}
@@ -103,6 +113,43 @@ export function ItemsTab({ knowledgeId }: { knowledgeId: string }) {
   )
 }
 
+/**
+ * An item's processing error, folded behind an icon.
+ *
+ * Inline it dominated the row: three wrapped lines of exception text above the one thing the row is
+ * actually about, its name — and repeated verbatim down the whole list when a batch fails the same
+ * way, which is the common case. The icon keeps the list scannable while still marking which items
+ * carry an error, and the wording stays one hover away.
+ */
+function ItemError({ error }: { error: string }) {
+  const technical = useTechnicalDetails()
+  const friendly = friendlyLastError(error)
+
+  return (
+    <Tooltip
+      content={
+        <>
+          <p className="text-xs font-medium text-[var(--text)]">{friendly.title}</p>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">{friendly.detail}</p>
+          {technical && friendly.raw && friendly.raw !== friendly.detail && (
+            <p className="mt-2 break-all font-mono text-[10px] leading-relaxed text-[var(--text-subtle)]">
+              {friendly.raw}
+            </p>
+          )}
+        </>
+      }
+    >
+      <button
+        type="button"
+        aria-label={`${labels.items.errorHint}: ${friendly.title}`}
+        className="rounded p-1 text-[var(--tone-alert)] transition-colors hover:bg-[var(--tone-alert-bg)]"
+      >
+        <AlertTriangle className="size-4" aria-hidden />
+      </button>
+    </Tooltip>
+  )
+}
+
 function ItemRow({ item, knowledgeId }: { item: EntityItem; knowledgeId: string }) {
   const [expanded, setExpanded] = useState(false)
   const technical = useTechnicalDetails()
@@ -110,7 +157,10 @@ function ItemRow({ item, knowledgeId }: { item: EntityItem; knowledgeId: string 
 
   const name = displayName(item)
   const presented = presentItem(item)
-  const added = relativeTime(item.updatedAt)
+  // createdAt, not updatedAt: updatedAt is the row's last write, and almost every one of those is the
+  // indexing stage's own bookkeeping — a claim, a retry, a deferral. An item that has never changed
+  // reads as "added 2 minutes ago" all day if you show it here.
+  const added = relativeTime(item.createdAt)
 
   const act = (
     mutation: {
@@ -151,14 +201,10 @@ function ItemRow({ item, knowledgeId }: { item: EntityItem; knowledgeId: string 
             {added && ` · ${labels.items.added.toLowerCase()} ${added}`}
             {item.chunkCount > 0 && technical && ` · ${formatNumber(item.chunkCount)} chunks`}
           </p>
-          {item.error && (
-            <p className="mt-1 text-xs leading-relaxed text-[var(--tone-alert)]">
-              {friendlyLastError(item.error).detail}
-            </p>
-          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {item.error && <ItemError error={item.error} />}
           <StateBadge state={presented} size="sm" />
           <Button
             variant="ghost"
@@ -209,6 +255,7 @@ function ItemRow({ item, knowledgeId }: { item: EntityItem; knowledgeId: string 
                 ['indexedAt', absoluteTime(item.indexedAt) ?? '—'],
                 ['retryCount', String(item.retryCount)],
                 ['needsReindex', String(item.needsReindex)],
+                ['createdAt', absoluteTime(item.createdAt) ?? '—'],
                 ['updatedAt', absoluteTime(item.updatedAt) ?? '—'],
                 ['error', item.error ?? '—'],
               ]}

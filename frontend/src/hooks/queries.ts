@@ -1,18 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { channelsApi } from '@/api/channels'
 import { connectionsApi } from '@/api/connections'
+import { deliveriesApi } from '@/api/deliveries'
+import { digestsApi } from '@/api/digests'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
+import { tasksApi } from '@/api/tasks'
 import type {
   Connection,
+  CreateChannelBody,
   CreateConnectionBody,
+  CreateDigestBody,
   CreateKnowledgeBody,
   CursorInfo,
+  DeliveryStatus,
   EntityStatus,
   Knowledge,
+  PatchChannelBody,
   PatchConnectionBody,
+  PatchDigestBody,
   PatchKnowledgeBody,
-  SourceType,
+  TaskBody,
 } from '@/api/types'
 import {
   HEALTH_INTERVAL_MS,
@@ -29,9 +38,25 @@ export const keys = {
   entities: (id: string, status: EntityStatus | null, offset: number, limit: number) =>
     ['knowledge', id, 'entities', status ?? 'all', offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
+  digests: ['digests'] as const,
+  digestOne: (id: string) => ['digests', id] as const,
+  digestRuns: (id: string, limit: number, offset: number) =>
+    ['digests', id, 'runs', limit, offset] as const,
+  /** Everything under one digest's runs, for invalidating every page at once. */
+  digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
+  tasks: ['tasks'] as const,
+  taskOne: (id: string) => ['tasks', id] as const,
+  llmProfiles: ['llm-profiles'] as const,
+  entity: (id: string) => ['entities', id] as const,
   connections: ['connections'] as const,
-  connectionsOfType: (type?: SourceType) => ['connections', type ?? 'all'] as const,
+  connectionsOfType: (type?: string) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
+  channels: ['channels'] as const,
+  channelOne: (id: string) => ['channels', id] as const,
+  deliveries: (channelId: string, status: DeliveryStatus | null, limit: number, offset: number) =>
+    ['deliveries', channelId, status ?? 'all', limit, offset] as const,
+  deliveriesAll: ['deliveries'] as const,
+  runDeliveries: (runId: string) => ['deliveries', 'run', runId] as const,
 }
 
 /**
@@ -216,7 +241,7 @@ export function useEntityActions(knowledgeId: string) {
 
 // ---- Connections ----------------------------------------------------------------------------
 
-export function useConnections(type?: SourceType) {
+export function useConnections(type?: string) {
   return useQuery({
     queryKey: keys.connectionsOfType(type),
     queryFn: () => connectionsApi.list(type),
@@ -256,12 +281,16 @@ export function useConnectionMutations() {
     mutationFn: (id: string) => connectionsApi.makeDefault(id),
     onSuccess: invalidate,
   })
+  const test = useMutation({
+    mutationFn: (id: string) => connectionsApi.test(id),
+    onSuccess: invalidate,
+  })
   const remove = useMutation({
     mutationFn: (id: string) => connectionsApi.remove(id),
     onSuccess: invalidate,
   })
 
-  return { create, patch, makeDefault, remove }
+  return { create, patch, makeDefault, test, remove }
 }
 
 /** Connections indexed by id, for showing an account name next to a source. */
@@ -270,6 +299,79 @@ export function useConnectionsById(): Map<string, Connection> {
   const map = useRef(new Map<string, Connection>())
   map.current = new Map((data ?? []).map((connection) => [connection.id, connection]))
   return map.current
+}
+
+// ---- Publishing channels ----------------------------------------------------------------------
+
+export function useChannels() {
+  return useQuery({ queryKey: keys.channels, queryFn: channelsApi.list })
+}
+
+export function useChannel(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.channelOne(id!),
+    queryFn: () => channelsApi.get(id!),
+    enabled: Boolean(id),
+  })
+}
+
+export function useChannelMutations() {
+  const client = useQueryClient()
+  const invalidate = useCallback(() => {
+    void client.invalidateQueries({ queryKey: keys.channels })
+    void client.invalidateQueries({ queryKey: keys.deliveriesAll })
+  }, [client])
+
+  const create = useMutation({
+    mutationFn: (body: CreateChannelBody) => channelsApi.create(body),
+    onSuccess: invalidate,
+  })
+  const patch = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: PatchChannelBody }) => channelsApi.patch(id, body),
+    onSuccess: invalidate,
+  })
+  const test = useMutation({
+    mutationFn: (id: string) => channelsApi.test(id),
+    onSuccess: invalidate,
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => channelsApi.remove(id),
+    onSuccess: invalidate,
+  })
+  return { create, patch, test, remove }
+}
+
+/**
+ * A channel's recent deliveries. Polls while anything is still queued, since the worker sends in the
+ * background and there is no push channel to say it has.
+ */
+export function useDeliveries(channelId: string | undefined, limit = 20) {
+  return useQuery({
+    queryKey: keys.deliveries(channelId!, null, limit, 0),
+    queryFn: () => deliveriesApi.list({ channelId, limit }),
+    enabled: Boolean(channelId),
+    refetchInterval: (q) =>
+      q.state.data?.some((delivery) => delivery.status === 'PENDING') ? POLL_INTERVAL_MS : false,
+  })
+}
+
+export function useRetryDelivery() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deliveriesApi.retry(id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: keys.deliveriesAll }),
+  })
+}
+
+/** What a digest run was sent to. Polls while any of it is still queued. */
+export function useRunDeliveries(runId: string | undefined) {
+  return useQuery({
+    queryKey: keys.runDeliveries(runId!),
+    queryFn: () => deliveriesApi.list({ refId: runId, limit: 20 }),
+    enabled: Boolean(runId),
+    refetchInterval: (q) =>
+      q.state.data?.some((delivery) => delivery.status === 'PENDING') ? POLL_INTERVAL_MS : false,
+  })
 }
 
 // ---- Health ---------------------------------------------------------------------------------
@@ -282,4 +384,137 @@ export function useHealth() {
     retry: false,
     staleTime: 0,
   })
+}
+
+// ---- Digests --------------------------------------------------------------------------------
+
+export function useDigests() {
+  return useQuery({ queryKey: keys.digests, queryFn: digestsApi.list })
+}
+
+export function useDigest(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.digestOne(id!),
+    queryFn: () => digestsApi.get(id!),
+    enabled: Boolean(id),
+  })
+}
+
+export function useDigestRuns(id: string | undefined, limit = 20, offset = 0) {
+  return useQuery({
+    queryKey: keys.digestRuns(id!, limit, offset),
+    queryFn: () => digestsApi.runs(id!, limit, offset),
+    enabled: Boolean(id),
+    // A page of history stays valid while paging back and forth; only a run makes it stale.
+    placeholderData: (previous) => previous,
+  })
+}
+
+/**
+ * The task library. Rarely changes and is read on the digest form as well as its own page, so it is
+ * worth keeping around between visits.
+ */
+export function useTasks() {
+  return useQuery({ queryKey: keys.tasks, queryFn: tasksApi.list, staleTime: 60_000 })
+}
+
+export function useTask(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.taskOne(id!),
+    queryFn: () => tasksApi.get(id!),
+    enabled: Boolean(id),
+  })
+}
+
+/** Configured models. Fixed for the life of the process, so it never needs refetching. */
+export function useLlmProfiles() {
+  return useQuery({ queryKey: keys.llmProfiles, queryFn: tasksApi.llmProfiles, staleTime: Infinity })
+}
+
+/**
+ * One indexed item, for showing a title where only an entity id is held — a digest that searches by
+ * a document, say. Failures are not retried: a deleted document is a normal outcome here, and the
+ * caller falls back to showing the id.
+ */
+export function useEntity(id: string | null | undefined) {
+  return useQuery({
+    queryKey: keys.entity(id!),
+    queryFn: () => tasksApi.entity(id!),
+    enabled: Boolean(id),
+    retry: false,
+    staleTime: 300_000,
+  })
+}
+
+export function useTaskActions() {
+  const client = useQueryClient()
+  const invalidate = () => void client.invalidateQueries({ queryKey: keys.tasks })
+
+  const create = useMutation({
+    mutationFn: (body: TaskBody) => tasksApi.create(body),
+    onSuccess: invalidate,
+  })
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: TaskBody }) => tasksApi.update(id, body),
+    onSuccess: (_data, { id }) => {
+      void client.invalidateQueries({ queryKey: keys.taskOne(id) })
+      invalidate()
+    },
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => tasksApi.remove(id),
+    onSuccess: invalidate,
+  })
+
+  return { create, update, remove }
+}
+
+/** Create / enable / delete / run-now, each invalidating exactly what it affected. */
+export function useDigestActions() {
+  const client = useQueryClient()
+  const invalidate = () => void client.invalidateQueries({ queryKey: keys.digests })
+
+  const create = useMutation({
+    mutationFn: (body: CreateDigestBody) => digestsApi.create(body),
+    onSuccess: invalidate,
+  })
+  const setEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      digestsApi.setEnabled(id, enabled),
+    onSuccess: invalidate,
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => digestsApi.remove(id),
+    onSuccess: (_data, id) => {
+      client.removeQueries({ queryKey: keys.digestRunsAll(id) })
+      client.removeQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+  const run = useMutation({
+    mutationFn: (id: string) => digestsApi.run(id),
+    onSuccess: (_data, id) => {
+      void client.invalidateQueries({ queryKey: keys.digestRunsAll(id) })
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: PatchDigestBody }) =>
+      digestsApi.update(id, body),
+    onSuccess: (_data, { id }) => {
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+  /** Clears the seen-set only — the runs stay, so the history view is unaffected. */
+  const resetHistory = useMutation({
+    mutationFn: (id: string) => digestsApi.resetHistory(id),
+    onSuccess: (_data, id) => {
+      void client.invalidateQueries({ queryKey: keys.digestOne(id) })
+      invalidate()
+    },
+  })
+
+  return { create, setEnabled, remove, run, update, resetHistory }
 }

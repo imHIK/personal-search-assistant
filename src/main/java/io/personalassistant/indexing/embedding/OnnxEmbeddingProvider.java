@@ -43,7 +43,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.onnx.model", defaultValue = "bge-base-en-v1.5")
     String modelName;
 
-    @ConfigProperty(name = "app.embedding.dimension", defaultValue = "768")
+    @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
     /** Optional: blank means no model exported yet, and embedding throws. See {@link ConfigText}. */
@@ -55,6 +55,15 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
     @ConfigProperty(name = "app.embedding.onnx.normalize", defaultValue = "true")
     boolean normalize;
+
+    /**
+     * Instruction prepended to a <em>query</em> before embedding, never to a document. BGE models are
+     * trained with one and their own documentation recommends it for retrieval — the default value is
+     * BGE's published wording. Optional because it is model-specific: a symmetric model wants none, and
+     * the wrong instruction is worse than no instruction. See {@link ConfigText}.
+     */
+    @ConfigProperty(name = "app.embedding.onnx.query-instruction")
+    Optional<String> queryInstruction;
 
     private final Object lock = new Object();
     private volatile ZooModel<String, float[]> model;
@@ -78,6 +87,18 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @Override
     public Embedding embed(String text) {
         return embedAll(List.of(text == null ? "" : text)).get(0);
+    }
+
+    /**
+     * Prepends the configured query instruction, joining with a single space so the property does not
+     * have to carry meaningful trailing whitespace — spotless strips that, which would silently glue the
+     * instruction to the query and change what the model sees.
+     */
+    @Override
+    public Embedding embedQuery(String text) {
+        String instruction = ConfigText.orNull(queryInstruction);
+        String safe = text == null ? "" : text;
+        return embedAll(List.of(instruction == null ? safe : instruction.strip() + " " + safe)).get(0);
     }
 
     @Override

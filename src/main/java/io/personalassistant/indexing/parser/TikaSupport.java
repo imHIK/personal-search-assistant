@@ -14,7 +14,6 @@ import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.Parser;
 import org.apache.tika.parser.microsoft.OfficeParserConfig;
 import org.apache.tika.parser.pdf.PDFParserConfig;
-import org.apache.tika.sax.BodyContentHandler;
 import org.xml.sax.SAXException;
 
 /**
@@ -69,12 +68,20 @@ final class TikaSupport {
     }
 
     /**
-     * Run Tika into a body handler and return the extracted text plus a little harvested metadata.
-     * On the {@link #MAX_CHARS} write cap we keep what was captured (partial is better than nothing);
-     * any other parse error is surfaced so the entity's retry/backoff path records it.
+     * Run Tika into a {@link StructureAwareHandler} and return the extracted text, the structural blocks
+     * behind it, and a little harvested metadata. Any parse error is surfaced so the entity's
+     * retry/backoff path records it.
+     *
+     * <p>The handler, rather than {@code BodyContentHandler}, is the whole point: the plain-text handlers
+     * discard Tika's XHTML markup, which is what turned a spreadsheet into an undelimited run of cell
+     * values with no row boundaries for the chunker to split on. See {@link StructureAwareHandler}.
+     *
+     * <p>The {@link #MAX_CHARS} cap is enforced by the handler itself — it stops appending and keeps what
+     * it has, so there is no write-limit exception to catch and partial extraction stays partial rather
+     * than failing. (Tika's own limit is what the old {@code isWriteLimitReached} salvage existed for.)
      */
     static ParsedContent extract(String parserName, InputStream input, String contentType, ParseContext context) {
-        BodyContentHandler handler = new BodyContentHandler(MAX_CHARS); // throws once MAX_CHARS is exceeded
+        StructureAwareHandler handler = new StructureAwareHandler(MAX_CHARS);
         Metadata metadata = new Metadata();
         String base = baseType(contentType);
         if (!base.isEmpty()) {
@@ -83,13 +90,11 @@ final class TikaSupport {
         try {
             AUTO.parse(input, handler, metadata, context);
         } catch (IOException | SAXException | TikaException e) {
-            // Exceeding MAX_CHARS surfaces as Tika's write-limit exception; that is not a failure —
-            // keep the text captured so far. Anything else means extraction genuinely failed.
             if (!isWriteLimitReached(e)) {
                 throw new IllegalStateException("Text extraction failed for " + base + " (" + parserName + ")", e);
             }
         }
-        return new ParsedContent(handler.toString(), harvest(parserName, base, metadata));
+        return new ParsedContent(handler.text(), harvest(parserName, base, metadata), handler.blocks());
     }
 
     /** True if the cause chain includes Tika's write-limit signal (matched by name to stay version-agnostic). */

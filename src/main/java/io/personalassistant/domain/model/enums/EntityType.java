@@ -9,5 +9,6 @@ public enum EntityType {
     MESSAGE,
     EMAIL,
     PAGE,
+    JOB_POSTING,
     OTHER
 }

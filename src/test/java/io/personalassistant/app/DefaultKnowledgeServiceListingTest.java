@@ -53,8 +53,9 @@ class DefaultKnowledgeServiceListingTest {
         StubConnector connector = new StubConnector(SourceType.SLACK,
                 List.of(new SourceIterable("chan_a", "A", Map.of())));
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
+        SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors, entities,
-                new SingleConnectorRegistry(connector), connections, index, discovery);
+                registry, connections, index, discovery, new RefetchPolicy(registry));
     }
 
     /** Persist a knowledge directly — these tests exercise reads, not the activation path. */
@@ -69,8 +70,8 @@ class DefaultKnowledgeServiceListingTest {
         return new Entity(id, knowledgeId, "chan_a", EntityType.MESSAGE, "ext_" + id,
                 Map.of(), Entity.Content.ofText("body"),
                 Map.of("title", "Title " + id, "uri", "test://" + id),
-                "sha256:" + id, status, false, Entity.IndexInfo.empty(), null,
-                Entity.Retry.zero(), updatedAt, updatedAt, 0L);
+                "sha256:" + id, status, false, false, Entity.IndexInfo.empty(), null,
+                Entity.Retry.zero(), updatedAt, updatedAt, null, 0L);
     }
 
     // ---- entity listing ----------------------------------------------------------------------
@@ -79,9 +80,9 @@ class DefaultKnowledgeServiceListingTest {
     void listsEntitiesNewestFirstWithTitleAndUri() {
         Knowledge kn = storedKnowledge("kn_1");
         Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
-        entities.upsert(entity("ent_old", kn.id(), EntityStatus.INDEXED, t0));
-        entities.upsert(entity("ent_mid", kn.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
-        entities.upsert(entity("ent_new", kn.id(), EntityStatus.INGESTED, t0.plusSeconds(120)));
+        entities.seed(entity("ent_old", kn.id(), EntityStatus.INDEXED, t0));
+        entities.seed(entity("ent_mid", kn.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
+        entities.seed(entity("ent_new", kn.id(), EntityStatus.INGESTED, t0.plusSeconds(120)));
 
         List<EntitySummary> items = service.listEntities(kn.id(), null, 50, 0).items();
 
@@ -96,7 +97,7 @@ class DefaultKnowledgeServiceListingTest {
         Knowledge kn = storedKnowledge("kn_1");
         Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
         for (int i = 0; i < 3; i++) {
-            entities.upsert(entity("ent_" + i, kn.id(), EntityStatus.INDEXED, t0.plusSeconds(i * 60L)));
+            entities.seed(entity("ent_" + i, kn.id(), EntityStatus.INDEXED, t0.plusSeconds(i * 60L)));
         }
 
         KnowledgeService.EntityPage first = service.listEntities(kn.id(), null, 2, 0);
@@ -115,9 +116,9 @@ class DefaultKnowledgeServiceListingTest {
     void filtersByStatusAndCountsOnlyTheFilteredTotal() {
         Knowledge kn = storedKnowledge("kn_1");
         Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
-        entities.upsert(entity("ent_a", kn.id(), EntityStatus.INDEXED, t0));
-        entities.upsert(entity("ent_b", kn.id(), EntityStatus.FAILED, t0.plusSeconds(60)));
-        entities.upsert(entity("ent_c", kn.id(), EntityStatus.FAILED, t0.plusSeconds(120)));
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INDEXED, t0));
+        entities.seed(entity("ent_b", kn.id(), EntityStatus.FAILED, t0.plusSeconds(60)));
+        entities.seed(entity("ent_c", kn.id(), EntityStatus.FAILED, t0.plusSeconds(120)));
 
         KnowledgeService.EntityPage page = service.listEntities(kn.id(), EntityStatus.FAILED, 50, 0);
 
@@ -140,8 +141,8 @@ class DefaultKnowledgeServiceListingTest {
         Knowledge mine = storedKnowledge("kn_1");
         Knowledge other = storedKnowledge("kn_2");
         Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
-        entities.upsert(entity("ent_mine", mine.id(), EntityStatus.INDEXED, t0));
-        entities.upsert(entity("ent_other", other.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
+        entities.seed(entity("ent_mine", mine.id(), EntityStatus.INDEXED, t0));
+        entities.seed(entity("ent_other", other.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
 
         KnowledgeService.EntityPage page = service.listEntities(mine.id(), null, 50, 0);
 
@@ -153,8 +154,8 @@ class DefaultKnowledgeServiceListingTest {
     void carriesIndexRollupAndRetryOntoTheSummary() {
         Knowledge kn = storedKnowledge("kn_1");
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
-        entities.upsert(entity("ent_a", kn.id(), EntityStatus.INGESTED, now));
-        entities.markIndexed("ent_a", 7, "bge-base-en-v1.5", now);
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INGESTED, now));
+        entities.seedIndexed("ent_a", 7, "bge-base-en-v1.5", now);
 
         EntitySummary summary = service.listEntities(kn.id(), null, 50, 0).items().get(0);
 
@@ -196,8 +197,8 @@ class DefaultKnowledgeServiceListingTest {
         Cursor base = TestData.cursor(kn.id(), "a_iter", CursorDirection.BACKWARD, SourceType.SLACK);
         Instant ranAt = Instant.parse("2026-01-01T00:00:00Z");
         cursors.insertIfAbsent(new Cursor(base.id(), base.knowledgeId(), base.iterableId(),
-                base.attributes(), base.direction(), base.position(), base.status(), base.lease(),
-                new Cursor.Retry(2, "boom"), new Cursor.Stats(ranAt, 17), base.scope()));
+                base.iterableName(), base.attributes(), base.direction(), base.position(), base.status(), base.lease(),
+                new Cursor.Retry(2, "boom", null), new Cursor.Stats(ranAt, 17), base.scope()));
 
         Cursor listed = service.listCursors(kn.id()).get(0);
 

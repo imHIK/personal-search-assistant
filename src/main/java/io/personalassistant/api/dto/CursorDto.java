@@ -18,10 +18,15 @@ import java.util.Map;
  *
  * @param id         stable cursor id, e.g. {@code "cur_..."}
  * @param iterableId the sub-stream this cursor walks (a folder, label, channel…)
+ * @param iterableName human-friendly label for that sub-stream (the folder or label name); null on
+ *                   cursors written before names were stored, so a caller must keep a fallback
  * @param direction  backward (backfill) or forward (incremental)
  * @param status     operational state
  * @param retryCount consecutive failures so far
  * @param lastError  compact summary of the most recent failure, or null
+ * @param nextAttemptAt when a {@code RATE_LIMITED} cursor may run again; null for every other
+ *                   status. A value in the past means the hold has elapsed and the cursor is simply
+ *                   waiting for the next poll tick — the console reads it that way
  * @param lastRunAt  when this cursor last fetched a page, or null if it never has
  * @param fetched    items fetched by this cursor in total
  * @param position   source-defined pagination state, passed through opaquely
@@ -29,10 +34,12 @@ import java.util.Map;
 public record CursorDto(
         String id,
         String iterableId,
+        String iterableName,
         CursorDirection direction,
         CursorStatus status,
         int retryCount,
         String lastError,
+        Instant nextAttemptAt,
         Instant lastRunAt,
         long fetched,
         Map<String, Object> position) {
@@ -44,7 +51,8 @@ public record CursorDto(
         Cursor.Stats stats = c.stats() == null ? Cursor.Stats.zero() : c.stats();
         Map<String, Object> position = c.position() == null || c.position().values() == null
                 ? Map.of() : c.position().values();
-        return new CursorDto(c.id(), c.iterableId(), c.direction(), c.status(),
-                retry.count(), retry.lastError(), stats.lastRunAt(), stats.fetched(), position);
+        return new CursorDto(c.id(), c.iterableId(), c.iterableName(), c.direction(), c.status(),
+                retry.count(), retry.lastError(), retry.nextAttemptAt(),
+                stats.lastRunAt(), stats.fetched(), position);
     }
 }

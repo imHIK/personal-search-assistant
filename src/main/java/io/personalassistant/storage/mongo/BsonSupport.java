@@ -1,5 +1,7 @@
 package io.personalassistant.storage.mongo;
 
+import io.personalassistant.common.ratelimit.RateLimitPolicy;
+import io.personalassistant.common.ratelimit.RateLimitRule;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
@@ -45,6 +47,47 @@ final class BsonSupport {
 
     static String enumName(Enum<?> value) {
         return value == null ? null : value.name();
+    }
+
+    /**
+     * A rate-limit policy as {@code { rules: [ { permits, windowSeconds } ] }}, or null when unset.
+     *
+     * <p>Stored expanded rather than as the compact {@code "500/1m"} string the config properties use:
+     * this one is written by the console, and a structured document is queryable and needs no parser on
+     * the read path. An <em>empty</em> rules array is preserved and is not the same as absent — it is how
+     * a user says "I removed the limit I had set".
+     */
+    static Document rateLimit(RateLimitPolicy policy) {
+        if (policy == null) {
+            return null;
+        }
+        List<Document> rules = new ArrayList<>(policy.rules().size());
+        for (RateLimitRule rule : policy.rules()) {
+            rules.add(new Document("permits", rule.permits())
+                    .append("windowSeconds", rule.windowSeconds()));
+        }
+        return new Document("rules", rules);
+    }
+
+    static RateLimitPolicy rateLimitPolicy(Object value) {
+        if (!(value instanceof Document doc)) {
+            return null;
+        }
+        Object raw = doc.get("rules");
+        if (!(raw instanceof List<?> list)) {
+            return RateLimitPolicy.UNLIMITED;
+        }
+        List<RateLimitRule> rules = new ArrayList<>(list.size());
+        for (Object entry : list) {
+            if (entry instanceof Document rule) {
+                Object permits = rule.get("permits");
+                Object window = rule.get("windowSeconds");
+                if (permits instanceof Number p && window instanceof Number w) {
+                    rules.add(new RateLimitRule(p.intValue(), w.longValue()));
+                }
+            }
+        }
+        return new RateLimitPolicy(rules);
     }
 
     /** Read a nested sub-document, or null if absent. */

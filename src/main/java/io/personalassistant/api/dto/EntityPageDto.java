@@ -35,7 +35,11 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
      * @param error          last indexing error, or null
      * @param retryCount     indexing retry attempts so far
      * @param needsReindex   whether the entity is queued for re-indexing
-     * @param updatedAt      last-modified timestamp — the listing sort key
+     * @param createdAt      when the entity was first ingested — the console's "added" date. Immutable,
+     *                       unlike {@code updatedAt}
+     * @param updatedAt      last write to the row — the listing sort key, and indexing bookkeeping
+     *                       rather than a content date, so the console keeps it behind its technical
+     *                       toggle
      */
     public record Item(
             String id,
@@ -51,6 +55,7 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
             String error,
             int retryCount,
             boolean needsReindex,
+            Instant createdAt,
             Instant updatedAt) {}
 
     public static EntityPageDto from(KnowledgeService.EntityPage page) {
@@ -74,6 +79,7 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
                 index == null ? null : index.error(),
                 e.retryCount(),
                 e.needsReindex(),
+                e.createdAt(),
                 e.updatedAt());
     }
 }

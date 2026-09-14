@@ -59,10 +59,11 @@ Two things worth knowing about how it presents the system:
 ./gradlew frontendBuild   # build the console into META-INF/resources (runs as part of `build`)
 ```
 
-> **Embeddings.** The default provider (`app.embedding.provider=onnx-bge`) runs a local ONNX model
-> and needs `app.embedding.onnx.model-path` pointed at an exported model directory — it ships empty,
-> so embedding throws until you set it. For local dev without the model, set
-> `app.embedding.provider=local-hashing`. See [`docs/providers.md`](docs/providers.md).
+> **Embeddings.** The default provider (`app.embedding.provider=openai-embed`) is hosted and reads
+> `GEMINI_API_KEY`. The local alternative `onnx-bge` needs `app.embedding.onnx.model-path` pointed at
+> an exported model directory — it ships empty, so selecting it throws until you set it. For local
+> dev with neither, set `app.embedding.provider=local-hashing`. See
+> [`docs/providers.md`](docs/providers.md).
 >
 > **Optional env vars.** `GROQ_API_KEY` (grounded answers), `GEMINI_API_KEY` (hosted embeddings),
 > `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (Gmail/Drive token refresh). All genuinely
@@ -178,6 +179,7 @@ hits as `[n]`, 1-based into `hits`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/index/knowledge/{id}/sync` | Trigger a forward sync; returns `{ knowledgeId, cursorsArmed }` |
+| POST | `/api/index/knowledge/{id}/retry-failed` | Revive dead-lettered cursors and entities with a fresh retry budget; returns `{ knowledgeId, cursorsRetried, entitiesRetried }` |
 | POST | `/api/index/entities/{id}/reindex` | Re-index one entity (no re-fetch) |
 | DELETE | `/api/index/entities/{id}` | Remove an entity (its chunks are deleted) |
 

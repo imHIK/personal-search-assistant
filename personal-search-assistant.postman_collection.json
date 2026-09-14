@@ -9,6 +9,7 @@
     { "key": "knowledgeId", "value": "kn_123" },
     { "key": "entityId", "value": "ent_123" },
     { "key": "entityStatus", "value": "INDEXED" },
+    { "key": "digestId", "value": "dig_123" },
     { "key": "connectionId", "value": "con_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
@@ -22,10 +23,23 @@
     { "key": "embeddingApiKey", "value": "" },
     { "key": "embeddingDimension", "value": "768" },
     { "key": "llmBaseUrl", "value": "https://api.groq.com/openai/v1" },
-    { "key": "llmModel", "value": "llama-3.3-70b-versatile" },
+    { "key": "llmModel", "value": "openai/gpt-oss-120b" },
     { "key": "llmApiKey", "value": "" },
+    { "key": "greenhouseBoard", "value": "groww" },
+    { "key": "greenhouseJobId", "value": "" },
+    { "key": "leverSite", "value": "paytm" },
+    { "key": "ashbyBoard", "value": "sarvam" },
+    { "key": "smartRecruitersCompany", "value": "Swiggy" },
+    { "key": "smartRecruitersPostingId", "value": "" },
+    { "key": "workdayTenant", "value": "adobe" },
+    { "key": "workdaySite", "value": "external_experienced" },
+    { "key": "workdayWd", "value": "wd5" },
+    { "key": "adzunaAppId", "value": "" },
+    { "key": "adzunaAppKey", "value": "" },
     { "key": "opensearchUrl", "value": "http://localhost:9200" },
-    { "key": "chunksIndex", "value": "chunks" }
+    { "key": "chunksIndex", "value": "chunks" },
+    { "key": "channelId", "value": "" },
+    { "key": "deliveryId", "value": "" }
   ],
   "item": [
     {
@@ -86,7 +100,7 @@
               "path": ["api", "knowledge", ":id", "cursors"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
+            "description": "This knowledge's ingestion cursors — one per (iterableId, direction), ordered for stable rendering. Each carries `iterableName`, the display name discover() gave that sub-stream (null on cursors created before names were stored — the next reconcile fills it in). The real sync-progress view: a BACKWARD cursor at EXHAUSTED means the backfill is complete, a FORWARD cursor at IDLE is waiting for its next scheduled run, SUSPENDED means the knowledge is paused, and RETIRED means the iterable disappeared at the source (its data is kept). The connector-internal `attributes` and the worker `lease` are deliberately not exposed. 404 on an unknown id."
           }
         },
         {
@@ -96,7 +110,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"chunkingStrategy\": \"recursive\",\n  \"chunkingMaxSize\": 1200,\n  \"chunkingOverlap\": 150,\n  \"chunkingSeparators\": [\"\\n\\n\", \"\\n\", \" \", \"\"]\n}",
+              "raw": "{\n  \"name\": \"My Documents\",\n  \"type\": \"LOCAL_FS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"chunkingStrategy\": \"recursive\",\n  \"chunkingMaxSize\": 1200,\n  \"chunkingOverlap\": 150,\n  \"chunkingSeparators\": [\"\\n\\n\", \"\\n\", \" \", \"\"],\n  \"retentionPeriod\": null\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -104,7 +118,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day) then the global default; set one to override (cron wins if both are set).\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time."
+            "description": "type is one of LOCAL_FS, GMAIL, SLACK, GOOGLE_DRIVE, NOTION, JOB_BOARDS.\n\nconnectionId names the Connection to authenticate through; null uses the type's default connection (ignored by no-auth connectors like LOCAL_FS and the ATS job boards). auth is an inline credentials fallback, normally omitted when a connection is used.\n\ncron, interval, scheduleEnabled and backfillEnabled are optional. Leave both cron and interval null to inherit the connector default (LOCAL_FS = 1 day, JOB_BOARDS = 3 hours) then the global default; set one to override (cron wins if both are set). cron is evaluated in UTC and may be 5-field (\"0 9,18 * * *\") or Quartz 6-field (\"0 0 9,18 * * ?\"); an unparseable cron is a 400 and nothing is created.\n\nchunkingStrategy is one of recursive, character, fixed-size, token. chunkingMaxSize is characters (or tokens for the token strategy), chunkingOverlap is the overlap in the same unit, and chunkingSeparators is the ordered separator list for recursive/character. Any chunking field left null/empty inherits the global default at index time.\n\nretentionPeriod ages entities out, measured from createdAt (e.g. \"14d\"). null inherits: the connector default (JOB_BOARDS = 14 days), then the global app.retention.default-period, which ships BLANK. Unset at every tier means NEVER EXPIRE — that is what keeps a document corpus from deleting itself, so only feed-like sources age out."
           }
         },
         {
@@ -114,7 +128,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My Documents (renamed)\",\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": \"30m\",\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"webhookEnabled\": false,\n  \"webhookSecret\": null,\n  \"chunkingStrategy\": \"token\",\n  \"chunkingMaxSize\": 512,\n  \"chunkingOverlap\": 64,\n  \"chunkingSeparators\": null\n}",
+              "raw": "{\n  \"name\": \"My Documents (renamed)\",\n  \"inputs\": { \"rootPath\": \"/home/me/Documents\" },\n  \"cron\": null,\n  \"interval\": \"30m\",\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": true,\n  \"webhookEnabled\": false,\n  \"webhookSecret\": null,\n  \"chunkingStrategy\": \"token\",\n  \"chunkingMaxSize\": 512,\n  \"chunkingOverlap\": 64,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": null\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -123,7 +137,43 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint."
+            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint.\n\nretentionPeriod is a config-class edit: it changes only what a later retention sweep removes, never what is ingested. Like cron/interval it cannot be cleared back to inherit here."
+          }
+        },
+        {
+          "name": "Look up company job boards",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companies\": [\n    \"paytm\",\n    \"databricks\",\n    \"Swiggy\",\n    \"sarvam\",\n    \"lever:cred\",\n    \"adobe/external_experienced/wd5\",\n    \"razorpay\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/job-boards/lookup",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connectors", "job-boards", "lookup"]
+            },
+            "description": "Which platform hosts each company, and how many postings its board holds — run this BEFORE the next request to build a companies list that is known to resolve.\n\nReach here is purely a function of how many companies you name, so this is the endpoint you spend time in: paste a batch of candidates, keep the ones that come back found.\n\nEach name is probed against Greenhouse, Lever, Ashby and SmartRecruiters in that order, first hit wins. A platform prefix (lever:cred) pins it and skips the probe. Workday is never probed — it cannot be derived from a bare name — so pass its full tenant/site/wd triple and it is verified directly.\n\nfound: false is a normal answer, not an error: it means none of the supported platforms has a board for that name. razorpay is in the sample body as a known example of one.\n\npostings is the WHOLE board, before inputs.locations is applied. Expect the Indian share to be roughly a tenth of it — databricks came back 862 here and yields 92 after an India city filter.\n\nThese are live, sequential calls to someone else's APIs. Three names took about 30 seconds; the request is capped at 50 names (400 above that, and 400 on an empty list). Nothing is written — safe to re-run."
+          }
+        },
+        {
+          "name": "Create knowledge - company job boards",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"India job boards\",\n  \"type\": \"JOB_BOARDS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": {\n    \"companies\": [\n      \"paytm\",\n      \"meesho\",\n      \"databricks\",\n      \"sarvam\",\n      \"lever:cred\"\n    ],\n    \"locations\": [\n      \"India\",\n      \"Bengaluru\",\n      \"Bangalore\",\n      \"Hyderabad\",\n      \"Pune\",\n      \"Mumbai\",\n      \"Gurugram\",\n      \"Noida\",\n      \"Chennai\",\n      \"Delhi\"\n    ]\n  },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"chunkingStrategy\": null,\n  \"chunkingMaxSize\": null,\n  \"chunkingOverlap\": null,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": \"14d\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "knowledge"]
+            },
+            "description": "ONE knowledge for every company job board. inputs.companies takes company handles as they appear in the careers URL; Greenhouse, Lever, Ashby and SmartRecruiters are all probed and the platform that hosts each company is resolved once at discovery and recorded on its iterable, so grab never re-probes.\n\nPrefix an entry with a platform to pin it (lever:cred) — useful for a company mid-migration with boards on two platforms, where probe order would otherwise decide silently.\n\ninputs.locations keeps only postings whose location matches one of the terms; omit it to keep every country. LIST THE CITIES, not just \"India\" — 27 of Stripe's 36 Indian roles are filed as plain \"Bengaluru\" with no country, so the country alone keeps 3 of 36. A posting with NO location always survives (unstated is not the same as irrelevant). This is a cost control more than a correctness one: Databricks is 857 postings for 92 Indian ones, and everything kept gets parsed, chunked and embedded.\n\nbackfillEnabled is false because this connector is FORWARD-ONLY: a job board has no history worth walking.\n\nretentionPeriod is what removes closed postings — boards send no tombstone, a role just stops appearing. Leave it null to inherit the connector default of 14 days.\n\nA company that resolves to no platform is skipped and logged; activation only fails if NONE of them resolve.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR."
           }
         },
         {
@@ -169,7 +219,7 @@
     },
     {
       "name": "Connections",
-      "description": "Reusable, per-account connections holding the credentials a knowledge authenticates through. Register several accounts of the same connector (e.g. two Gmail logins) and bind different knowledges to whichever they want; one connection per type is the default used when a knowledge names none.",
+      "description": "Reusable, per-account connections holding the credentials a knowledge authenticates through. Register several accounts of the same connector (e.g. two Gmail logins) and bind different knowledges to whichever they want; one connection per type is the default used when a knowledge names none. Accounts are normally connected through the OAuth flow (Start OAuth sign-in) rather than by pasting a refresh token into Create connection — see docs/oauth.md.",
       "item": [
         {
           "name": "List connections",
@@ -201,13 +251,79 @@
           }
         },
         {
+          "name": "Start OAuth sign-in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"GOOGLE_DRIVE\",\n  \"connectionId\": \"{{connectionId}}\",\n  \"name\": \"Personal Google\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/oauth/google/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections",
+                "oauth",
+                "google",
+                "start"
+              ]
+            },
+            "description": "Begins an OAuth consent and returns {\"authorizeUrl\"} — open that URL in a browser to approve access. This is how an account is normally connected; Create connection below is the by-hand fallback.\n\n`connectionId` re-credentials an existing account (use this to fix one sitting in ERROR); remove it to create a new account instead, in which case `name` labels it. `type` must be a connector the provider authenticates — GMAIL or GOOGLE_DRIVE for google.\n\nThe `google` path segment is resolved from the registered OAuthProvider beans, so a future provider answers on the same route under its own id.\n\n400 when the provider or type is unknown, or when no OAuth client is configured (app.oauth.google.client-id / .client-secret, i.e. GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET).\n\nThe Origin header decides which console the callback returns to; Postman sends none, so it falls back to the first entry in app.oauth.allowed-origins. Useful for checking configuration — finish an actual sign-in from the console, not here. See docs/oauth.md."
+          }
+        },
+        {
+          "name": "OAuth callback (browser only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/oauth/google/callback?code=&state=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections",
+                "oauth",
+                "google",
+                "callback"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": ""
+                },
+                {
+                  "key": "state",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Where the provider redirects the browser after consent. Documented for completeness — not callable by hand: `state` is single-use and minted by Start OAuth sign-in, and `code` comes from the provider.\n\nAlways answers 303 to {console}/connections?oauth=ok&id=… or ?oauth=error&reason=…, never JSON — a person is looking at this mid-redirect, so both outcomes have to land on a page that can explain itself."
+          }
+        },
+        {
           "name": "Create connection",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Work Gmail\",\n  \"type\": \"GMAIL\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\",\n    \"accessToken\": \"{{googleAccessToken}}\"\n  },\n  \"config\": {\n    \"clientId\": \"{{googleClientId}}\",\n    \"clientSecret\": \"{{googleClientSecret}}\"\n  },\n  \"makeDefault\": true\n}",
+              "raw": "{\n  \"name\": \"Work Gmail\",\n  \"type\": \"GMAIL\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\",\n    \"accessToken\": \"{{googleAccessToken}}\"\n  },\n  \"config\": {\n    \"clientId\": \"{{googleClientId}}\",\n    \"clientSecret\": \"{{googleClientSecret}}\"\n  },\n  \"rateLimit\": {\n    \"rules\": [\n      { \"permits\": 10, \"windowSeconds\": 1 },\n      { \"permits\": 500, \"windowSeconds\": 60 }\n    ]\n  },\n  \"makeDefault\": true\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -215,7 +331,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "connections"]
             },
-            "description": "Verifies the credentials, then persists and assigns the type default. type is one of GMAIL, GOOGLE_DRIVE, SLACK, NOTION; a no-connection connector like LOCAL_FS (or bad creds) is a 400.\n\nauth is opaque per-connector credentials (e.g. refreshToken/accessToken); config is opaque connector-level settings (e.g. an OAuth client), or null. The first connection of a type becomes its default; makeDefault forces it."
+            "description": "Verifies the credentials, then persists and assigns the type default. type is one of GMAIL, GOOGLE_DRIVE, SLACK, NOTION; a no-connection connector like LOCAL_FS (or bad creds) is a 400.\n\nauth is opaque per-connector credentials (e.g. refreshToken/accessToken); config is opaque connector-level settings (e.g. an OAuth client), or null. The first connection of a type becomes its default; makeDefault forces it.\n\nrateLimit caps the outbound calls made with this account. A call must satisfy EVERY rule, and each rule is a token bucket whose capacity is permits — so 500/60s already allows a 500-request burst on an idle bucket, and there is no separate burst setting. Omit the field to inherit app.ratelimit.connector.<TYPE>.rules, which ships blank (unlimited)."
           }
         },
         {
@@ -225,7 +341,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Work Gmail (renamed)\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\"\n  },\n  \"config\": null\n}",
+              "raw": "{\n  \"name\": \"Work Gmail (renamed)\",\n  \"auth\": {\n    \"refreshToken\": \"{{googleRefreshToken}}\"\n  },\n  \"config\": null,\n  \"rateLimit\": {\n    \"rules\": [{ \"permits\": 2, \"windowSeconds\": 60 }]\n  }\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -234,7 +350,40 @@
               "path": ["api", "connections", ":id"],
               "variable": [{ "key": "id", "value": "{{connectionId}}" }]
             },
-            "description": "Partial edit with patch semantics: an absent (or null) field is left unchanged; type is immutable and not editable here. Changing auth triggers re-verification of the credentials (400 on failure). An unknown id is a 404."
+            "description": "Partial edit with patch semantics: an absent (or null) field is left unchanged; type is immutable and not editable here. Changing auth triggers re-verification of the credentials (400 on failure). An unknown id is a 404.\n\nBecause absent means unchanged, REMOVING a rate limit takes an explicit empty list — {\"rateLimit\": {\"rules\": []}} — see \"Clear connection rate limit\". Sending null leaves the existing limit in place."
+          }
+        },
+        {
+          "name": "Clear connection rate limit",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rateLimit\": {\n    \"rules\": []\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Removes this account's rate limit so the server-wide app.ratelimit.* default applies again.\n\nAn empty rules array is the ONLY way to say this: null means \"leave unchanged\" on every PATCH field, so it cannot also mean \"clear\"."
+          }
+        },
+        {
+          "name": "Test connection",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id/test",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "connections", ":id", "test"],
+              "variable": [{ "key": "id", "value": "{{connectionId}}" }]
+            },
+            "description": "Re-checks the STORED credentials against the connector and records the outcome on the connection.\n\nAlways 200 with the refreshed connection whether or not the check passed — read status (ACTIVE / ERROR) and lastError. A bad credential is a result to display, not a 4xx.\n\nCredentials are otherwise only verified at create and on an auth edit, so a token that expires later leaves the connection reading ACTIVE while every sync fails. ConnectionHealthScheduler runs this automatically every app.connections.health-interval (30m); IngestionJob then SKIPS knowledges whose connection is in ERROR rather than failing on every tick.\n\nA DISABLED connection stays DISABLED even if the check passes — that is an operator decision."
           }
         },
         {
@@ -285,8 +434,497 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10. Set answer true to include a generated answer, which cites hits as [n] (1-based into hits). Each hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage) and knowledgeId (which source the hit came from) alongside entityId, title, snippet, uri, score and metadata."
+            "description": "Only query is required — a blank or absent query is a 400, and an unknown mode is a 400 that names the valid ones. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10 and is clamped to app.search.max-top-k (100); it is multiplied by app.search.candidate-multiplier before becoming the OpenSearch size and knn k.\n\nSet answer true to include a generated answer, which cites hits as [n] (1-based into hits). The answer is grounded in each hit's FULL chunk text within app.agent.context-chars; a source that had to be cut is marked \"[…truncated]\" in the prompt, so the model says what it could not see instead of reporting the missing part as absent from the source.\n\nIf the LLM is unavailable this returns 200 with the hits intact and answerError set — it no longer 500s and discards the results.\n\nEach hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage), knowledgeId (which source the hit came from) and ordinal (position within the entity) alongside entityId, title, snippet, uri, score and metadata. snippet is a display excerpt only, app.search.snippet-chars long and taken from the matching region when highlighting found one; the full chunk text grounds the answer but is not put on the wire.\n\nOptional: maxChunksPerEntity caps how many chunks one entity may contribute (1 = one result per document), overriding app.search.max-chunks-per-entity for this request; collapseDuplicates groups near-identical hits and keeps one of each. Both default off. See the \"Search job postings\" example for range filters."
           }
+        },
+        {
+          "name": "Search job postings (metadata filters)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"backend engineer distributed systems\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.seniority\": \"SENIOR\",\n    \"metadata.postedAt\": { \"gte\": \"2026-08-18T00:00:00Z\" },\n    \"metadata.compMin\": { \"gte\": 150000 }\n  },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"]
+            },
+            "description": "Filters resolve the map key verbatim as an OpenSearch field path, so any normalised posting facet works without server changes: metadata.company, metadata.location, metadata.remote, metadata.seniority, metadata.board, metadata.dedupeKey, metadata.compMin/compMax, metadata.compCurrency, metadata.postedAt.\n\nCAUTION on comp: pair it with metadata.compCurrency or the filter is meaningless — compMin is a plain number, so 150000 reads as USD on one posting and INR on the next. And expect it to be absent: of 208 India-located postings sampled across these boards, 0 stated pay at all (US postings do, because several states require it). A comp filter excludes nearly every Indian role rather than narrowing it.\n\nThe VALUE decides the clause. A scalar is an exact term; a map carrying gte/gt/lte/lt is a range — which is the only way to say \"posted in the last week\" or \"pays at least X\". JSON types are preserved, so metadata.remote must be true and not \"true\": a string term against a boolean field matches nothing.\n\nmaxChunksPerEntity 1 returns one hit per posting instead of one per chunk of its description. collapseDuplicates groups the same role reached by different routes — identical text, then an equal metadata.dedupeKey, then high token overlap — and keeps the member with the highest metadata.sourceRank, so a direct board listing wins over an aggregator's. Both are off unless asked for.\n\nSet knowledgeIds to a job-board knowledge to search postings alone."
+          }
+        },
+        {
+          "name": "Search by a document (find things like this)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"metadata.remote\": true },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"]
+            },
+            "description": "Searches BY an already-ingested document instead of by typed text — \"find everything like this\". Set sourceEntityId to the entity id of, say, an indexed CV (find it via Knowledge > List knowledge entities).\n\nThe document is NOT used as the query. It is decomposed by the document-facets task into a few short queries written in the register of the corpus being searched, each is retrieved normally, and the rankings are fused — so a posting matching three facets outranks one that matches a single facet very well.\n\nquery stops being the search text here and becomes a statement of intent that steers the decomposition; it may be blank. Blank query AND no sourceEntityId is a 400.\n\nFacets are cached by the source document's checksum, so editing and re-indexing it derives them again with nothing to invalidate. If the LLM is unavailable this falls back to the document's opening text as a single query rather than failing. A document over app.search.document-query.max-chars is a 400; an unknown sourceEntityId is a 404."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Digests",
+      "item": [
+        {
+          "name": "List digests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests"]
+            },
+            "description": "Every saved search, newest first. nextRunAt null means \"due now\" — a freshly created digest runs on the next scheduler tick rather than one whole interval later."
+          }
+        },
+        {
+          "name": "Create digest",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/digests",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests"]
+            },
+            "description": "A digest needs EITHER query OR sourceEntityId; neither is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use. cron is UTC, 5-field or Quartz 6-field; an unparseable one is a 400.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
+          }
+        },
+        {
+          "name": "Get digest by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "One digest."
+          }
+        },
+        {
+          "name": "Pause / resume digest (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "The only editable field. A paused digest is never scheduled but can still be run by hand — that is the difference between pausing and deleting.\n\nFuller editing is delete-and-recreate."
+          }
+        },
+        {
+          "name": "Run digest now",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "run"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "Runs immediately without waiting for the schedule, and returns the run.\n\nA search or task failure comes back as a run carrying \"error\" rather than a 5xx — the run happened, it just failed. That is deliberate: a scheduled job that throws leaves no trace, and a digest broken for a week has to be visible in its history.\n\nA failed run records no items, so it cannot suppress anything on the next run."
+          }
+        },
+        {
+          "name": "List digest runs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/runs?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "runs"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "History, newest first. limit is capped at 100.\n\nRuns are also how newness is computed, which is why they are kept rather than overwritten."
+          }
+        },
+        {
+          "name": "Latest digest run",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id/runs/latest",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id", "runs", "latest"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "The most recent run. 404 if the digest has never run."
+          }
+        },
+        {
+          "name": "Delete digest",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digests/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "digests", ":id"],
+              "variable": [{ "key": "id", "value": "{{digestId}}" }]
+            },
+            "description": "Deletes the digest and its whole run history. 204."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Publishing",
+      "description": "Channels (where messages go) and the delivery outbox. See docs/publishing.md.",
+      "item": [
+        {
+          "name": "Channels",
+          "item": [
+            {
+              "name": "Connect sending account (Start OAuth sign-in)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"type\": \"GMAIL_SEND\",\n  \"name\": \"My Gmail (sending)\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/connections/oauth/google/start",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connections",
+                    "oauth",
+                    "google",
+                    "start"
+                  ]
+                },
+                "description": "Step 1 for email. Starts the Google consent for a GMAIL_SEND account — the gmail.send scope only, so it can send but never read mail. Open the returned authorizeUrl in a browser and approve; the callback stores the account and redirects to /connections. The consent screen must list gmail.send under Data access, and be published or the token dies after 7 days. See docs/publishing.md § Setting it up."
+              }
+            },
+            {
+              "name": "List channels",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels"
+                  ]
+                },
+                "description": "Every channel, newest first."
+              }
+            },
+            {
+              "name": "Create email channel",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels"
+                  ]
+                },
+                "description": "type is EMAIL (SLACK / WHATSAPP are declared but have no publisher yet — a 400).\n\nconnectionId is the GMAIL_SEND account to send from; null uses the default one (connect it with the request above). A connection of another type — e.g. the read-only GMAIL source account — is a 400.\n\ntarget is publisher-defined. EMAIL: to (one address or a list, required), cc (list, optional), subjectPrefix (optional). Replace you@example.com with your address. Sets the channelId collection variable.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"My inbox\",\n  \"type\": \"EMAIL\",\n  \"connectionId\": null,\n  \"target\": {\n    \"to\": [\n      \"you@example.com\"\n    ],\n    \"subjectPrefix\": \"[assistant]\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code < 300) {",
+                      "  pm.collectionVariables.set('channelId', pm.response.json().id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Get channel",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": ""
+              }
+            },
+            {
+              "name": "Edit channel (PATCH)",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": "Absent / null fields are unchanged. {\"enabled\": false} pauses: queued deliveries wait, they are not failed. A new target replaces the whole target and is re-validated. {\"connectionId\": \"\"} switches back to the default sending account.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"enabled\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "Test channel",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}/test",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}",
+                    "test"
+                  ]
+                },
+                "description": "Sends a sample message synchronously through the channel's account, bypassing the queue. Always 200 — read status and lastError (e.g. no GMAIL_SEND account connected, or the account never granted gmail.send). A success brings an ERROR channel back to ACTIVE, releasing everything queued for it."
+              }
+            },
+            {
+              "name": "Publish message",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}/publish",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}",
+                    "publish"
+                  ]
+                },
+                "description": "202 — the delivery is queued, not sent. The publishing worker picks it up within app.publishing.poll-interval (30s). Sets the deliveryId collection variable; poll Get delivery.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Hello from Personal Search Assistant\",\n  \"intro\": \"A manual message through the outbox.\",\n  \"items\": [\n    {\n      \"title\": \"Quarkus mailer guide\",\n      \"uri\": \"https://quarkus.io/guides/mailer\",\n      \"text\": \"How the SMTP transport is configured.\",\n      \"fields\": {\n        \"why\": \"setup reference\"\n      }\n    }\n  ],\n  \"link\": null\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code < 300) {",
+                      "  pm.collectionVariables.set('deliveryId', pm.response.json().id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete channel",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/channels/{{channelId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "channels",
+                    "{{channelId}}"
+                  ]
+                },
+                "description": "Deletes the channel and every delivery queued or sent to it. 409 while a digest still sends to it — remove it from the digest's channelIds first."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deliveries",
+          "item": [
+            {
+              "name": "List deliveries",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries?channelId={{channelId}}&refId=&status=&limit=50",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries"
+                  ],
+                  "query": [
+                    {
+                      "key": "channelId",
+                      "value": "{{channelId}}"
+                    },
+                    {
+                      "key": "refId",
+                      "value": "",
+                      "description": "a digest run id — what that run was sent to"
+                    },
+                    {
+                      "key": "status",
+                      "value": ""
+                    },
+                    {
+                      "key": "limit",
+                      "value": "50"
+                    }
+                  ]
+                },
+                "description": "Newest first. status: PENDING | SENT | FAILED (blank = all). refId: a digest run id, to see what that run was sent to. limit capped at 100."
+              }
+            },
+            {
+              "name": "Get delivery",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries/{{deliveryId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries",
+                    "{{deliveryId}}"
+                  ]
+                },
+                "description": "status PENDING → SENT once the worker has sent it. attempts / lastError / nextAttemptAt show a retry in progress."
+              }
+            },
+            {
+              "name": "Retry failed delivery",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/deliveries/{{deliveryId}}/retry",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "deliveries",
+                    "{{deliveryId}}",
+                    "retry"
+                  ]
+                },
+                "description": "FAILED → PENDING with attempts reset. 409 for any other status."
+              }
+            }
+          ]
         }
       ]
     },
@@ -305,6 +943,34 @@
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
             "description": "Returns { knowledgeId, cursorsArmed }."
+          }
+        },
+        {
+          "name": "Retry failed work",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/knowledge/:id/retry-failed",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "knowledge", ":id", "retry-failed"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Revives a knowledge's dead-lettered work: FAILED cursors -> AVAILABLE and FAILED entities -> INGESTED, both with a fresh retry budget. Cursor position is kept, so a revived cursor resumes where it stopped rather than re-walking the source.\n\nIt also releases any cursor still held by a rate limit (RATE_LIMITED -> AVAILABLE, hold cleared): that instant was computed against a quota you have typically just raised, so this is the only way to shorten a hold.\n\nDistinct from *Trigger forward sync*: that one only re-arms FORWARD cursors sitting IDLE, so it can never revive a dead-lettered backward (backfill) cursor. Nothing else moves a cursor or entity out of FAILED.\n\nReturns { knowledgeId, cursorsRetried, entitiesRetried }."
+          }
+        },
+        {
+          "name": "Reindex a whole knowledge",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/index/knowledge/:id/reindex",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "index", "knowledge", ":id", "reindex"],
+              "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
+            },
+            "description": "Queues every one of a knowledge's entities for re-indexing from STORED content — no re-fetch from the source. Returns {\"queued\": n}.\n\nThis is what makes changing the embedding model survivable. Same vector width does NOT mean compatible vectors: switching app.embedding.provider or app.embedding.openai.model leaves the corpus half old-model and half new, and semantic search degrades with no error anywhere. Run this for every knowledge after such a change.\n\nEntities a worker currently holds a lease on are skipped rather than raced; call again once the lease lapses to pick them up."
           }
         },
         {
@@ -607,6 +1273,169 @@
       ]
     },
     {
+      "name": "Job Board APIs (raw)",
+      "description": "The public job-board APIs behind the ATS connectors, called directly so you can inspect the raw JSON the connectors parse and map — same endpoints, same params.\n\nAll of these are PUBLIC AND KEYLESS except Adzuna: no Authorization header, no Connection required, which is why the ATS connectors override requiresConnection() to false.\n\nGreenhouse, Lever and Ashby return a whole board in one response (snapshot-shaped, no pagination). SmartRecruiters and Workday are paginated and are NOT yet wired into connectors — they are here so you can evaluate them before the adapters are built.\n\nCounts quoted in each request were measured on 2026-09-02 and will drift.",
+      "item": [
+        {
+          "name": "Greenhouse - list board jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://boards-api.greenhouse.io/v1/boards/{{greenhouseBoard}}/jobs?content=true",
+              "protocol": "https",
+              "host": ["boards-api", "greenhouse", "io"],
+              "path": ["v1", "boards", "{{greenhouseBoard}}", "jobs"],
+              "query": [
+                { "key": "content", "value": "true" }
+              ]
+            },
+            "description": "Exactly what GreenhouseConnector.fetchBoard calls. content=true is what makes ONE call sufficient — without it you get job stubs and each description needs a second request.\n\nThe whole board comes back in a single response: no pagination, no updated_after. That is why these connectors are snapshot-shaped and implement SourceConnector directly rather than extending a paging base.\n\nFields the normaliser reads: id, title, updated_at (the change signal), first_published, absolute_url, company_name, location.name, content (HTML-escaped).\n\nTry boards: groww, databricks, stripe, gitlab, inmobi, rubrik, mongodb."
+          }
+        },
+        {
+          "name": "Greenhouse - single job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://boards-api.greenhouse.io/v1/boards/{{greenhouseBoard}}/jobs/{{greenhouseJobId}}",
+              "protocol": "https",
+              "host": ["boards-api", "greenhouse", "io"],
+              "path": ["v1", "boards", "{{greenhouseBoard}}", "jobs", "{{greenhouseJobId}}"]
+            },
+            "description": "One posting, for inspecting the full content HTML the parser and chunker receive. Take an id from the list call above. Not used by the connector — it is here for debugging a single posting's parse."
+          }
+        },
+        {
+          "name": "Lever - list postings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.lever.co/v0/postings/{{leverSite}}?mode=json",
+              "protocol": "https",
+              "host": ["api", "lever", "co"],
+              "path": ["v0", "postings", "{{leverSite}}"],
+              "query": [
+                { "key": "mode", "value": "json" }
+              ]
+            },
+            "description": "What LeverConnector.fetchBoard calls. mode=json returns structured postings rather than rendered HTML.\n\nNOTE THE MISSING FIELD: Lever publishes createdAt but NO updated timestamp. A checksum built from createdAt alone would never move, so an edited posting would be skipped forever by change detection — the connector hashes the body as well. That is the one real difference between the three ATS connectors.\n\nFields read: id, text (title), createdAt (epoch millis), hostedUrl, categories.location/team/commitment, description (HTML), descriptionPlain.\n\nTry sites: paytm (174 India roles), meesho, cred, zeta, mindtickle, nium. A site that does not exist returns 404 with {\"ok\":false}; an empty board returns []."
+          }
+        },
+        {
+          "name": "Ashby - list jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.ashbyhq.com/posting-api/job-board/{{ashbyBoard}}?includeCompensation=true",
+              "protocol": "https",
+              "host": ["api", "ashbyhq", "com"],
+              "path": ["posting-api", "job-board", "{{ashbyBoard}}"],
+              "query": [
+                { "key": "includeCompensation", "value": "true" }
+              ]
+            },
+            "description": "What AshbyConnector.fetchBoard calls. The richest of the three: includeCompensation=true returns STRUCTURED pay bands (compensation.summaryComponents with minValue/maxValue/currencyCode), which the connector prefers over scraping prose. isRemote is stated as a real boolean rather than inferred, and closedAt — when present — becomes Entity.expiresAt and beats the knowledge-level retention window.\n\nTry boards: sarvam (62/62 India), tekion, snowflake, bureau, atlan, confluent."
+          }
+        },
+        {
+          "name": "SmartRecruiters - list postings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.smartrecruiters.com/v1/companies/{{smartRecruitersCompany}}/postings?limit=100&offset=0",
+              "protocol": "https",
+              "host": ["api", "smartrecruiters", "com"],
+              "path": ["v1", "companies", "{{smartRecruitersCompany}}", "postings"],
+              "query": [
+                { "key": "limit", "value": "100" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "PUBLIC AND KEYLESS — no auth header at all. Not yet wired into a connector; this is the platform proposed as the next adapter.\n\nPaginated on limit/offset with totalFound, unlike the three boards above which return everything at once.\n\nMeasured: Swiggy 71 postings of which 70 are in India; Freshworks 162 of which 31. Both companies are absent from Greenhouse, Lever and Ashby — this platform is how they become reachable.\n\nAn unknown company returns 200 with totalFound: 0 and an empty content array, NOT a 404 — so a resolver must check totalFound, not the status code."
+          }
+        },
+        {
+          "name": "SmartRecruiters - single posting",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.smartrecruiters.com/v1/companies/{{smartRecruitersCompany}}/postings/{{smartRecruitersPostingId}}",
+              "protocol": "https",
+              "host": ["api", "smartrecruiters", "com"],
+              "path": ["v1", "companies", "{{smartRecruitersCompany}}", "postings", "{{smartRecruitersPostingId}}"]
+            },
+            "description": "Full detail for one posting, including the job description sections the list call omits. Take an id from the list call above.\n\nRelevant to the adapter design: if the list response lacks the description, ingestion needs one call per posting rather than one per company — check this before assuming the snapshot shape applies."
+          }
+        },
+        {
+          "name": "Workday - search jobs (POST)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appliedFacets\": {},\n  \"limit\": 20,\n  \"offset\": 0,\n  \"searchText\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "https://{{workdayTenant}}.{{workdayWd}}.myworkdayjobs.com/wday/cxs/{{workdayTenant}}/{{workdaySite}}/jobs",
+              "protocol": "https",
+              "host": ["{{workdayTenant}}", "{{workdayWd}}", "myworkdayjobs", "com"],
+              "path": ["wday", "cxs", "{{workdayTenant}}", "{{workdaySite}}", "jobs"]
+            },
+            "description": "PUBLIC AND KEYLESS, but a POST with a JSON body — the existing AtsHttp helper only does GET, so this platform needs one new method.\n\nGenuinely paginated: limit caps at 20 while tenants hold 200-300+, so a grab must loop on offset until it drains. Response carries total and jobPostings[] with title, locationsText and externalPath.\n\nTHE URL IS THE HARD PART. It needs a tenant + site + wd-number triple, and none of the three is guessable — 13 of 22 blind guesses failed even for companies that certainly use Workday (Accenture, Walmart, IBM, Visa, Qualcomm). Read the real URL off the company's careers page.\n\nVerified triples: adobe/external_experienced/wd5 (133 India roles), nvidia/nvidiaexternalcareersite/wd5, salesforce/External_Career_Site/wd12, micron/External/wd1, mastercard/CorporateCareers/wd1, target/targetcareers/wd5, hpe/Jobsathpe/wd5.\n\nA wrong site or wd number returns HTML or a 422, not a clean 404."
+          }
+        },
+        {
+          "name": "Workday - India country facet",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appliedFacets\": {\n    \"locationCountry\": [\"c4f78be1a8f14da0ab49ce1162348a5e\"]\n  },\n  \"limit\": 20,\n  \"offset\": 0,\n  \"searchText\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "https://{{workdayTenant}}.{{workdayWd}}.myworkdayjobs.com/wday/cxs/{{workdayTenant}}/{{workdaySite}}/jobs",
+              "protocol": "https",
+              "host": ["{{workdayTenant}}", "{{workdayWd}}", "myworkdayjobs", "com"],
+              "path": ["wday", "cxs", "{{workdayTenant}}", "{{workdaySite}}", "jobs"]
+            },
+            "description": "Server-side filtering to India, which would avoid ingesting the ~90% of a tenant's postings that are other countries.\n\nIT IS NOT RELIABLE. That GUID is India on Adobe (returns 133 roles) but returns total: null on NVIDIA and Salesforce — the facet ids are not dependably cross-tenant. That is why the plan filters location client-side instead; this request is here so you can check whether a given tenant happens to support it.\n\nTo find a tenant's real facet ids, POST with an empty appliedFacets and read the facets[] block in the response."
+          }
+        },
+        {
+          "name": "Adzuna - India search",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.adzuna.com/v1/api/jobs/in/search/1?app_id={{adzunaAppId}}&app_key={{adzunaAppKey}}&results_per_page=20&what=backend%20engineer&where=Bengaluru&sort_by=date",
+              "protocol": "https",
+              "host": ["api", "adzuna", "com"],
+              "path": ["v1", "api", "jobs", "in", "search", "1"],
+              "query": [
+                { "key": "app_id", "value": "{{adzunaAppId}}" },
+                { "key": "app_key", "value": "{{adzunaAppKey}}" },
+                { "key": "results_per_page", "value": "20" },
+                { "key": "what", "value": "backend engineer" },
+                { "key": "where", "value": "Bengaluru" },
+                { "key": "sort_by", "value": "date" }
+              ]
+            },
+            "description": "AGGREGATOR, not an ATS — indexes postings copied from many sources rather than serving one company's own board. Needs a free API key from developer.adzuna.com; set adzunaAppId and adzunaAppKey.\n\nThe 'in' path segment is the India endpoint and is confirmed live: with dummy NON-EMPTY credentials it returns a clean {\"exception\":\"AUTH_FAIL\"} rather than a 404.\n\nLeaving adzunaAppId/adzunaAppKey blank gives an HTML 400 instead, which looks like a broken request — put any placeholder value in both to see the real auth error.\n\nNot implemented. It is tracked as the breadth option once the ATS platforms are in, and would be the first connector in the repo needing outbound rate limiting — nothing throttles HTTP today (PermitService caps lease concurrency, not request rate).\n\nPaginates by page number in the PATH (.../search/1, /2, /3), which is why it would extend TokenWindowGrabber with the page number as the token rather than the snapshot base."
+          }
+        }
+      ]
+    },
+    {
       "name": "Embedding Provider (raw)",
       "description": "The hosted embedding API the indexing stage calls directly, over the OpenAI-compatible schema (OpenAiCompatibleEmbeddingProvider, app.embedding.provider=openai-embed). Defaults match application.properties: Gemini's OpenAI-compat endpoint with text-embedding-004. Set embeddingApiKey to your GEMINI_API_KEY. Point embeddingBaseUrl at http://localhost:11434/v1 to test an Ollama model instead — the app switches the same way, config only.",
       "item": [
@@ -697,7 +1526,7 @@
     },
     {
       "name": "OpenSearch (chunk index)",
-      "description": "Direct calls to the OpenSearch instance from docker-compose (:9200) that mirror what OpenSearchSearchIndex and OpenSearchIndexInitializer send. Not the app's API — this is for inspecting what the indexing stage actually wrote. Code only ever talks to the `chunks` alias (physical index chunks_v1).",
+      "description": "Direct calls to the OpenSearch instance from docker-compose (:9200) that mirror what OpenSearchSearchIndex and OpenSearchIndexInitializer send. Not the app's API — this is for inspecting what the indexing stage actually wrote. Code only ever talks to the `chunks` alias (physical index chunks_v2_768).",
       "item": [
         {
           "name": "Cluster health",
@@ -718,9 +1547,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{opensearchUrl}}/chunks_v1",
+              "raw": "{{opensearchUrl}}/chunks_v3_768",
               "host": ["{{opensearchUrl}}"],
-              "path": ["chunks_v1"]
+              "path": ["chunks_v3_768"]
             },
             "description": "The mapping OpenSearchIndexInitializer PUT at startup, including the `chunks` alias and the knn_vector `embedding` field. The `dimension` in that mapping is app.embedding.dimension frozen at index-creation time — check it here before switching embedding models (invariant 5)."
           }

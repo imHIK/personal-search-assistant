@@ -6,7 +6,7 @@ rebuilt at any time by replaying Mongo. Database: `personal_assistant`.
 Design goals: easy incremental sync, full reprocessing from source of truth, and clean
 support for many heterogeneous sources without schema churn.
 
-Five collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**.
+Eight collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**, **`tasks`**.
 Chunks are deliberately *not* a Mongo collection — see below. All indexes are created at startup by
 `MongoIndexInitializer` (`@Observes StartupEvent`); there is **no migration framework**, so a new
 query pattern means adding its index there.
@@ -30,7 +30,8 @@ One document per connected, configured source instance (a folder, a mailbox, a D
     "scheduleSettings": { "cron": null, "interval": "1h", "enabled": true },
     "webhookSettings":  { "enabled": false, "secret": null },
     "backfill":         { "enabled": true },
-    "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null }
+    "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null },
+    "retention":        { "period": null }             // null = never expire (see below)
   },
   "anchor": "2026-06-20T10:00:00Z",   // the forward/backward boundary — NEVER moves
   "nextSyncDueAt": "2026-06-20T11:00:00Z",
@@ -44,6 +45,11 @@ One document per connected, configured source instance (a folder, a mailbox, a D
 ```
 
 Indexes: `{ status: 1 }`, `{ "connectorDetails.type": 1 }`, `{ "connectorDetails.connectionId": 1 }`.
+
+> **`config.retention.period` is opt-in and defaults to null.** A null window at every tier —
+> knowledge, connector `defaultRetention()`, then the global `app.retention.default-period` — means
+> *never expire*, which is what a document corpus must do. Only feed-like sources (the ATS job
+> boards) ship a connector-level default. See [`knowledge-lifecycle.md`](./knowledge-lifecycle.md).
 
 > `inputs` and `connectorDetails.auth` are intentionally free-form sub-documents. Each
 > `SourceConnector` reads its own keys; the core never inspects them. This is the seam that lets new
@@ -78,6 +84,7 @@ One document per ingested item (a file, an email, a message).
   "checksum": "size:24576;mtime:1718877600000",     // the ONLY change signal
   "status": "INDEXED",                              // EntityStatus
   "needsReindex": false,
+  "needsRefetch": false,                            // stored content is a staged copy we distrust
   "index": {
     "chunkCount": 12,
     "embeddingModel": "bge-base-en-v1.5",
@@ -87,6 +94,7 @@ One document per ingested item (a file, an email, a message).
   "lease": { "owner": "worker-1", "expiresAt": "…" },   // indexing-stage claim
   "retry": { "count": 0, "nextAttemptAt": null },
   "lastSeenGeneration": 3,                          // vs knowledge.syncGeneration → staleness mark
+  "expiresAt": null,                                // source-declared end date, or null
   "createdAt": "…",
   "updatedAt": "…"
 }
@@ -97,6 +105,8 @@ Indexes:
 - `{ status: 1 }` and `{ knowledgeId: 1, status: 1 }` — find work to (re)process, with fairness.
 - `{ needsReindex: 1 }` — the explicit re-index queue.
 - `{ "retry.nextAttemptAt": 1 }` — backoff-gated re-claim.
+- `{ expiresAt: 1 }` — the retention sweeper's source-declared-expiry pass, which is a global scan.
+- `{ knowledgeId: 1, createdAt: 1 }` — its per-knowledge retention-window pass.
 - `{ knowledgeId: 1, updatedAt: -1, _id: 1 }` and `{ knowledgeId: 1, status: 1, updatedAt: -1, _id: 1 }`
   — the sorted listing behind `GET /api/knowledge/{id}/entities`, unfiltered and status-filtered.
   `_id` is the paging tiebreak so two entities touched in the same millisecond can't swap places
@@ -107,13 +117,38 @@ Indexes:
 > **Listing reads a projection.** `EntityRepository.findByKnowledge` returns `EntitySummary`, not
 > `Entity` — `raw` and `content.text` are the bulk of the document and a table view needs neither.
 > The sort key is `updatedAt`, and `stampLastSeen` deliberately does *not* bump it, so a membership
-> re-walk doesn't reshuffle the browser. Offset paging can still drift a page boundary if the
+> re-walk doesn't reshuffle the browser. `updatedAt` is the row's last write from *either* stage and
+> most of its movement is the indexer's own bookkeeping — a claim, a retry, a deferral — so it is a
+> sort key, not a content date. The projection carries `createdAt` alongside it for that: it is
+> `setOnInsert` only, so it is the only honest answer to "when did this arrive", and it is what the
+> console shows as an item's *added* time. Offset paging can still drift a page boundary if the
 > indexing job touches entities mid-scan; a refresh re-reads, which is fine for a console.
+
+> **`expiresAt` is ingestion-owned and usually null.** It is written by `upsert` only when the source
+> states a real end date (Ashby's `closedAt`; Greenhouse and Lever publish none), and it beats the
+> knowledge-level retention window when present. Ageing out is measured from **`createdAt`**, never
+> `updatedAt`: an item that has sat unchanged is exactly the case retention exists for, so a
+> change-based clock would never fire on it.
+>
+> There is deliberately **no Mongo TTL index** on this collection. `expireAfterSeconds` would drop the
+> document without routing through `deleteByEntity`, permanently orphaning its chunks in OpenSearch,
+> and would bypass lease fencing. `RetentionSweeper` tombstones instead, and the ordinary deletion
+> path removes the chunks.
 
 > **`checksum` is the only change signal.** A connector must make it change whenever the item
 > changes (`LOCAL_FS`: `size:<n>;mtime:<millis>`; Drive: `version`/`md5Checksum`; Gmail:
-> `gmail:<id>;hist:<historyId>`). An unchanged checksum on an `INDEXED` entity is skipped entirely —
-> no parse, no embed, no OpenSearch write.
+> `gmail:<id>;hist:<historyId>`). An unchanged checksum is skipped entirely — no parse, no embed, no
+> OpenSearch write — unless the entity is `FAILED` or `DELETED`, the two statuses where a re-walk is a
+> deliberate way back in, or `needsRefetch` is set.
+>
+> `needsRefetch` is the only one of those three that is not about the source. It says the *stored*
+> content is a staged copy we no longer trust, so "unchanged at the source" is exactly the case it
+> has to override; `upsert` clears it in the same write that stores the fresh bytes.
+>
+> The skip covers `INGESTED` and `INDEXING`, not just `INDEXED`, because `upsert` owns the indexing
+> queue reset: it zeroes `retry` and clears `retry.nextAttemptAt`. Re-upserting an entity that is merely
+> still queued would therefore throw away a rate-limit deferral's reopening instant on every poll, make
+> the entity immediately claimable, and have it parsed and chunked again for nothing.
 
 ---
 
@@ -126,18 +161,35 @@ sub-stream. The id is *derived* from that triple, so discovery and re-arm are id
   "_id": "cur_kn_8f3a...:folder:/home/me/Documents:FORWARD",
   "knowledgeId": "kn_8f3a...",
   "iterableId": "folder:/home/me/Documents",
+  "iterableName": "Documents",          // discover()'s display name — what the console shows
   "attributes": { },                    // connector-supplied iterable metadata
   "direction": "FORWARD",               // CursorDirection — FORWARD | BACKWARD
   "position": { "lastModifiedMillis": 1718877600000, "path": "…" },  // free-form, connector-owned
   "status": "AVAILABLE",                // CursorStatus
   "lease":  { "owner": "worker-1", "expiresAt": "…" },
-  "retry":  { "count": 0, "lastError": null },
+  "retry":  { "count": 0, "lastError": null, "nextAttemptAt": null },
   "stats":  { "lastRunAt": "…", "fetched": 1240 },
   "scope":  { "connectorType": "LOCAL_FS" }
 }
 ```
 
-Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1, status: 1 }`.
+Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1, status: 1 }`,
+`{ retry.nextAttemptAt: 1 }`.
+
+> **Rate-limit holds.** `retry.nextAttemptAt` is set only alongside `status: "RATE_LIMITED"`: it is
+> when the limiter says the source's quota reopens, and the claim filter skips the cursor until then.
+> Nothing writes the status back — the instant simply stops excluding the row, so the timestamp is
+> the single source of truth. Note the deliberate difference from `entities`, where a null
+> `retry.nextAttemptAt` means "no backoff, claim it": on a `RATE_LIMITED` cursor a null matches
+> nothing, so every reset (`release`, `retryFailedByKnowledge`, `revive`, `resetToStart`) clears the
+> whole `retry` block rather than leaving a stale instant behind.
+
+> **`iterableName` is cosmetic and refreshed, not fenced.** It is snapshotted from
+> `SourceIterable.displayName()` when the cursor is created and re-written by the reconcile pass
+> (`rename`, an unfenced single-field update on any status) whenever `discover` reports a different
+> name. That is what backfills cursors written before the field existed and what follows a renamed
+> Drive folder or Gmail label. It is null on a legacy cursor until the next reconcile, so the console
+> keeps its id-shortening fallback.
 
 > **Lease fencing.** `advancePosition` / `release` / `recordFailure` are compare-and-set on
 > `lease.owner` **and** not-expired. A worker whose lease expired gets `false` back and must stop
@@ -151,6 +203,10 @@ Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1,
 ---
 
 ## Collection: `connections`
+
+> `type` is a **connection type** string: a `SourceType` name (`GMAIL`, `GOOGLE_DRIVE`) for a connector's
+> account, or a type something else uses (`GMAIL_SEND`, the email channel's send-only account). Existing
+> documents are unchanged — the enum name was already what was stored. The default flag is per type.
 Reusable credentials for a `SourceType`, shared across knowledges. Kept separate from `knowledge`
 so re-authenticating one account doesn't mean editing every knowledge that uses it.
 
@@ -161,6 +217,11 @@ so re-authenticating one account doesn't mean editing every knowledge that uses 
   "type": "GMAIL",                      // SourceType
   "auth":   { "refreshToken": "…", "accessToken": "…", "expiresAt": "…" },
   "config": { },
+  // Outbound call ceilings for this account. Absent (or an empty rules array) means the
+  // app.ratelimit.* default applies. A call must satisfy every rule; each is a token bucket
+  // whose capacity is `permits`, so there is no separate burst field.
+  "rateLimit": { "rules": [ { "permits": 10, "windowSeconds": 1 },
+                            { "permits": 500, "windowSeconds": 60 } ] },
   "isDefault": true,                    // at most one default per type
   "status": "ACTIVE",                   // ConnectionStatus
   "lastError": null,
@@ -169,7 +230,8 @@ so re-authenticating one account doesn't mean editing every knowledge that uses 
 }
 ```
 
-Indexes: `{ type: 1 }`, `{ type: 1, isDefault: 1 }`.
+Indexes: `{ type: 1 }`, `{ type: 1, isDefault: 1 }`. `rateLimit` is deliberately unindexed — it is
+only ever read alongside the connection that carries it, never queried on.
 
 > Resolved by `ConnectionResolver`: a knowledge's explicit `connectorDetails.connectionId` wins,
 > otherwise the default for its `SourceType`. `DefaultGoogleAccessTokens` writes refreshed tokens
@@ -219,6 +281,83 @@ Indexes: `{ knowledgeId: 1 }`, `{ direction: 1 }`, `{ lastOutcome: 1 }`.
 
 ---
 
+## Collections: `digests` and `digestRuns`
+
+A saved search plus a schedule, and one document per execution. Documented in
+[`digests.md`](./digests.md); the schema-relevant points are:
+
+- `digests` is indexed on `(enabled, nextRunAt)` — the scheduler's due query. A **null `nextRunAt`
+  means "due now"**, so a freshly created digest runs on the next tick rather than one interval later.
+- `digestRuns` is indexed on `(digestId, ranAt desc)` and stores a **projection** of each hit — entity
+  id, chunk id, title, uri, score, snippet, and `annotations` — never the full chunk text, which the
+  entity already holds.
+- `items[].annotations` is an **open map**: what the digest's task said about that specific result,
+  keyed by whatever the task asked the model to record. The keys come from user-written tasks, so
+  typing them would mean a schema change per question anyone wants asked.
+- A run also carries `candidates`, `suppressed` and `outsideWindow` — what the search returned, how
+  many were dropped as already reported, and (only when the search returned nothing) what the same
+  search finds with the look-back window removed. Together they separate "nothing matched" from
+  "everything matched was already seen" and from "the window is empty but the corpus is not"; all
+  three are absent on runs written before they existed and read back as `items.size()`, `0` and `0`.
+- `digests.channelIds` lists the publishing channels each run is sent to (absent on older documents,
+  read as empty). Indexed, because deleting a channel is refused while a digest names it.
+- `digests.historyResetAt` bounds the newness read: runs before it are ignored when working out what
+  has already been reported, so the seen-set can be cleared without deleting the history that is also
+  the audit trail.
+- A run is also the newness record: an item is new when it is absent from every earlier run, keyed on
+  `items.entityId`. A chunk id changes when a document is re-chunked, so the entity is the only stable
+  key for "the user has seen this".
+- A **failed** run is still written, carrying `error` and no items. That is what makes a digest that has
+  been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
+  anything later.
+- History is unbounded — see [L8](./limitations.md).
+
+---
+
+## Collections: `channels` and `deliveries`
+
+Publishing destinations and the outbox that feeds them. Documented in [`publishing.md`](./publishing.md);
+the schema-relevant points are:
+
+- `channels.target` is an **opaque, publisher-defined** blob, like `connections.config`. For `EMAIL` it is
+  `{to, cc, subjectPrefix}`.
+- `channels.connectionId` is the account a channel sends through, or null for the default account of the
+  type its publisher uses. Indexed, because deleting a connection is refused while a channel names it.
+- Channel writes after creation are **field-level, split by owner**: a person edits `name` / `connectionId` /
+  `target` / `enabled`; sends and the test action write `status` / `lastError`. A whole-document save from either
+  side would clobber the other.
+- `channels` is indexed on `(enabled, status)`, the worker's "usable channels" read.
+- A delivery embeds its `message` as a **snapshot** (`title`, `intro`, `items[]{title, uri, text, fields}`,
+  `link`, and a Markdown `summary`), so a retry sends exactly what was queued.
+- `deliveries` indexes: `(status, channelId, nextAttemptAt)` for the claim; `(channelId, createdAt desc)`
+  and `createdAt desc` for history; `origin.refId` for a digest run's deliveries; and a **unique partial** index on `dedupeKey`, restricted to string
+  values so manual sends (null key) never collide. That index is what makes enqueueing idempotent.
+- `lease: {owner, expiresAt}` fences every post-claim write, exactly as on `entities` and `cursors`.
+  `attempts` is consecutive, reset by `markSent` and by a manual retry.
+- Deleting a channel cascades its deliveries. Delivery history is otherwise unbounded, like digest runs
+  ([L8](./limitations.md)).
+
+---
+
+## Collection: `tasks`
+
+User-written LLM tasks — an instruction a digest runs over its results. Documented in
+[`tasks.md`](./tasks.md); the schema-relevant points are:
+
+- **No index is declared.** Every access is by `_id` or a full list of what is a hand-written,
+  human-sized collection, and both are already served. This is the one collection
+  `MongoIndexInitializer` deliberately says nothing about.
+- Ids carry a `task_` prefix. That is load-bearing rather than cosmetic: it is what routes a lookup to
+  this collection instead of the bundled catalogue, and so what stops a user task shadowing a built-in
+  slug like `answer`.
+- Bundled tasks are **not** here. They live in `config/prompts.json`, are validated at boot, and are
+  read-only — a malformed one must stop the application, which a runtime row cannot be held to.
+- `mode` decides which of two disjoint field sets is meaningful: `SIMPLE` uses `instruction` /
+  `output` / `fields`, `RAW` uses `system` / `user`. The unused half is stored null rather than
+  dropped, so switching modes in the console does not lose what was typed.
+
+---
+
 ## Chunks — NOT a Mongo collection
 
 Chunks are **not stored in Mongo**. They are a derived artifact produced at indexing time
@@ -235,7 +374,13 @@ regenerated. The entity records only metadata *about* its chunks: `chunkCount`,
 - **Deletes**: when a connector reports an item gone, tombstone the entity, then delete
   its chunks from **OpenSearch** (chunks are not in Mongo).
 - **Reprocessing**: entities in `status = FAILED` / `INGESTED`, or with `needsReindex = true`, are
-  the work queue.
+  the indexing work queue; `needsRefetch = true` is the *ingestion* one.
+- **`needsRefetch`** says the stored `content.fileRef` is a staged copy that may no longer exist —
+  set by a knowledge re-index of a `FETCH_AND_REINDEX` connector, and by the indexer when it finds
+  the file gone. It is the only escape from the checksum skip, so the walk re-materializes the item
+  even though the source is unchanged, and `upsert` clears it in the same write. Ingestion-owned,
+  like `content` and `checksum` (field ownership, invariant 8). No index: the bulk flag is scoped to
+  one knowledge and is served by `{ knowledgeId: 1, status: 1 }`. See `limitations.md` L11.
 - **Idempotency**: chunk ids are derived (`entityId_ordinal`) so re-runs overwrite
   cleanly rather than duplicating. Indexing is a `deleteByEntity` + `indexChunks` replace.
 

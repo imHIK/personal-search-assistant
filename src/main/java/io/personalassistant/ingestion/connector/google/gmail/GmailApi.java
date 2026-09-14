@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.google.gmail;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import java.util.List;
 
 /**
@@ -9,8 +10,9 @@ import java.util.List;
  * mapping logic unit-testable against an in-memory fake (mirroring how {@code LocalFsConnectorTest}
  * runs against a real temp dir), and confines all transport concerns to {@link HttpGmailApi}.
  *
- * <p>Every method takes an already-resolved bearer {@code accessToken}; obtaining/refreshing it is
- * the job of {@link io.personalassistant.ingestion.connector.google.GoogleAccessTokens}.
+ * <p>Every method takes already-resolved {@link GoogleAuth} — the bearer token plus the account's rate
+ * limit; obtaining, refreshing and resolving both is the job of
+ * {@link io.personalassistant.ingestion.connector.google.GoogleAccessTokens}.
  */
 public interface GmailApi {
 
@@ -24,15 +26,15 @@ public interface GmailApi {
      * @param pageToken continuation token from a previous page, or null for the first page
      * @param maxResults soft page-size cap
      */
-    JsonNode listMessages(String accessToken, List<String> labelIds, String query,
+    JsonNode listMessages(GoogleAuth auth, List<String> labelIds, String query,
                           String pageToken, int maxResults);
 
     /** {@code users.messages.get} in {@code full} format: headers + payload parts + internalDate. */
-    JsonNode getMessage(String accessToken, String id);
+    JsonNode getMessage(GoogleAuth auth, String id);
 
     /** {@code users.labels.list}: all labels ({@code labels[].id}, {@code labels[].name}, type). */
-    JsonNode listLabels(String accessToken);
+    JsonNode listLabels(GoogleAuth auth);
 
     /** {@code users.getProfile}: used by {@code verify} to prove the credentials work. */
-    JsonNode getProfile(String accessToken);
+    JsonNode getProfile(GoogleAuth auth);
 }

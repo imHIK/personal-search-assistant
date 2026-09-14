@@ -3,7 +3,6 @@ import type {
   Connection,
   CreateConnectionBody,
   PatchConnectionBody,
-  SourceType,
 } from './types'
 
 /**
@@ -16,7 +15,7 @@ export function isDefaultConnection(connection: Connection): boolean {
 }
 
 export const connectionsApi = {
-  list: (type?: SourceType) => http<Connection[]>('/api/connections' + query({ type })),
+  list: (type?: string) => http<Connection[]>('/api/connections' + query({ type })),
 
   get: (id: string) => http<Connection>(`/api/connections/${encodeURIComponent(id)}`),
 
@@ -27,6 +26,13 @@ export const connectionsApi = {
   /** Changing `auth` triggers re-verification, so this can also 400. */
   patch: (id: string, body: PatchConnectionBody) =>
     http<Connection>(`/api/connections/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
+
+  /**
+   * Re-check the stored credentials. Always 200 with the refreshed connection — read `status` and
+   * `lastError` rather than catching. Bad credentials are a result to display, not a failure.
+   */
+  test: (id: string) =>
+    http<Connection>(`/api/connections/${encodeURIComponent(id)}/test`, { method: 'POST' }),
 
   makeDefault: (id: string) =>
     http<Connection>(`/api/connections/${encodeURIComponent(id)}/default`, { method: 'POST' }),

@@ -12,6 +12,7 @@ export type FieldKind =
   | 'number'
   | 'boolean'
   | 'list'
+  | 'picklist'
   | 'select'
   | 'json'
 
@@ -26,8 +27,19 @@ export interface FieldSpec {
   required?: boolean
   /** Hide unless the Technical details toggle is on — for internals a user shouldn't need. */
   technical?: boolean
-  /** `select` only. */
-  options?: { value: string; label: string }[]
+  /**
+   * `select` and `picklist`. `note` is muted text beside the label — the platform, or the country.
+   *
+   * `values` is for a picklist row that stands for several stored entries: a city with two accepted
+   * spellings ticks both, because the backend matches a location by substring and "bengaluru" does
+   * not contain "bangalore". Ticking adds the whole group, unticking removes it, and each entry is
+   * still an individually removable chip — so a half-present group reads as unticked, which is true.
+   */
+  options?: { value: string; label: string; note?: string; values?: string[] }[]
+  /** `picklist` only: label for the free-text row that takes values outside `options`. */
+  addOwnLabel?: string
+  /** `picklist` only: plural noun for the catalog toggle — "Choose from 13 <noun>". */
+  browseNoun?: string
   /** `number` only. */
   min?: number
   max?: number
@@ -52,6 +64,7 @@ export function schemaFor(fields: FieldSpec[]): z.ZodType<Record<string, unknown
         schema = z.boolean()
         break
       case 'list':
+      case 'picklist':
         schema = z.array(z.string())
         break
       case 'json':
@@ -83,6 +96,7 @@ export function emptyValue(field: FieldSpec): unknown {
     case 'boolean':
       return false
     case 'list':
+    case 'picklist':
       return []
     case 'json':
       return {}

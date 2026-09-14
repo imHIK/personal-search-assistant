@@ -13,7 +13,8 @@ import java.time.Duration;
  * says "this often". A tier with neither set is {@link #isPresent() not present}.
  *
  * @param interval fixed gap between re-arms, or {@code null} if a cron (or nothing) is used
- * @param cron     Quartz cron expression (6-field, e.g. {@code "0 0 2 * * ?"}), or {@code null}
+ * @param cron     cron expression evaluated in UTC — 5-field Unix ({@code "0 2 * * *"}) or 6/7-field
+ *                 Quartz ({@code "0 0 2 * * ?"}) — or {@code null}
  */
 public record SyncSchedule(Duration interval, String cron) {
 

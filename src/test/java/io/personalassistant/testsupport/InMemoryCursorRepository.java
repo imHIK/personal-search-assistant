@@ -8,6 +8,7 @@ import io.personalassistant.storage.repository.CursorRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,10 +36,12 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     @Override
-    public List<Cursor> findClaimable(int limit) {
+    public List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit) {
         Instant now = Instant.now();
-        // Mirror the Mongo adapter: least-recently-run first, never-run (null lastRunAt) first.
+        // Mirror the Mongo adapter: eligible knowledges only, least-recently-run first, never-run
+        // (null lastRunAt) first.
         return store.values().stream()
+                .filter(c -> knowledgeIds.contains(c.knowledgeId()))
                 .filter(c -> isClaimable(c, now))
                 .sorted(Comparator.comparing(
                         (Cursor c) -> c.stats().lastRunAt(),
@@ -86,19 +89,20 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (!ownsLiveLease(c, owner)) {
             return false;
         }
-        store.put(cursorId, with(c, restingStatus, null, c.position(), c.retry(), c.stats()));
+        // A successful resting ends the consecutive-failure streak — mirrors the Mongo adapter.
+        store.put(cursorId, with(c, restingStatus, null, c.position(), Cursor.Retry.zero(), c.stats()));
         return true;
     }
 
     @Override
     public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount,
-                                 String lastError) {
+                                 String lastError, Instant nextAttemptAt) {
         Cursor c = store.get(cursorId);
         if (!ownsLiveLease(c, owner)) {
             return false;
         }
         store.put(cursorId, with(c, restingStatus, null, c.position(),
-                new Cursor.Retry(retryCount, lastError), c.stats()));
+                new Cursor.Retry(retryCount, lastError, nextAttemptAt), c.stats()));
         return true;
     }
 
@@ -126,7 +130,8 @@ public class InMemoryCursorRepository implements CursorRepository {
         int parked = 0;
         for (Cursor c : new ArrayList<>(store.values())) {
             if (c.knowledgeId().equals(knowledgeId)
-                    && (c.status() == CursorStatus.AVAILABLE || c.status() == CursorStatus.IDLE)) {
+                    && (c.status() == CursorStatus.AVAILABLE || c.status() == CursorStatus.IDLE
+                            || c.status() == CursorStatus.RATE_LIMITED)) {
                 store.put(c.id(), with(c, CursorStatus.SUSPENDED, c.lease(), c.position(), c.retry(), c.stats()));
                 parked++;
             }
@@ -147,6 +152,22 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        int revived = 0;
+        for (Cursor c : new ArrayList<>(store.values())) {
+            if (c.knowledgeId().equals(knowledgeId) && (c.status() == CursorStatus.FAILED
+                    || c.status() == CursorStatus.RATE_LIMITED)) {
+                // Position kept: the cursor resumes where it stopped rather than re-walking.
+                // RATE_LIMITED is revived too, and Retry.zero() drops its hold — mirrors Mongo.
+                store.put(c.id(), with(c, CursorStatus.AVAILABLE, null, c.position(),
+                        Cursor.Retry.zero(), c.stats()));
+                revived++;
+            }
+        }
+        return revived;
+    }
+
+    @Override
     public boolean retire(String cursorId) {
         Cursor c = store.get(cursorId);
         if (c == null || c.status() == CursorStatus.IN_PROGRESS) {
@@ -162,11 +183,21 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (c == null || c.status() != CursorStatus.RETIRED) {
             return false;
         }
-        store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(),
+        store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(),
                 attributes == null ? c.attributes() : attributes, c.direction(),
                 CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
                 c.stats(), c.scope()));
         return true;
+    }
+
+    @Override
+    public void rename(String cursorId, String iterableName) {
+        Cursor c = store.get(cursorId);
+        if (c != null) {
+            store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(), iterableName,
+                    c.attributes(), c.direction(), c.position(), c.status(), c.lease(), c.retry(),
+                    c.stats(), c.scope()));
+        }
     }
 
     @Override
@@ -175,8 +206,8 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (c == null || c.status() == CursorStatus.IN_PROGRESS) {
             return false;
         }
-        store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.attributes(),
-                c.direction(), CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
+        store.put(cursorId, new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(),
+                c.attributes(), c.direction(), CursorPosition.start(), CursorStatus.AVAILABLE, null, Cursor.Retry.zero(),
                 c.stats(), c.scope()));
         return true;
     }
@@ -190,12 +221,18 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (c.status() == CursorStatus.AVAILABLE) {
             return true;
         }
+        if (c.status() == CursorStatus.RATE_LIMITED) {
+            // Mirrors the Mongo filter exactly, missing instant included: a RATE_LIMITED row with no
+            // nextAttemptAt is never claimable, it does not read as "no hold".
+            Instant until = c.retry() == null ? null : c.retry().nextAttemptAt();
+            return until != null && !until.isAfter(now);
+        }
         return c.status() == CursorStatus.IN_PROGRESS && !c.hasLiveLease(now);
     }
 
     private static Cursor with(Cursor c, CursorStatus status, Cursor.Lease lease, CursorPosition position,
                                Cursor.Retry retry, Cursor.Stats stats) {
-        return new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.attributes(), c.direction(), position,
-                status, lease, retry, stats, c.scope());
+        return new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(), c.attributes(),
+                c.direction(), position, status, lease, retry, stats, c.scope());
     }
 }

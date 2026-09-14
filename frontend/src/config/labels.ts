@@ -20,6 +20,9 @@ export const nouns = {
   accounts: 'Accounts',
 } as const
 
+/** Named here so the idle hint can quote the toggle by the exact name on the switch. */
+const answerToggle = 'Summarize results'
+
 export const labels = {
   app: {
     name: 'Personal Search Assistant',
@@ -30,6 +33,9 @@ export const labels = {
     search: 'Search',
     sources: nouns.sources,
     accounts: nouns.accounts,
+    digests: 'Digests',
+    tasks: 'Tasks',
+    channels: 'Channels',
     technicalDetails: 'Technical details',
     technicalDetailsHint: 'Show ids, raw states and internal counters',
     theme: 'Theme',
@@ -47,19 +53,23 @@ export const labels = {
     topK: 'Results',
     scope: 'Look in',
     scopeAll: `All ${nouns.sources.toLowerCase()}`,
-    answerToggle: 'Answer my question',
+    answerToggle,
     answerToggleHint: 'Reads the top results and writes a cited answer',
     answerHeading: 'Answer',
     answerUnavailable:
       'The answer service is unavailable, so only results are shown. Check that an LLM provider and API key are configured.',
     narrowBy: 'Narrow by',
+    clearFilters: 'Clear',
+    filterAny: 'Any',
+    groupDuplicates: 'Group duplicates',
+    groupDuplicatesHint: 'Show one result when the same thing turns up more than once',
     addFilter: 'Add filter',
     filterKey: 'Field',
     filterValue: 'Value',
     empty: 'No results',
     emptyHint: 'Try different words, widen the scope, or check that indexing has finished.',
     idle: 'Search across everything you have connected.',
-    idleHint: 'Results come from your own files, mail and documents — nothing leaves this machine unless you ask for an answer.',
+    idleHint: `Results come from your own files, mail and documents. Turn off “${answerToggle}” to keep everything on this machine.`,
     resultCount: (n: number, seconds: string) =>
       `${n} ${n === 1 ? 'result' : 'results'} in ${seconds}s`,
     openOriginal: 'Open',
@@ -112,6 +122,7 @@ export const labels = {
     empty: 'Nothing here yet',
     emptyHint: 'Items appear as they are imported. This can take a few minutes after connecting.',
     emptyFiltered: 'Nothing matches this filter',
+    errorHint: 'Why this item could not be processed',
     refresh: 'Reprocess',
     refreshHint: 'Read this item again from what was already downloaded',
     remove: 'Remove',
@@ -138,6 +149,13 @@ export const labels = {
     legend: 'What these mean',
   },
 
+  reconnectBanner: {
+    one: (name: string) => `"${name}" needs reconnecting — nothing new is being imported from it.`,
+    many: (count: number) =>
+      `${count} accounts need reconnecting — nothing new is being imported from them.`,
+    action: 'Fix it',
+  },
+
   accounts: {
     title: nouns.accounts,
     subtitle: 'Sign-in details reused across sources.',
@@ -146,16 +164,48 @@ export const labels = {
     emptyHint: 'Google sources need an account before they can be connected.',
     makeDefault: 'Make default',
     isDefault: 'Default',
-    defaultHint: (type: string) => `Used automatically by new ${type} sources`,
+    defaultHint: (type: string) => `Used automatically wherever a ${type} account is needed and none is picked`,
     edit: 'Edit',
     remove: 'Remove',
     removeTitle: (name: string) => `Remove "${name}"?`,
     removeBody: 'Sources using it will stop working until you connect another account.',
     inUse: 'This account is still used by one or more sources. Remove or repoint them first.',
     verifyFailed: "We couldn't connect to this account",
+    test: 'Test',
+    testing: 'Testing…',
+    testOk: (name: string) => `"${name}" is working`,
+    testFailed: (name: string) => `"${name}" is not working`,
+    testHint: 'Re-checks the saved sign-in. Sources using a broken account are skipped until it works again.',
     reveal: 'Show',
     hide: 'Hide',
     helpTitle: 'How do I get these?',
+    connect: (service: string) => `Connect with ${service}`,
+    reconnect: (service: string) => `Reconnect with ${service}`,
+    connectHint:
+      'Opens the service in a new window to approve access. Nothing to copy or paste — the sign-in ' +
+      'is stored here when you come back.',
+    connectStarting: 'Opening…',
+    connectSaveFirst: 'Give this account a name first, then connect.',
+    connectOk: 'Account connected',
+    connectFailed: "That didn't complete — the account was not connected.",
+    rateLimitTitle: 'Speed limit',
+    rateLimitHint:
+      'How fast this account may be called. Leave empty to use the server default. Most services ' +
+      'publish their own limits — matching them here avoids being cut off.',
+    rateLimitWarning:
+      'A tight limit slows syncing rather than breaking it: work waits its turn and picks up where it ' +
+      'left off. Set it too low and a first sync can take a very long time.',
+    rateLimitAdd: 'Add a limit',
+    rateLimitRemove: 'Remove',
+    rateLimitEmpty: 'No limit set — the server default applies.',
+    rateLimitCount: 'Requests',
+    rateLimitPer: 'Per',
+    rateLimitUnits: {
+      second: 'second',
+      minute: 'minute',
+      hour: 'hour',
+      day: 'day',
+    },
   },
 
   wizard: {
@@ -176,6 +226,11 @@ export const labels = {
     addNewAccount: 'Add a new account',
     backfill: 'Also import everything already there',
     backfillHint: 'Off means only items added from now on are indexed.',
+    changeType: 'Change type',
+    discardTitle: `Discard this ${nouns.source.toLowerCase()}?`,
+    discardBody: "You've started filling this in. Leaving now loses everything you entered.",
+    discardConfirm: 'Discard',
+    keepEditing: 'Keep editing',
   },
 
   settings: {
@@ -203,6 +258,9 @@ export const labels = {
     every6h: 'Every 6 hours',
     daily: 'Once a day',
     custom: 'Custom',
+    cronLabel: 'Cron expression',
+    cronHint:
+      'Standard 5-field cron (0 9,18 * * *) or Quartz 6-field (0 0 9,18 * * ?). Times are UTC. Takes precedence over any interval.',
   },
 
   common: {
@@ -221,6 +279,21 @@ export const labels = {
     required: 'required',
     technical: 'Technical details',
     rawError: 'Raw message',
+    remove: 'Remove',
+    search: 'Search…',
+    previous: 'Previous',
+    next: 'Next',
+    save: 'Save',
+  },
+
+  picklist: {
+    browse: (n: number, noun: string) => `Choose from ${n} ${noun}`,
+    defaultNoun: 'we already know',
+    filter: 'Type to filter…',
+    noMatch: 'Nothing matches. Add it below instead.',
+    add: 'Add',
+    selectAll: (n: number) => `Select all ${n}`,
+    deselectAll: 'Deselect all',
   },
 
   errors: {
@@ -230,5 +303,255 @@ export const labels = {
     genericTitle: 'Something went wrong',
     notFound: 'Not found',
     notFoundBody: 'It may have been removed.',
+  },
+
+  digests: {
+    title: 'Digests',
+    subtitle: 'Saved searches that run on a schedule and keep what they find.',
+    add: 'New digest',
+    create: 'Create digest',
+    empty: 'No digests yet',
+    emptyHint:
+      'A digest re-runs a search on a schedule and shows only what is new since last time.',
+    name: 'Name',
+    namePlaceholder: 'New backend roles',
+    queryLabel: 'Search for',
+    queryPlaceholder: 'backend engineer distributed systems',
+    queryHint: 'Leave blank if you are searching by a document instead.',
+    sourcesLabel: 'Look in',
+    sourcesAllHint: 'Every source. Pick some to keep this digest to the right material.',
+    sourcesNone: 'No sources connected yet.',
+    sourceEntity: 'Or search by a document',
+    sourceEntityPlaceholder: 'ent_…',
+    sourceEntityHint: 'The id of something already indexed — a CV, a brief. Find it under a source.',
+    windowLabel: 'Look back',
+    windowHint:
+      'Counts from when something was last added to a source, not when it was written. Pick “No time limit” unless the source keeps changing.',
+    scheduleLabel: 'Run every',
+    onlyNew: 'Only what is new',
+    onlyNewHint: 'Skip anything an earlier run already showed',
+    onlyNewOffHint: 'Every run shows the best matches again, new or not',
+    sourcesSomeHint: (n: number) => `${n} ${n === 1 ? 'source' : 'sources'} selected`,
+    runNow: 'Run now',
+    running: 'Running…',
+    lastRun: 'Last run',
+    neverRun: 'Not run yet',
+    sendToLabel: 'Send results to',
+    sendToHint:
+      'Runs that find something new — or fail — are sent to the channels ticked here. Quiet runs send nothing.',
+    sendToNone: 'No channels yet.',
+    sendToAdd: 'Add one',
+    sendsTo: 'Sends to',
+    sendsToNone: 'Nowhere',
+    sentTo: 'Sent to',
+    noResults: 'Nothing new',
+    resultCount: (n: number) => `${n} new ${n === 1 ? 'result' : 'results'}`,
+    // A digest that is not filtering by newness has no "new" to speak of; calling its matches new
+    // is simply wrong, and was the copy every non-job-search digest got.
+    resultCountPlain: (n: number) => `${n} ${n === 1 ? 'result' : 'results'}`,
+    paused: 'Paused',
+    pause: 'Pause',
+    resume: 'Resume',
+    remove: 'Delete',
+    removeConfirm: 'Delete this digest?',
+    removeBody: 'Its history of past runs is deleted with it. This cannot be undone.',
+    runFailed: 'This run failed',
+    createFailed: 'Could not create the digest',
+    saveFailed: 'Could not save the digest',
+    save: 'Save changes',
+    saved: 'Saved',
+
+    // Detail page
+    back: 'All digests',
+    tabRuns: 'History',
+    tabSettings: 'Settings',
+    runsTitle: 'Past runs',
+    runsEmpty: 'This digest has not run yet.',
+    runsEmptyHint: 'It runs on its own schedule, or you can run it now.',
+    loadMore: 'Show older runs',
+    nextRun: 'Next run',
+    dueNow: 'Due now',
+    notScheduled: 'Not scheduled',
+    searchesFor: 'Searches for',
+    searchesLike: 'Finds things like',
+    looksIn: 'Looks in',
+    looksInAll: 'Everything connected',
+    lookBack: 'Looks back',
+    lookBackNone: 'No time limit',
+    runsEvery: 'Runs',
+    taskLabel: 'Then',
+    taskNone: 'Just lists what is new',
+    // A digest naming a task that cannot be resolved must not be described as naming none — that
+    // reads as a working digest and hides the reason its runs carry no task output.
+    taskMissing: 'Task unavailable',
+    showsOnlyNew: 'Shows only what is new',
+    showsEverything: 'Shows every match, new or not',
+
+    // Run outcomes. These three all rendered as "no results" before the counters existed.
+    outcomeFailed: 'Failed',
+    outcomeNothingMatched: 'Nothing matched',
+    outcomeAllSeen: (n: number) =>
+      `Nothing new — ${n} ${n === 1 ? 'result' : 'results'}, all seen before`,
+    // The window counts from when something was last indexed, so a source that is ingested once and
+    // then left alone silently leaves a short window and never comes back. Reported as "nothing
+    // matched", that sends people to rewrite a query that was fine all along.
+    outcomeOutsideWindow: (n: number) =>
+      `Nothing in this window — ${n} older ${n === 1 ? 'match' : 'matches'}`,
+    outcomeOutsideWindowHint:
+      'Nothing has been added to this source recently, so the look-back window is empty. Widen it in Settings to see these.',
+    outcomeNothingMatchedHint: 'No result anywhere in the chosen sources fits this search.',
+    outcomeAllSeenHint:
+      'The search worked — everything it found has been shown in an earlier run. Reset the history to see them again.',
+    widenWindow: 'Widen the look-back',
+    runStreak: (n: number) => `${n}\u00d7`,
+    rawOutput: 'Raw task reply',
+    summaryHeading: 'Summary',
+    citation: (n: number) => `Result ${n}`,
+
+    resetHistory: 'Reset history',
+    resetHistoryConfirm: 'Show everything again?',
+    resetHistoryBody:
+      'This digest will forget what it has already shown you, so the next run may repeat things you have seen. Past runs are kept.',
+    resetHistoryDone: 'History reset — the next run starts fresh',
+    historyResetAt: 'History was reset',
+
+    // Form additions
+    taskField: 'What should I do with the results?',
+    taskFieldHint: 'An instruction the assistant runs over everything the digest finds.',
+    taskFieldNone: 'Nothing — just show me what is new',
+    taskManage: 'Write your own',
+    topK: 'How many results',
+    onePerDocument: 'One result per document',
+    onePerDocumentHint: 'Otherwise several passages from the same file can each take a slot',
+    groupDuplicates: 'Group duplicates',
+    pickDocument: 'Choose a document',
+    changeDocument: 'Change',
+    clearDocument: 'Clear',
+    filtersLabel: 'Narrow it down',
+  },
+
+  channels: {
+    title: 'Channels',
+    subtitle: 'Where messages are sent — your inbox today, more places later.',
+    add: 'Add channel',
+    empty: 'No channels yet',
+    emptyHint: 'Add an email channel to receive messages in your inbox.',
+    edit: 'Edit',
+    remove: 'Remove',
+    removeTitle: (name: string) => `Remove "${name}"?`,
+    removeBody: 'Anything still waiting to be sent to it is discarded, along with its delivery history.',
+    removed: (name: string) => `Removed "${name}"`,
+    test: 'Send test',
+    testing: 'Sending…',
+    testOk: (name: string) => `Test message sent to "${name}"`,
+    testFailed: (name: string) => `"${name}" could not send`,
+    testHint:
+      'Sends a sample message right now. A successful test also releases anything that queued up while ' +
+      'the channel was not delivering.',
+    basics: 'Basics',
+    name: 'Name',
+    namePlaceholder: 'My inbox',
+    nameRequired: 'Give this channel a name so you can recognise it later',
+    type: 'Type',
+    notAvailable: 'coming later',
+    destination: 'Destination',
+    account: 'Send from',
+    accountDefault: (label: string) => `Default ${label} account`,
+    accountHint: 'The account messages are sent from. The default follows whichever account is marked default.',
+    accountNone: (label: string) => `No ${label} account is connected yet.`,
+    accountConnect: 'Connect one',
+    enabled: 'Sending enabled',
+    enabledHint: 'While paused, messages stay queued and are sent once it is resumed.',
+    create: 'Create channel',
+    save: 'Save changes',
+    created: 'Channel created',
+    saved: 'Channel updated',
+    editTitle: (name: string) => `Edit ${name}`,
+    deliveries: 'Recent deliveries',
+    deliveriesHint: 'Newest first. Queued messages are picked up within about half a minute.',
+    deliveriesEmpty: 'Nothing has been sent to this channel yet.',
+    untitled: '(untitled)',
+    itemCount: (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`,
+    queued: (when: string) => `queued ${when}`,
+    sent: (when: string) => `sent ${when}`,
+    failedAttempts: (n: number) => `${n} failed ${n === 1 ? 'attempt' : 'attempts'}`,
+    retry: 'Retry',
+    retried: 'Queued to send again',
+  },
+
+  tasks: {
+    title: 'Tasks',
+    subtitle: 'Instructions a digest can run over what it finds.',
+    add: 'New task',
+    empty: 'No tasks of your own yet',
+    emptyHint:
+      'A task tells the assistant what to do with a digest\u2019s results — score them, summarise them, pull out what matters.',
+    builtIn: 'Built in',
+    builtInHint: 'Shipped with the app. Duplicate it to make a version you can change.',
+    usedBySearch: 'Used by search',
+    yours: 'Your tasks',
+    duplicate: 'Duplicate',
+    view: 'View',
+    edit: 'Edit',
+    remove: 'Delete',
+    removeConfirm: 'Delete this task?',
+    removeBody: 'Digests still using it must be changed first. This cannot be undone.',
+    removeFailed: 'Could not delete this task',
+    saveFailed: 'Could not save this task',
+    create: 'Create task',
+    save: 'Save changes',
+    created: 'Task created',
+    updated: 'Task saved',
+
+    name: 'Name',
+    namePlaceholder: 'Score roles against my CV',
+    description: 'What it is for',
+    descriptionPlaceholder: 'Shown when picking a task for a digest',
+    instruction: 'Instruction',
+    instructionPlaceholder:
+      'Score how well each posting fits a senior backend role. Be strict, and say what decided it.',
+    instructionHint:
+      'Written as if to a colleague. The assistant adds the rules that stop indexed text from giving it orders.',
+    outputLabel: 'What should come back',
+    fieldsLabel: 'Record for each result',
+    fieldsHint: 'Numbers show as a badge, text as a line underneath.',
+    fieldName: 'Name',
+    fieldType: 'Type',
+    fieldDescription: 'What to put here',
+    fieldOptional: 'May be left out',
+    addField: 'Add a field',
+    removeField: 'Remove',
+    useSuggested: 'Use score, reason and concern',
+    judgeBy: 'Judge each result by',
+    quality: 'Model',
+    qualityHint: 'A digest runs its task on every scheduled run, so a cheaper model costs less over time.',
+    costNote:
+      'This runs every time the digest runs. A daily digest over ten results is a daily cost.',
+    rawMode: 'Write the prompt myself',
+    rawModeHint:
+      'Replaces the instruction with the exact system and user messages. You then own the rules that keep retrieved text as data rather than instructions — get that wrong and a document in your index can steer the model.',
+    rawSystem: 'System message',
+    rawUser: 'User message',
+    rawUserHint: 'Must contain {{sources}}, or the model is given nothing to work from.',
+    placeholdersLabel: 'Values you can drop in',
+    placeholdersHint: 'Click one to insert it, or type {{ in the box above.',
+    placeholderRequired: 'Required.',
+    placeholderUnknown:
+      'Not a value the assistant fills in, so this task will fail when it runs:',
+    contextChars: 'Context budget (characters)',
+    maxSources: 'Most results to send',
+    builtInReadOnly: 'This task ships with the app and cannot be changed. Duplicate it to edit.',
+  },
+
+  jobBoards: {
+    lookupTitle: 'Not sure which companies are on a job board?',
+    lookupHint:
+      'Paste names and check before adding them. Greenhouse, Lever, Ashby and SmartRecruiters are searched by name; Workday and Oracle HCM need the address from their careers page.',
+    lookupPlaceholder: 'paytm\ndatabricks\nSwiggy\nrazorpay',
+    check: (n: number) => (n === 0 ? 'Check' : `Check ${n}`),
+    checking: 'Checking…',
+    addFound: (n: number) => `Add ${n}`,
+    notFound: 'not on a supported platform',
+    postings: (n: number) => `${n} ${n === 1 ? 'posting' : 'postings'}`,
   },
 } as const

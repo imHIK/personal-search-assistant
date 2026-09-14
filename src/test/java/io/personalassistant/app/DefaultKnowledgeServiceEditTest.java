@@ -14,6 +14,7 @@ import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.domain.model.enums.KnowledgeStatus;
+import io.personalassistant.domain.model.enums.ReindexMode;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.KnowledgePatch;
 import io.personalassistant.domain.service.KnowledgeService;
@@ -64,7 +65,8 @@ class DefaultKnowledgeServiceEditTest {
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
-        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections, index, discovery);
+        service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections,
+                index, discovery, new RefetchPolicy(registry));
 
         runner = new IngestionRunner(registry, entities, cursors);
         runner.batchesPerLease = 50;
@@ -87,7 +89,7 @@ class DefaultKnowledgeServiceEditTest {
     private static RawItem textItem(String externalId) {
         return new RawItem(externalId, EntityType.MESSAGE, "text/plain", externalId, "uri:" + externalId,
                 "sha256:" + externalId, Instant.now(), Map.of("k", "v"), "body of " + externalId, null,
-                Map.of("title", externalId), false);
+                Map.of("title", externalId), null, false);
     }
 
     // ---- §8.1 config-only edit ---------------------------------------------------------------
@@ -119,11 +121,42 @@ class DefaultKnowledgeServiceEditTest {
     }
 
     @Test
+    void anUnparseableCronIsRejectedAndNothingIsWritten() {
+        Knowledge kn = add(Map.of());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.update(kn.id(), KnowledgePatch.builder().cron("every morning").build()));
+
+        assertEquals(null, knowledge.findById(kn.id()).orElseThrow().config().scheduleSettings().cron());
+    }
+
+    @Test
+    void aFiveFieldCronIsAccepted() {
+        Knowledge kn = add(Map.of());
+
+        service.update(kn.id(), KnowledgePatch.builder().cron("0 9,18 * * *").build());
+
+        assertEquals("0 9,18 * * *", knowledge.findById(kn.id()).orElseThrow().config().scheduleSettings().cron());
+    }
+
+    @Test
+    void anUnparseableCronOnCreateIsRejectedBeforeADraftIsStored() {
+        Knowledge.Config defaults = Knowledge.Config.defaults();
+        Knowledge.Config config = new Knowledge.Config(new Knowledge.ScheduleSettings("every morning", null, true),
+                defaults.webhookSettings(), defaults.backfill());
+
+        assertThrows(IllegalArgumentException.class, () -> service.add(new KnowledgeService.NewKnowledge(
+                "team slack", SourceType.SLACK, null, Map.of(), Map.of(), config)));
+
+        assertTrue(knowledge.findAll().isEmpty(), "no DRAFT (or ERROR) record left behind");
+    }
+
+    @Test
     void enablingScheduleReArmsForwardCursors() {
         Knowledge kn = add(Map.of()); // add defaults scheduleEnabled=false
         // Simulate a forward cursor that has caught up and is waiting for the scheduler.
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
-        cursors.store.put(fwd.id(), new Cursor(fwd.id(), fwd.knowledgeId(), fwd.iterableId(),
+        cursors.store.put(fwd.id(), new Cursor(fwd.id(), fwd.knowledgeId(), fwd.iterableId(), fwd.iterableName(),
                 fwd.attributes(), fwd.direction(), fwd.position(), CursorStatus.IDLE, null,
                 fwd.retry(), fwd.stats(), fwd.scope()));
 
@@ -159,7 +192,7 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of());
         // An already-indexed entity: its chunks are "in the past" and must be left exactly as-is.
         entities.upsert(TestData.ingestedText("ent_x", kn.id(), "doc", "hello world"));
-        entities.markIndexed("ent_x", 3, "model", Instant.now());
+        entities.seedIndexed("ent_x", 3, "model", Instant.now());
 
         service.update(kn.id(), KnowledgePatch.builder().chunkingStrategy("fixed-size").build());
 
@@ -287,6 +320,42 @@ class DefaultKnowledgeServiceEditTest {
                 "a membership-affecting edit bumps the sync generation");
     }
 
+    /**
+     * L11. A membership re-walk is the one moment the whole corpus passes back through ingestion, so
+     * for a connector that stages its content it is also where staged copies get refreshed. Without
+     * the flag the re-walk would skip every unchanged file and leave them pointing at a scratch dir
+     * the OS may since have emptied.
+     */
+    @Test
+    void reWalkAlsoRefreshesStagedContentForAConnectorThatFetches() {
+        connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
+        Knowledge kn = add(Map.of("fileTypes", "pdf,docx"));
+        entities.upsert(TestData.ingestedFile("ent_file", kn.id(), "staged", "/scratch/a.pdf",
+                "application/pdf"));
+        entities.upsert(TestData.entityInIterable("ent_text", kn.id(), "chan_a", "inline"));
+
+        service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf")).build());
+
+        assertTrue(entities.findById("ent_file").orElseThrow().needsRefetch(),
+                "the staged copy is re-fetched by the walk the edit just started");
+        assertFalse(entities.findById("ent_text").orElseThrow().needsRefetch(),
+                "inline content is already in Mongo; fetching it again would buy nothing");
+    }
+
+    /** A cosmetic edit starts no walk, so there is nothing to attach a re-fetch to. */
+    @Test
+    void aCosmeticEditNeverTriggersARefetch() {
+        connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
+        Knowledge kn = add(Map.of("fileTypes", "pdf", "label", "Docs"));
+        entities.upsert(TestData.ingestedFile("ent_file2", kn.id(), "staged2", "/scratch/b.pdf",
+                "application/pdf"));
+
+        service.update(kn.id(),
+                KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf", "label", "Files")).build());
+
+        assertFalse(entities.findById("ent_file2").orElseThrow().needsRefetch());
+    }
+
     // ---- §8.7 / §8.8 the async re-walk re-ingests adds and stamps the generation -------------
 
     @Test
@@ -295,7 +364,7 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of("fileTypes", "pdf"));
         // A pre-existing, already-indexed match that the re-walk will re-see unchanged (skip path).
         entities.upsert(TestData.entityInIterable("ent_keep", kn.id(), "chan_a", "keep"));
-        entities.markIndexed("ent_keep", 1, "model", Instant.now());
+        entities.seedIndexed("ent_keep", 1, "model", Instant.now());
 
         // Widen fileTypes: pdf → pdf,txt. Signature changes → generation bumps, cursors rewind.
         service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf,txt")).build());
@@ -356,7 +425,7 @@ class DefaultKnowledgeServiceEditTest {
     }
 
     private void putStatusAndPosition(Cursor c, CursorStatus status, CursorPosition position) {
-        cursors.store.put(c.id(), new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.attributes(),
+        cursors.store.put(c.id(), new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(), c.attributes(),
                 c.direction(), position, status, null, c.retry(), c.stats(), c.scope()));
     }
 }

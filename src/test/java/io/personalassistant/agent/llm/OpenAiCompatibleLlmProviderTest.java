@@ -1,6 +1,7 @@
 package io.personalassistant.agent.llm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,9 +9,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import io.personalassistant.agent.llm.LlmProvider.Message;
+import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitPolicies;
+import io.personalassistant.common.ratelimit.RateLimitedException;
+import io.personalassistant.testsupport.RecordingRateLimiter;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -25,6 +32,7 @@ import org.junit.jupiter.api.Test;
  */
 class OpenAiCompatibleLlmProviderTest {
 
+    private final RecordingRateLimiter limiter = new RecordingRateLimiter();
     private final ObjectMapper mapper = new ObjectMapper();
 
     private HttpServer server;
@@ -56,7 +64,7 @@ class OpenAiCompatibleLlmProviderTest {
     }
 
     private OpenAiCompatibleLlmProvider provider() {
-        OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider();
+        OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider(new OutboundHttp(limiter), RateLimitPolicies.unlimited());
         p.baseUrl = "http://localhost:" + server.getAddress().getPort();
         p.modelName = "llama-3.3-70b-versatile";
         p.apiKey = Optional.of("secret-key");
@@ -121,5 +129,19 @@ class OpenAiCompatibleLlmProviderTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> p.complete("s", List.of(new Message("user", "hi"))));
         assertTrue(ex.getMessage().contains("500"), ex.getMessage());
+    }
+
+    /**
+     * A rate-limited answer must say so. Wrapped, it reaches the caller as a generic "LLM request
+     * failed" and the console shows that in answerError instead of the real reason.
+     */
+    @Test
+    void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
+        limiter.failWith = new RateLimitedException(RateLimitKey.llm("openai-compat"),
+                Instant.now().plusSeconds(60));
+
+        RateLimitedException e = assertThrows(RateLimitedException.class,
+                () -> provider().complete("sys", List.of(new Message("user", "hi"))));
+        assertNotNull(e.retryAt());
     }
 }

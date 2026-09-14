@@ -1,8 +1,10 @@
 package io.personalassistant.ingestion.connector.google.gmail;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.ingestion.connector.google.GoogleAuth;
 import io.personalassistant.ingestion.connector.google.GoogleHttp;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -24,15 +26,11 @@ public class HttpGmailApi implements GmailApi {
     @ConfigProperty(name = "app.ingestion.gmail.timeout-seconds", defaultValue = "60")
     long timeoutSeconds;
 
-    private volatile GoogleHttp http;
+    private final GoogleHttp http;
 
-    private GoogleHttp http() {
-        GoogleHttp local = http;
-        if (local == null) {
-            local = new GoogleHttp(timeoutSeconds);
-            http = local;
-        }
-        return local;
+    @Inject
+    public HttpGmailApi(GoogleHttp http) {
+        this.http = http;
     }
 
     private String base() {
@@ -40,7 +38,7 @@ public class HttpGmailApi implements GmailApi {
     }
 
     @Override
-    public JsonNode listMessages(String accessToken, List<String> labelIds, String query,
+    public JsonNode listMessages(GoogleAuth auth, List<String> labelIds, String query,
                                  String pageToken, int maxResults) {
         StringJoiner q = new StringJoiner("&", base() + "/messages?", "");
         q.add("maxResults=" + Math.max(1, maxResults));
@@ -55,22 +53,22 @@ public class HttpGmailApi implements GmailApi {
         if (pageToken != null && !pageToken.isBlank()) {
             q.add("pageToken=" + enc(pageToken));
         }
-        return http().getJson(q.toString(), accessToken);
+        return http.getJson(q.toString(), auth, timeoutSeconds);
     }
 
     @Override
-    public JsonNode getMessage(String accessToken, String id) {
-        return http().getJson(base() + "/messages/" + enc(id) + "?format=full", accessToken);
+    public JsonNode getMessage(GoogleAuth auth, String id) {
+        return http.getJson(base() + "/messages/" + enc(id) + "?format=full", auth, timeoutSeconds);
     }
 
     @Override
-    public JsonNode listLabels(String accessToken) {
-        return http().getJson(base() + "/labels", accessToken);
+    public JsonNode listLabels(GoogleAuth auth) {
+        return http.getJson(base() + "/labels", auth, timeoutSeconds);
     }
 
     @Override
-    public JsonNode getProfile(String accessToken) {
-        return http().getJson(base() + "/profile", accessToken);
+    public JsonNode getProfile(GoogleAuth auth) {
+        return http.getJson(base() + "/profile", auth, timeoutSeconds);
     }
 
     private static String enc(String s) {

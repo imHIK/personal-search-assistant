@@ -14,10 +14,13 @@ import {
   searchModes,
 } from '@/config/constants'
 import { labels } from '@/config/labels'
+import { buildFilters, filtersFor } from '@/config/searchFilters'
 import { useKnowledgeList } from '@/hooks/queries'
+import { useCitationJump } from '@/hooks/useCitationJump'
 import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
+import { SearchFilters } from './SearchFilters'
 import { useSearch } from './useSearch'
 
 /**
@@ -28,13 +31,29 @@ export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const { data: sources } = useKnowledgeList()
   const search = useSearch()
-  const resultRefs = useRef<Record<number, HTMLElement | null>>({})
+  // Ranks only mean anything within one result set, so the highlight is cleared whenever a new
+  // search runs.
+  const { citedRank, jumpTo, register, clear: clearCitation } = useCitationJump()
 
   const urlQuery = params.get('q') ?? ''
   const mode = (params.get('mode') as SearchMode | null) ?? DEFAULT_SEARCH_MODE
   const topK = Number(params.get('topK')) || DEFAULT_TOP_K
   const scope = params.get('scope') ?? ''
-  const wantsAnswer = params.get('answer') === '1'
+  // Opt-out, not opt-in: the summary is the default reading of a result set, so a bare `?q=` URL
+  // produces one and only an explicit `answer=0` suppresses it.
+  const wantsAnswer = params.get('answer') !== '0'
+  const groupDuplicates = params.get('group') === '1'
+
+  // Filters are offered per source, so they follow the scope rather than the query. A scope of
+  // "everything" has no single source type and therefore offers only the universal specs.
+  const scopedSource = (sources ?? []).find((source) => source.id === scope)
+  const filterSpecs = filtersFor(scopedSource?.connectorDetails.type ?? null)
+  const filterValues = Object.fromEntries(
+    filterSpecs.map((spec) => [spec.id, params.get(spec.id) ?? '']),
+  )
+  // Serialised so the effect below re-runs when a filter changes without depending on a fresh
+  // object identity every render.
+  const filterKey = JSON.stringify(filterValues)
 
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
@@ -45,15 +64,21 @@ export function SearchPage() {
   runRef.current = search.mutate
   useEffect(() => {
     if (!urlQuery.trim()) return
+    const filters = buildFilters(filterSpecs, JSON.parse(filterKey) as Record<string, string>)
     const body: SearchBody = {
       query: urlQuery,
       mode,
       topK,
       answer: wantsAnswer,
       knowledgeIds: scope ? [scope] : [],
+      ...(Object.keys(filters).length > 0 ? { filters } : {}),
+      ...(groupDuplicates ? { collapseDuplicates: true } : {}),
     }
+    clearCitation()
     runRef.current(body)
-  }, [urlQuery, mode, topK, wantsAnswer, scope])
+    // filterSpecs is derived from scope, which is already a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlQuery, mode, topK, wantsAnswer, scope, filterKey, groupDuplicates])
 
   const update = (next: Record<string, string | null>) => {
     const merged = new URLSearchParams(params)
@@ -136,13 +161,28 @@ export function SearchPage() {
             </Select>
           </Technical>
 
-          <Toggle
-            checked={wantsAnswer}
-            onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
-            label={labels.search.answerToggle}
-            className="ml-auto"
-          />
+          {/* The two toggles sit together rather than one being pinned right: split across the
+              row they wrap onto separate lines at this container width. */}
+          <div className="ml-auto flex items-center gap-4">
+            <Toggle
+              checked={groupDuplicates}
+              onCheckedChange={(checked) => update({ group: checked ? '1' : null })}
+              label={labels.search.groupDuplicates}
+            />
+            <Toggle
+              checked={wantsAnswer}
+              onCheckedChange={(checked) => update({ answer: checked ? null : '0' })}
+              label={labels.search.answerToggle}
+            />
+          </div>
         </div>
+
+        <SearchFilters
+          specs={filterSpecs}
+          values={filterValues}
+          onChange={(id, value) => update({ [id]: value })}
+          onClear={() => update(Object.fromEntries(filterSpecs.map((spec) => [spec.id, null])))}
+        />
       </form>
 
       <div className="mt-7">
@@ -176,12 +216,7 @@ export function SearchPage() {
               <AnswerCard
                 answer={result.answer}
                 hits={result.hits}
-                onCitationClick={(index) =>
-                  resultRefs.current[index]?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center',
-                  })
-                }
+                onCitationClick={jumpTo}
               />
             )}
 
@@ -197,9 +232,8 @@ export function SearchPage() {
                   rank={index + 1}
                   query={urlQuery}
                   topScore={result.hits[0]?.score ?? 1}
-                  ref={(element) => {
-                    resultRefs.current[index + 1] = element
-                  }}
+                  highlighted={citedRank === index + 1}
+                  ref={register(index + 1)}
                 />
               ))}
             </div>

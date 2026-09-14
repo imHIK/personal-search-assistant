@@ -19,8 +19,9 @@ Knowledge:  DRAFT ──► ACTIVE ──► PAUSED ──► ACTIVE ──► D
                          │
                          ├── creates Cursors (per iterable, per direction)
                          ▼
-Cursor:     AVAILABLE ──► IN_PROGRESS ──► (EXHAUSTED | IDLE | AVAILABLE | FAILED)
+Cursor:     AVAILABLE ──► IN_PROGRESS ──► (EXHAUSTED | IDLE | AVAILABLE | RATE_LIMITED | FAILED)
                          (paused knowledge parks cursors at SUSPENDED; resume re-arms them)
+                         (RATE_LIMITED re-enters the batch on its own once retry.nextAttemptAt passes)
                          │
                          ├── produces Entities (upsert by knowledgeId+externalId)
                          ▼
@@ -33,7 +34,7 @@ Entity:     INGESTED ──► INDEXING ──► INDEXED        (+ FAILED, DELE
 | Layer | States | Defined in |
 |---|---|---|
 | Knowledge | `DRAFT, ACTIVE, PAUSED, ERROR, DELETED` | `enums.KnowledgeStatus` |
-| Cursor | `AVAILABLE, IN_PROGRESS, IDLE, SUSPENDED, EXHAUSTED, FAILED` | `enums.CursorStatus` |
+| Cursor | `AVAILABLE, IN_PROGRESS, IDLE, SUSPENDED, EXHAUSTED, RETIRED, RATE_LIMITED, FAILED` | `enums.CursorStatus` |
 | Entity | `INGESTED, INDEXING, INDEXED, FAILED, DELETED` | `enums.EntityStatus` |
 
 ---
@@ -61,6 +62,12 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
   and `interval` `null` to inherit the **connector default** (LOCAL_FS = 1 day) and then the
   **global default** (`app.scheduler.default-interval`, 1 day); set one to override (cron wins over
   interval). `scheduleEnabled: false` turns forward scheduling off entirely. See `ScheduleResolver`.
+  A `cron` is evaluated in **UTC** and may be 5-field Unix (`0 9,18 * * *`) or 6/7-field Quartz
+  (`0 0 9,18 * * ?`). One neither dialect parses is a **`400`** on create and on edit — the only
+  validation that rejects a create outright instead of parking the knowledge in `ERROR`, because it
+  is checked before the DRAFT is stored. A bad cron already in Mongo from before that check does not
+  break the scheduler: that knowledge falls back to `app.scheduler.default-interval` (with a warning
+  logged) until its cron is replaced.
 - `backfillEnabled` controls whether history is walked backward on activation.
 
 ### What happens synchronously (`DefaultKnowledgeService.add`)
@@ -79,7 +86,9 @@ curl -X POST localhost:8080/api/knowledge -H 'Content-Type: application/json' -d
 
    Each cursor starts `AVAILABLE`, `position = CursorPosition.start()`, with a deterministic id
    (`Ids.cursorFor(knowledgeId, iterableId, direction)`) so re-running discovery never duplicates
-   them.
+   them. It also snapshots the iterable's `displayName()` as `iterableName`, so the console has a
+   label ("Documents", "Adobe (greenhouse)") instead of a raw id; every reconcile re-writes it, which
+   both backfills older cursors and follows a source-side rename.
 6. **Activate** — `status = ACTIVE`. The Knowledge is returned to the caller.
 
 > **Iterables that appear later.** Some sources grow their iterable set over time (a new child
@@ -112,15 +121,24 @@ A poll loop (`IngestionJob.tick`, every `app.ingestion.poll-interval`, default 3
 into entities.
 
 ### Per tick
-1. **Find claimable cursors** — `AVAILABLE`, or `IN_PROGRESS` whose lease has expired (crash
-   recovery), ordered **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so
-   no active knowledge can monopolise the bounded batch. Direction is irrelevant; backward and
-   forward are treated identically.
-2. For each candidate:
-   - Skip if its Knowledge isn't `ACTIVE`. If it is `PAUSED`, **park** the knowledge's claimable
-     cursors (`→ SUSPENDED`) so they drop out of the batch — a backstop for cursors that were leased
-     when the knowledge was paused (the bulk park happens in `pause()`; `resume()` re-arms). Orphan
-     cursors (knowledge gone) are left for the delete path.
+1. **Decide which knowledges are eligible** — `ACTIVE` ones whose connection is not `ERROR`, plus
+   `PAUSED` ones (so the backstop below can still park their stragglers).
+2. **Find claimable cursors of those knowledges** — `AVAILABLE`, `RATE_LIMITED` whose
+   `retry.nextAttemptAt` has passed, or `IN_PROGRESS` whose lease has expired (crash recovery), ordered
+   **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so no active knowledge
+   can monopolise the bounded batch. Direction is irrelevant; backward and forward are treated
+   identically.
+
+   Eligibility is applied in the query rather than by skipping, because a skipped cursor is never
+   written: its `lastRunAt` stays put, it keeps its place at the head of the batch, and twenty of them
+   stop every source. Orphan cursors (knowledge gone), cursors of a `DRAFT`/`ERROR`/`DELETED`
+   knowledge, and cursors of a source whose token has expired are therefore never in the batch at all.
+   They are not cleaned up either — see [`deletion-flow.md`](./deletion-flow.md) for how they arise.
+3. For each candidate:
+   - Skip if its Knowledge isn't `ACTIVE` (it may have changed since step 1). If it is `PAUSED`,
+     **park** the knowledge's claimable cursors (`→ SUSPENDED`) so they drop out of the batch — a
+     backstop for cursors that were leased when the knowledge was paused (the bulk park happens in
+     `pause()`; `resume()` re-arms).
    - **Acquire a permit** from `PermitService`, scoped at three levels at once — `global`,
      `connector:<TYPE>`, `knowledge:<id>` — so one source can't starve the rest. No permit → try
      again next tick.
@@ -199,6 +217,8 @@ repeat up to batchesPerLease times:
 | Hit the batch cap, more pages remain | `AVAILABLE` | re-picked next tick to keep going |
 | Exception, retries left | `AVAILABLE` (retry++) | retried next tick |
 | Exception, past `retry-limit` | `FAILED` | dead-letter; needs intervention |
+| `RateLimitedException`, budget left | `RATE_LIMITED` (retry++) | held out of the batch until `retry.nextAttemptAt` |
+| `RateLimitedException`, past `max-deferrals` | `FAILED` (hold cleared) | the limit is unsatisfiable; needs intervention |
 
 **At-least-once + idempotent:** the position is persisted *after* each page, and entity upserts are
 keyed on `(knowledgeId, externalId)` — so a crash mid-lease resumes from the last completed page
@@ -254,9 +274,20 @@ mark:    EntityRepository.markIndexed(id, chunkCount, embeddingModel, now)  → 
 **Failure path:** retry with backoff (`status = INGESTED`, `retry.nextAttemptAt` set) until
 `retry-limit`, then terminal `FAILED` with the captured error on the entity.
 
-**Re-index without re-fetch:** because the entity retains `raw` + `fileRef`, re-indexing (new
-chunking config or embedding model) is just `flagNeedsReindex` → the loop runs this path again. No
-source calls. Chunks live **only** in OpenSearch and are always regenerable.
+**Re-index, usually without re-fetch:** because the entity retains `raw` + `fileRef`, re-indexing
+(new chunking config or embedding model) is normally just `flagNeedsReindex` → the loop runs this
+path again, with no source calls. Chunks live **only** in OpenSearch and are always regenerable.
+
+The exception is a `fileRef` that names a staged *copy* rather than the source file. Drive's does,
+under a scratch dir the OS may empty, so `GOOGLE_DRIVE` declares `FETCH_AND_REINDEX` and its content
+is fetched again first — per entity through `SourceConnector.fetchOne`, or knowledge-wide by flagging
+`needsRefetch` and rewinding the cursors so Stage 1 re-materializes it. The caller asks for a
+re-index either way. See [L11](./limitations.md) and `indexing-implementation.md` §5.
+
+**A missing staged file is terminal on sight.** Separately from the ladder above: when `extract`
+finds the `fileRef` gone, the entity is dead-lettered on the first attempt — no backoff brings a
+purged file back — and the same write sets `needsRefetch`, so the next walk that re-lists it repairs
+it rather than leaving it stranded.
 
 ---
 
@@ -276,16 +307,60 @@ Every query filters on `knowledgeId`, so results are scoped to the sources the u
 
 ---
 
+## 4b. Ageing content out (retention)
+
+Nothing above ever removes an entity that the source stopped returning — connectors emit no
+tombstones (see [L2b](./limitations.md#l2b--source-side-deletion-is-only-handled-by-retention)).
+**Retention** is the mechanism that does, for sources that opt in.
+
+Two expiry sources, explicit wins:
+
+| Source | Field | Set by |
+|---|---|---|
+| Source-declared end date | `Entity.expiresAt` | the connector, when the item carries one (Ashby's `closedAt`) |
+| Knowledge-level window | `config.retention.period` | the user, or the connector's `defaultRetention()` |
+
+Resolution is the same three tiers as scheduling — knowledge → connector `defaultRetention()` →
+global `app.retention.default-period` (`RetentionResolver`, mirroring `ScheduleResolver`).
+
+> **Unset at every tier means never expire, and that is the shipped default.** This is the safety
+> property of the whole feature: retention is opt-in, so a Drive or mail corpus cannot silently
+> delete itself. Only the ATS job-board connectors ship a connector-level window.
+
+`RetentionSweeper` runs on `app.retention.poll-interval` and only ever **tombstones**
+(`markDeleted`). Chunk removal is left to the ordinary deletion path — `IndexingJob.processDeletions`
+claims the tombstone under a lease and calls `deleteByEntity`. Three design points behind that:
+
+- **Age is measured from `createdAt`, never `updatedAt`.** `upsert` only writes when the checksum
+  changes, and the skip path calls `stampLastSeen`, which deliberately leaves `updatedAt` alone. An
+  item that has sat unchanged is exactly what retention is for, so a change-based clock would never
+  fire on it.
+- **No Mongo TTL index.** A native `expireAfterSeconds` would drop the document without ever telling
+  OpenSearch, permanently orphaning its chunks, and would bypass lease fencing.
+- **No connector-health gate.** The sweep is absolute. If a feed has not been walked in a week its
+  contents are stale whether or not the walk succeeded, and holding data back because ingestion is
+  broken would keep exactly the material the window exists to remove.
+
+**Re-ingest consequence.** Tombstoning does not remove the Mongo document, so an item that still
+exists upstream is re-created by the next walk's `upsert` — re-parsed, re-chunked and **re-embedded**,
+with a fresh `createdAt`. That is an accepted cost, and it is why a window should be comfortably
+longer than the poll cadence. Anything downstream that asks "is this new?" must not answer from an
+indexing timestamp alone, or a revived item will read as brand new.
+
+---
+
 ## 5. Pause, resume, delete, and manual operations
 
 | Action | Endpoint | Effect |
 |---|---|---|
 | Edit | `PATCH /api/knowledge/{id}` | Update name/schedule (in place) or auth/inputs (re-verify → re-discover → reconcile). See [`knowledge-edit-design.md`](./knowledge-edit-design.md). |
-| Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
+| Pause | `POST /api/knowledge/{id}/pause` | `status = PAUSED`; its claimable cursors are parked (`AVAILABLE/IDLE/RATE_LIMITED → SUSPENDED`) so they can't starve active knowledge in the claim batch. Leased cursors finish and are parked by the ingestion-loop backstop. See limitation [L1](./limitations.md#l1--pauseresume-park-vs-rearm-race). |
 | Resume | `POST /api/knowledge/{id}/resume` | `status = ACTIVE`; parked cursors are re-armed (`SUSPENDED → AVAILABLE`) and get picked up again |
-| Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, finally drop the Knowledge |
+| Delete | `DELETE /api/knowledge/{id}` | `status = DELETED`, then tear down: `SearchIndex.deleteByKnowledge`, `EntityRepository.deleteByKnowledge`, `CursorRepository.deleteByKnowledge`, `DiscoveryStatusRepository.deleteByKnowledge`, finally drop the Knowledge. Not transactional, not resumable, not lease-aware — see [`deletion-flow.md`](./deletion-flow.md) for the known gaps |
 | Trigger sync | `POST /api/index/knowledge/{id}/sync` | Re-arm forward cursors now (`IDLE → AVAILABLE`) |
-| Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs (no re-fetch) |
+| Set a retention window | `PATCH /api/knowledge/{id}` (`retentionPeriod`) | Config-class edit. Changes only what a later sweep removes, never what is ingested. Absent means unchanged; an explicit `null` clears it back to never-expire. |
+| Re-index one entity | `POST /api/index/entities/{id}/reindex` | `flagNeedsReindex` → Stage 2 re-runs. For a `FETCH_AND_REINDEX` connector it first re-fetches the item synchronously (`fetchOne` → `materialize` → `upsert`), so the call can take as long as one download |
+| Re-index a knowledge | `POST /api/index/knowledge/{id}/reindex` | `flagNeedsReindexByKnowledge` → Stage 2 re-runs over the corpus — the survivable way to change embedding model. For a `FETCH_AND_REINDEX` connector it also flags the file-backed entities `needsRefetch` and rewinds the cursors, so Stage 1 refreshes the staged copies first |
 | Delete one entity | `DELETE /api/index/entities/{id}` | `markDeleted` → Stage 2 removes its chunks |
 | Browse entities | `GET /api/knowledge/{id}/entities` | Read-only. Pages the ingested items newest-first with an optional `EntityStatus` filter, returning `EntitySummary` projections. This is how a caller finds the `FAILED` items worth re-indexing, and the only way to enumerate entities at all. |
 | Inspect sync progress | `GET /api/knowledge/{id}/cursors` | Read-only. Per-iterable walk state. `stats` on the knowledge says how many entities exist; only the cursors say whether the *backward* walk is finished (`EXHAUSTED`) or the forward one is merely waiting (`IDLE`). |
@@ -311,7 +386,7 @@ code you write for a new integration is a `SourceConnector` (plus a `SourceType`
 | **Mapping a source record → `RawItem`** | **Source** — inside `grab` |
 | **Which directions are supported** | **Source** — `supportedDirections` |
 | **Whether iterables grow over time** | **Source** — `hasDynamicIterables` (framework reconciles them) |
-| **Per-source rate limiting / 429 backoff** | **Source** — inside `grab` (a connector-level concern) |
+| **Per-source rate limiting / 429 backoff** | **Framework** — `common.ratelimit` + `common.http.OutboundHttp`; the connector only names the bucket its calls belong to |
 | **Detecting deletes (tombstones)** | **Source** — emit `RawItem.tombstone(externalId)` |
 | **Credentials for authenticated sources** | **Framework** — `Connection` + `ConnectionResolver`; the source declares `requiresConnection()` and validates via `verifyConnection` |
 
@@ -381,7 +456,7 @@ RawItem.tombstone(externalId);
 | `title`, `uri` | display + citation locator |
 | `checksum` | change-detection token: re-indexed whenever it changes. Use a content hash, or — when hashing isn't feasible — a `(size, modifiedAt)` / etag / version that **changes when the item is modified** |
 | `modifiedAt` | source-side last-modified, if known |
-| `raw` | the **complete** source payload — retained so re-index never re-fetches |
+| `raw` | the **complete** source payload — retained so a re-index needs no re-fetch (unless the connector declares `FETCH_AND_REINDEX`, i.e. its `fileRef` is a staged copy) |
 | `text` / `fileRef` | inline text for small text items, **or** a local file path for files (bytes stay on disk, never inlined) |
 | `metadata` | normalized facets (`title`, `uri`, `author`, dates, labels…) used for display/filtering |
 | `deleted` | `true` for a tombstone |
@@ -401,8 +476,25 @@ RawItem.tombstone(externalId);
    rule out inlining; the indexing stage reads the file directly.
 7. **Deletes** (forward only): emit `RawItem.tombstone(externalId)` when the source reports an item
    gone; the indexing stage removes its chunks.
-8. **Rate limiting**: enforce the source's request-rate limits and exponential backoff on 429/5xx
-   *inside* `grab`. Permits cap *concurrency*; rate limiting is a connector concern.
+8. **Rate limiting**: do **not** implement this inside `grab`. It moved to the framework — every
+   outbound call goes through `common.http.OutboundHttp`, which charges a bucket before sending and
+   feeds a `429`'s `Retry-After` back into the limiter afterwards. A connector's only job is to say
+   which bucket a call belongs to (`RateLimitPolicies.forConnection` / `.forBoard`), because that is
+   the one thing the transport cannot work out: two accounts share every host and URL. Permits still
+   cap *concurrency*; the limiter caps *rate*, and a call passes through both.
+
+   Being throttled is not a failure. `IngestionRunner` catches `RateLimitedException` separately: the
+   cursor rests `RATE_LIMITED` carrying the reopening instant as `retry.nextAttemptAt`, and the claim
+   filter simply stops excluding it once that passes — no sweeper job flips it back, so the timestamp
+   is the only state and nothing can strand a cursor by dying. Counted against
+   `app.ratelimit.max-deferrals` rather than `app.ingestion.retry-limit`, so a throttled source syncs
+   slowly instead of dead-lettering; since each deferral is now a genuine reopening rather than a
+   30-second tick, that budget is a slow backstop for an unsatisfiable limit. Replaying the page is
+   safe because `grab` is idempotent (rule 4).
+
+   The status is separate from `AVAILABLE` for the user's sake: throttling is the one failure whose
+   fix is usually theirs (raise the account's limit), which it can only be if the console can show it.
+   `POST /api/index/knowledge/{id}/retry-failed` clears a hold early — the only way to shorten one.
 9. **Errors**: throw from `grab` to signal a transient failure — the framework records the retry,
    backs off, and re-arms; past the retry limit the cursor goes `FAILED` (dead-letter).
 10. **Thread-safety**: `grab` can be invoked concurrently for different cursors of the same

@@ -15,6 +15,11 @@ public final class Ids {
     public static final String CURSOR_PREFIX = "cur_";
     public static final String ENTITY_PREFIX = "ent_";
     public static final String DISCOVERY_PREFIX = "dsc_";
+    public static final String DIGEST_PREFIX = "dig_";
+    public static final String DIGEST_RUN_PREFIX = "run_";
+    public static final String TASK_PREFIX = "task_";
+    public static final String CHANNEL_PREFIX = "chn_";
+    public static final String DELIVERY_PREFIX = "dlv_";
 
     private Ids() {
     }
@@ -33,6 +38,31 @@ public final class Ids {
 
     public static String entity() {
         return ENTITY_PREFIX + token();
+    }
+
+    public static String digest() {
+        return DIGEST_PREFIX + token();
+    }
+
+    public static String digestRun() {
+        return DIGEST_RUN_PREFIX + token();
+    }
+
+    /**
+     * User-defined prompt tasks. The prefix is what separates them from the bundled catalogue's
+     * slug-shaped ids ({@code answer}, {@code job-fit}), so a user task can never shadow a built-in
+     * one and {@code TaskLibrary} can route a lookup on the id alone.
+     */
+    public static String task() {
+        return TASK_PREFIX + token();
+    }
+
+    public static String channel() {
+        return CHANNEL_PREFIX + token();
+    }
+
+    public static String delivery() {
+        return DELIVERY_PREFIX + token();
     }
 
     /**

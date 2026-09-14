@@ -13,7 +13,7 @@ config-class edit).
 
 ## 1. Parsing — one best-fit parser per file family
 
-`IndexingRunner.extractText` asks the `ParserRegistry` for a `ContentParser` by MIME type. Selection
+`IndexingRunner.extract` asks the `ParserRegistry` for a `ContentParser` by MIME type. Selection
 is by `priority()` (lower wins), so a **specific** parser is always preferred over the general
 fallback. Previously everything non-plain-text funnelled through a single generic `Tika.parseToString`;
 now each common family has a dedicated parser configured for *that* format, which extracts more
@@ -25,15 +25,48 @@ meaningful text (reading order, notes, stripped markup) than blind sniffing.
 | `PdfContentParser` | `application/pdf` | 10 | PDFBox with sort-by-position (multi-column reading order), duplicate-text suppression, images off (no OCR). |
 | `WordDocumentParser` | `.doc`, `.docx`, `.odt` | 10 | POI with headers/footers, phonetic runs de-duplicated → clean paragraph/heading/table text. |
 | `PresentationParser` | `.ppt`, `.pptx`, `.odp` | 10 | Includes **speaker notes** as well as slide text — often where the substance is. |
-| `SpreadsheetContentParser` | `.xls`, `.xlsx`, `.ods` | 10 | Each sheet's cells emitted row by row under the sheet name. |
+| `SpreadsheetContentParser` | `.xls`, `.xlsx`, `.ods` | 10 | Each sheet's cells emitted row by row (tab-separated) under the sheet name — see the structure note below, which is what makes this true. |
 | `HtmlContentParser` | `text/html`, `application/xhtml+xml` | 10 | Drops `<script>`/`<style>`/markup, keeps visible text in order. |
 | `TikaContentParser` | everything else (fallback) | 100 | Long tail — RTF, EPUB, mail containers, unknown binaries — so extraction never hard-fails. |
 
-All extraction goes through one helper, `TikaSupport`, which runs Tika into a body handler, salvages
-partial text if a document exceeds the 10M-char safety cap, and harvests a little metadata
+All extraction goes through one helper, `TikaSupport`, which runs Tika into a `StructureAwareHandler`,
+caps output at 10M chars (keeping what it has rather than failing), and harvests a little metadata
 (`docTitle`, `docAuthor`, `pageCount`). Scope is **digital text only — no OCR**: scanned PDFs/images
 are out of scope for now and would be added later as a higher-priority OCR `ContentParser` (plus a
 native Tesseract dependency) without touching any caller.
+
+### 1.1 Structure is preserved, not flattened
+
+Tika's parsers emit XHTML — a spreadsheet is `<table><tr><td>cell</td>…`, a PDF page is
+`<div class="page">`, a heading is `<h2>`. `BodyContentHandler`, the obvious handler and the one used
+here originally, wraps `ToTextContentHandler`: it keeps character data and **drops every tag**. A
+spreadsheet therefore arrived as an *undelimited run of cell values* — no newline between rows, no
+separator between cells. `recursive` then found no `\n\n` and no `\n`, fell to the `" "` rung of its
+separator ladder, and hard-windowed at the character limit, cutting mid-row and mid-value.
+
+`StructureAwareHandler` turns those tags back into text and records them:
+
+| Markup | Text | Block |
+|---|---|---|
+| `<tr>` | one line per row | `TABLE_ROW` |
+| first `<tr>` of a table, or any `<th>` | one line | `TABLE_HEADER` |
+| `<td>` / `<th>` | tab-separated within the row | — |
+| `<h1>`–`<h6>` | own line, blank line around | `HEADING` |
+| `<div class="page">` / `="slide">` | blank line | — |
+| `<p>` / `<li>` | own paragraph | `PARAGRAPH` |
+
+The blocks travel on `ParsedContent.blocks` and are what the `table` strategy splits on. A parser with
+no structure to report returns an empty list and nothing downstream changes.
+
+> **The first row of a table is treated as its header even without `<th>`.** POI's Excel path emits
+> `<td>` for header cells, so relying on `<th>` alone would leave every spreadsheet with no header row
+> to repeat.
+
+> **PDFs are the exception, and it matters.** A PDF has no table semantics — a visually tabular page is
+> just positioned text, which PDFBox emits as a sequence of `<p>`. So a PDF yields `PARAGRAPH` blocks
+> and *no* `TABLE_*` blocks, one line per visual row. Rows stop being cut in half (a real gain), but
+> there is no header row to repeat, so the `table` strategy falls back to recursive splitting. For PDFs
+> the remaining win has to come from chunk sizing and from the embedded context prefix, not from here.
 
 > **Note on HTML.** HTML is `text/*` but carries markup, so `PlainTextParser` explicitly *excludes*
 > it and `HtmlContentParser` (higher priority number, but the only non-fallback that claims it) wins.
@@ -59,6 +92,7 @@ every knowledge. Four widely-used strategies ship, each registered as a CDI bean
 | `recursive` | `RecursiveCharacterChunkingStrategy` | characters | Splits on a separator hierarchy (paragraph → line → sentence → clause → word → char), descending only for fragments still over size, then merges with overlap. Keeps semantic units intact — the common RAG default. |
 | `character` | `CharacterChunkingStrategy` | characters | Splits on a single separator (blank line by default), merges to size with overlap; hard-windows any still-oversized fragment as a safety net. |
 | `fixed-size` | `FixedSizeChunkingStrategy` | characters | Blind sliding character window with overlap. Simplest, dependency-free. |
+| `table` | `TableAwareChunkingStrategy` | characters | Splits tabular documents on row boundaries and **repeats the table's header row at the top of every chunk**, so each chunk is independently retrievable and interpretable. No row overlap (the repeated header already provides the redundancy). Widens the window to 2000 chars, since rows are short and dense. Falls back to recursive splitting when the parser reported no table structure. Needs `ParsedContent.blocks` — see §1.1. |
 | `token` | `TokenChunkingStrategy` | tokens | Sizes windows in real tokens (HuggingFace tokenizer, via DJL) so chunks fit the embedding model's context; chunk text stays a verbatim substring. Falls back to a ~4-chars/token approximation if the tokenizer can't load. |
 
 The `recursive`/`character` merge follows the well-known LangChain algorithm, so behaviour matches what
@@ -124,6 +158,8 @@ splitting. `CdiChunkingStrategyRegistry` picks it up; a knowledge selects it by 
 | Key | Default | Meaning |
 |---|---|---|
 | `app.chunking.strategy` | `recursive` | Default strategy for a knowledge that hasn't customised chunking. |
+| `embedContext` / `promptLocator` field sets (`config/field-sets.json`) | `["title"]` / `["headingPath","rowRange","sheet","page"]` | Which chunk metadata is prefixed before embedding, and which locates a source in a grounded prompt. Scoped per connector. Only keys a strategy actually produces are useful: `headingPath` and `rowRange` come from `TableAwareChunkingStrategy`; `sheet`/`page` are reserved and currently emitted by nothing. See [`configuration.md`](./configuration.md) |
+| `app.chunking.mime-aware` | `true` | Let content type choose the strategy when the knowledge has **not** picked one explicitly, via `ChunkingStrategy.prefers(contentType)`. An explicit per-knowledge choice always wins. Without it, selection is keyed purely on a per-knowledge name, so a spreadsheet in a knowledge of mostly prose is chunked as prose. |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size/overlap for `recursive` / `character` / `fixed-size`. |
 | `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size/overlap for the `token` strategy. |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used to measure tokens (lazy, with a fallback). |

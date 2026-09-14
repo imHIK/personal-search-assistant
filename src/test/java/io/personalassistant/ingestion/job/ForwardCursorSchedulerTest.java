@@ -56,7 +56,7 @@ class ForwardCursorSchedulerTest {
     }
 
     private void forwardCursor(String knId, CursorStatus status) {
-        cursors.insertIfAbsent(new Cursor("cur_" + knId + "_F", knId, "root", Map.of(),
+        cursors.insertIfAbsent(new Cursor("cur_" + knId + "_F", knId, "root", "root", Map.of(),
                 CursorDirection.FORWARD, CursorPosition.start(), status, null,
                 Cursor.Retry.zero(), Cursor.Stats.zero(), new Cursor.Scope(TYPE)));
     }
@@ -133,5 +133,19 @@ class ForwardCursorSchedulerTest {
 
         assertEquals(CursorStatus.AVAILABLE, statusOf("due"));
         assertEquals(CursorStatus.IDLE, statusOf("later"), "a not-yet-due sibling is left alone");
+    }
+
+    @Test
+    void aStoredUnparseableCronNeitherWedgesItsKnowledgeNorItsSiblings() {
+        schedule("broken", "every morning", null, true); // saved before cron validation existed
+        schedule("healthy", null, "30m", true);
+        forwardCursor("broken", CursorStatus.IDLE);
+        forwardCursor("healthy", CursorStatus.IDLE);
+
+        scheduler.tick();
+
+        assertEquals(CursorStatus.AVAILABLE, statusOf("healthy"), "a broken sibling must not stop the loop");
+        assertNotNull(knowledge.findById("broken").orElseThrow().nextSyncDueAt(),
+                "the broken one still gets a due time, so it is not retried on every tick");
     }
 }

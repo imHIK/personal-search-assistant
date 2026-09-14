@@ -5,6 +5,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.gt;
 import static com.mongodb.client.model.Filters.in;
 import static com.mongodb.client.model.Filters.lt;
+import static com.mongodb.client.model.Filters.lte;
 import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Sorts.ascending;
@@ -26,6 +27,7 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -82,12 +84,15 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     @Override
-    public List<Cursor> findClaimable(int limit) {
+    public List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit) {
         List<Cursor> out = new ArrayList<>();
+        if (knowledgeIds.isEmpty()) {
+            return out;
+        }
         // Fairness: least-recently-run first. Never-run cursors (null lastRunAt) sort first in
         // Mongo ascending order, so fresh work is picked up promptly and no active knowledge can
         // monopolise the bounded batch.
-        collection().find(claimableFilter(Instant.now()))
+        collection().find(and(in("knowledgeId", knowledgeIds), claimableFilter(Instant.now())))
                 .sort(ascending("stats.lastRunAt"))
                 .limit(limit)
                 .forEach(d -> out.add(fromDoc(d)));
@@ -128,17 +133,28 @@ public class MongoCursorRepository implements CursorRepository {
     public boolean release(String cursorId, String owner, CursorStatus restingStatus) {
         var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
+                // Success ends the streak: retry.count is CONSECUTIVE failures, not lifetime ones.
+                // release() is the right seam because every successful resting reaches it (IDLE and
+                // EXHAUSTED when drained, AVAILABLE when the batch cap hit with pages left), while
+                // recordFailure() is the only failure path. Deliberately NOT reset in
+                // advancePosition(): that would zero the streak mid-lease, so a page-2 failure would
+                // record 1 instead of continuing the run's streak — and it would add a write to the
+                // hot per-page path.
+                Updates.set("retry", zeroRetry()),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
     }
 
     @Override
     public boolean recordFailure(String cursorId, String owner, CursorStatus restingStatus, int retryCount,
-                                 String lastError) {
+                                 String lastError, Instant nextAttemptAt) {
         var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
                 Updates.set("retry.count", retryCount),
                 Updates.set("retry.lastError", lastError),
+                // Always written, never merely left in place: a stale instant from an earlier hold
+                // would otherwise keep excluding a cursor that is resting AVAILABLE.
+                Updates.set("retry.nextAttemptAt", BsonSupport.date(nextAttemptAt)),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
     }
@@ -167,7 +183,10 @@ public class MongoCursorRepository implements CursorRepository {
     public int suspendByKnowledge(String knowledgeId) {
         var result = collection().updateMany(
                 and(eq("knowledgeId", knowledgeId),
-                        in("status", CursorStatus.AVAILABLE.name(), CursorStatus.IDLE.name())),
+                        // RATE_LIMITED too: its hold elapses on its own, so a cursor left in it
+                        // would rejoin the claim batch while the knowledge is paused.
+                        in("status", CursorStatus.AVAILABLE.name(), CursorStatus.IDLE.name(),
+                                CursorStatus.RATE_LIMITED.name())),
                 Updates.set("status", CursorStatus.SUSPENDED.name()));
         return (int) result.getModifiedCount();
     }
@@ -178,6 +197,21 @@ public class MongoCursorRepository implements CursorRepository {
                 and(eq("knowledgeId", knowledgeId),
                         eq("status", CursorStatus.SUSPENDED.name())),
                 Updates.set("status", CursorStatus.AVAILABLE.name()));
+        return (int) result.getModifiedCount();
+    }
+
+    @Override
+    public int retryFailedByKnowledge(String knowledgeId) {
+        // No lease fence needed: recordFailure already unset the lease on its way to FAILED.
+        // RATE_LIMITED is included so this doubles as "I raised the quota, run now" — zeroRetry()
+        // clears the hold along with the streak.
+        var result = collection().updateMany(
+                and(eq("knowledgeId", knowledgeId),
+                        in("status", CursorStatus.FAILED.name(), CursorStatus.RATE_LIMITED.name())),
+                Updates.combine(
+                        Updates.set("status", CursorStatus.AVAILABLE.name()),
+                        Updates.set("retry", zeroRetry()),
+                        Updates.unset("lease")));
         return (int) result.getModifiedCount();
     }
 
@@ -200,9 +234,14 @@ public class MongoCursorRepository implements CursorRepository {
                         Updates.set("status", CursorStatus.AVAILABLE.name()),
                         Updates.set("attributes", BsonSupport.toBsonMap(attributes)),
                         Updates.set("position", new Document()),
-                        Updates.set("retry", new Document("count", 0)),
+                        Updates.set("retry", zeroRetry()),
                         Updates.unset("lease")));
         return result.getModifiedCount() > 0;
+    }
+
+    @Override
+    public void rename(String cursorId, String iterableName) {
+        collection().updateOne(eq("_id", cursorId), Updates.set("iterableName", iterableName));
     }
 
     @Override
@@ -213,7 +252,7 @@ public class MongoCursorRepository implements CursorRepository {
                 Updates.combine(
                         Updates.set("status", CursorStatus.AVAILABLE.name()),
                         Updates.set("position", new Document()),
-                        Updates.set("retry", new Document("count", 0).append("lastError", null)),
+                        Updates.set("retry", zeroRetry()),
                         Updates.unset("lease")));
         return result.getModifiedCount() > 0;
     }
@@ -223,12 +262,32 @@ public class MongoCursorRepository implements CursorRepository {
         collection().deleteMany(eq("knowledgeId", knowledgeId));
     }
 
-    /** Claimable = {@code AVAILABLE}, or {@code IN_PROGRESS} whose lease has expired (crash recovery). */
+    /**
+     * Claimable = {@code AVAILABLE}, a {@code RATE_LIMITED} cursor whose hold has elapsed, or an
+     * {@code IN_PROGRESS} one whose lease has expired (crash recovery).
+     *
+     * <p>This clause is what makes the rate-limit hold work: no sweeper job flips the status back,
+     * the persisted instant simply stops excluding the cursor, so the timestamp is the single source
+     * of truth and nothing can strand a cursor by dying.
+     *
+     * <p>Note the deliberate asymmetry with {@code MongoEntityRepository.indexingFilter}, which reads
+     * a null {@code nextAttemptAt} as "no backoff, claim it". Here a missing instant matches nothing,
+     * so a {@code RATE_LIMITED} row without one stays out of the batch instead of being re-picked
+     * every tick — which is why {@link #recordFailure} must never write that combination.
+     */
     private static Bson claimableFilter(Instant now) {
         return or(
                 eq("status", CursorStatus.AVAILABLE.name()),
+                and(eq("status", CursorStatus.RATE_LIMITED.name()),
+                        lte("retry.nextAttemptAt", BsonSupport.date(now))),
                 and(eq("status", CursorStatus.IN_PROGRESS.name()),
                         lt("lease.expiresAt", BsonSupport.date(now))));
+    }
+
+    /** A cleared retry block. Mirrors {@code MongoEntityRepository.zeroRetry()} — every field, so a
+     * reset can never leave a stale rate-limit hold behind. */
+    private static Document zeroRetry() {
+        return new Document("count", 0).append("lastError", null).append("nextAttemptAt", null);
     }
 
     // ---- mapping -----------------------------------------------------------------------------
@@ -239,13 +298,15 @@ public class MongoCursorRepository implements CursorRepository {
         return new Document("_id", c.id())
                 .append("knowledgeId", c.knowledgeId())
                 .append("iterableId", c.iterableId())
+                .append("iterableName", c.iterableName())
                 .append("attributes", BsonSupport.toBsonMap(c.attributes()))
                 .append("direction", BsonSupport.enumName(c.direction()))
                 .append("position", c.position() == null ? null : BsonSupport.toBsonMap(c.position().values()))
                 .append("status", BsonSupport.enumName(c.status()))
                 .append("lease", lease)
                 .append("retry", new Document("count", c.retry().count())
-                        .append("lastError", c.retry().lastError()))
+                        .append("lastError", c.retry().lastError())
+                        .append("nextAttemptAt", BsonSupport.date(c.retry().nextAttemptAt())))
                 .append("stats", new Document("lastRunAt", BsonSupport.date(c.stats().lastRunAt()))
                         .append("fetched", c.stats().fetched()))
                 .append("scope", new Document("connectorType", BsonSupport.enumName(c.scope().connectorType())));
@@ -260,6 +321,7 @@ public class MongoCursorRepository implements CursorRepository {
                 d.getString("_id"),
                 d.getString("knowledgeId"),
                 d.getString("iterableId"),
+                d.getString("iterableName"),
                 BsonSupport.toPlainMap(d.get("attributes")),
                 BsonSupport.enumOf(CursorDirection.class, d.get("direction")),
                 CursorPosition.of(BsonSupport.toPlainMap(d.get("position"))),
@@ -267,7 +329,8 @@ public class MongoCursorRepository implements CursorRepository {
                 lease == null ? null : new Cursor.Lease(lease.getString("owner"),
                         BsonSupport.instant(lease.get("expiresAt"))),
                 new Cursor.Retry(retry == null ? 0 : intValue(retry.get("count")),
-                        retry == null ? null : retry.getString("lastError")),
+                        retry == null ? null : retry.getString("lastError"),
+                        retry == null ? null : BsonSupport.instant(retry.get("nextAttemptAt"))),
                 new Cursor.Stats(stats == null ? null : BsonSupport.instant(stats.get("lastRunAt")),
                         stats == null ? 0 : longValue(stats.get("fetched"))),
                 new Cursor.Scope(scope == null ? null
