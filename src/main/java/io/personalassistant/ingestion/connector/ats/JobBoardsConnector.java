@@ -66,6 +66,17 @@ public class JobBoardsConnector implements SourceConnector {
     public static final String COMPANIES_INPUT = "companies";
 
     /**
+     * {@code inputs} key holding display names, keyed by the {@link #COMPANIES_INPUT} entry exactly as
+     * written ({@code "hcbt.fa.em2.oraclecloud.com/CX" -> "Kotak Mahindra Bank"}). Optional per entry.
+     *
+     * <p>A map beside the list rather than a name folded into each entry, because an entry is an
+     * iterable id: renaming a company must not change which iterable it is, reset its cursor, or stop
+     * the console's catalog recognising the stored value. For the same reason it is left out of
+     * {@link #membershipSignature} — a name decides how a posting is filed, not whether it belongs.
+     */
+    public static final String COMPANY_LABELS_INPUT = "companyLabels";
+
+    /**
      * {@code inputs} key holding location match terms. Empty or absent keeps every posting.
      *
      * <p>The highest-leverage setting here. A board is global: Databricks carries 857 postings to
@@ -156,7 +167,8 @@ public class JobBoardsConnector implements SourceConnector {
      *
      * <p>{@code companies} is deliberately excluded: each company is its own iterable, so adding or
      * removing one is a discovery-set change handled by discover-reconcile, and including it would
-     * reset every surviving company's cursor on an unrelated edit.
+     * reset every surviving company's cursor on an unrelated edit. {@code companyLabels} is excluded
+     * too: a name changes how a posting is filed, which the checksum picks up, not which postings belong.
      *
      * <p>{@code locations} is the opposite case — it moves the membership boundary <em>inside</em> each
      * iterable, exactly like {@code GmailConnector}'s query. It must be in the signature: widening the
@@ -228,7 +240,9 @@ public class JobBoardsConnector implements SourceConnector {
         // this line is what actually bounds the cost of a knowledge.
         BoardFilter filter = filter(context.knowledge());
         List<RawItem> items = retainMatching(
-                resolved.platform().fetch(resolved.handle(), filter), filter);
+                resolved.platform().fetch(resolved.handle(),
+                        label(context.knowledge(), context.iterableId()), filter),
+                filter);
 
         CursorPosition position = context.cursor().toBuilder()
                 .put(POS_SNAPSHOT_AT, Instant.now().toEpochMilli())
@@ -360,6 +374,18 @@ public class JobBoardsConnector implements SourceConnector {
     /** The configured companies, de-duplicated and order-preserving. Accepts a list or a single string. */
     protected static List<String> companies(Knowledge knowledge) {
         return stringList(knowledge == null ? null : knowledge.inputs(), COMPANIES_INPUT, false);
+    }
+
+    /** The user's name for one {@link #COMPANIES_INPUT} entry, or null when none was given. */
+    // Package-private for tests.
+    static String label(Knowledge knowledge, String company) {
+        Object labels = knowledge == null || knowledge.inputs() == null
+                ? null : knowledge.inputs().get(COMPANY_LABELS_INPUT);
+        if (!(labels instanceof Map<?, ?> map) || company == null) {
+            return null;
+        }
+        Object label = map.get(company);
+        return label instanceof String s && !s.isBlank() ? s.trim() : null;
     }
 
     /** The configured location terms, lowercased for matching. Empty means "keep everything". */

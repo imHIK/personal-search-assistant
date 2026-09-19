@@ -1,6 +1,7 @@
 package io.personalassistant.storage.repository;
 
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import java.time.Duration;
@@ -185,9 +186,16 @@ public interface EntityRepository {
      * deterministic. Note {@link #stampLastSeen} deliberately leaves {@code updatedAt} alone, so a
      * membership re-walk does not reshuffle the listing.
      *
-     * @param status optional status filter; {@code null} means all statuses
+     * @param query which entities to return — see {@link EntityQuery}, including its
+     *              {@code DELETED}-is-hidden rule
      */
-    List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset);
+    List<EntitySummary> findByKnowledge(String knowledgeId, EntityQuery query, int limit, int offset);
+
+    /**
+     * How many entities match {@code query}, so the console can render page controls. Must apply
+     * exactly the filter {@link #findByKnowledge} applies, or the last page renders empty.
+     */
+    long countByKnowledge(String knowledgeId, EntityQuery query);
 
     long countByKnowledgeAndStatus(String knowledgeId, EntityStatus status);
 

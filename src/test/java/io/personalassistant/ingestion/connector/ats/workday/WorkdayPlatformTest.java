@@ -107,6 +107,18 @@ class WorkdayPlatformTest {
     }
 
     @Test
+    void aLabelNamesTheCompanyInsteadOfTheTenant() {
+        // Tenants are not names (Bank of America's is "ghr"), and hiringOrganization is a legal
+        // entity with a tax id in front, so the user's label is the only usable name.
+        RawItem item = new WorkdayPlatform(board())
+                .fetch(SITE, "Acme Corp", BoardFilter.ofLocations(List.of("india"))).get(0);
+
+        Assertions.assertEquals("Acme Corp", item.metadata().get("company"));
+        Assertions.assertEquals("acme-corp|backend-engineer|bengaluru-india", item.metadata().get("dedupeKey"));
+        Assertions.assertNotEquals(fetch(board(), List.of("india")).get(0).checksum(), item.checksum());
+    }
+
+    @Test
     void mapsAPostingIntoNormalisedMetadata() {
         RawItem item = fetch(board(), List.of("india")).get(0);
 

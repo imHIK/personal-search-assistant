@@ -1,15 +1,12 @@
 package io.personalassistant.common.ratelimit;
 
+import io.personalassistant.common.ProviderImpl;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * In-memory {@link RateLimiter}: one rolling window per (key, rule), plus a per-key pause honouring a
@@ -32,17 +29,14 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * in usable batches rather than in single permits too small to finish one entity, at the cost of a
  * lumpier {@code retryAt} — which is exactly what the callers persist and resume from.
  *
- * <p>Sleeping happens outside the lock and the ceilings are re-checked afterwards, because between
- * waking and re-acquiring another thread may have taken the slot that was waited for.
- *
- * <p>Single-node only, the same accepted limitation as permits: the windows are lost on restart, so a
- * restart can admit one extra burst. Swap in a Redis-backed implementation for multi-node — the
- * {@link RateLimiter} contract is unchanged.
+ * <p><strong>Not the shipped store.</strong> The windows die with the JVM, so every restart — and every
+ * {@code quarkusDev} live reload — starts a long window empty while the provider's own count carries on.
+ * Selected by {@code app.ratelimit.store=memory}, for tests and a setup without Redis;
+ * {@link RedisRateLimiter} is the same semantics with counters that outlive the process.
  */
 @ApplicationScoped
-public class SlidingWindowRateLimiter implements RateLimiter {
-
-    private static final Logger LOG = Logger.getLogger(SlidingWindowRateLimiter.class.getName());
+@ProviderImpl
+public class SlidingWindowRateLimiter extends AbstractRateLimiter {
 
     /** Window count past which idle entries are swept, so deleted accounts don't accumulate. */
     private static final int PURGE_THRESHOLD = 256;
@@ -56,114 +50,36 @@ public class SlidingWindowRateLimiter implements RateLimiter {
 
     private final Object lock = new Object();
 
-    @ConfigProperty(name = "app.ratelimit.max-wait-seconds", defaultValue = "60")
-    long maxWaitSeconds;
-
-    @ConfigProperty(name = "app.ratelimit.max-penalty-seconds", defaultValue = "21600")
-    long maxPenaltySeconds;
-
-    /** Package-private seams so tests drive time deterministically instead of sleeping. */
-    Clock clock = Clock.systemUTC();
-
-    Waiter waiter = duration -> Thread.sleep(Math.max(1L, duration.toMillis()));
-
-    /** How a caller is made to wait; separated only so tests can advance a fake clock instead. */
-    @FunctionalInterface
-    interface Waiter {
-        void await(Duration duration) throws InterruptedException;
-    }
-
     @Override
-    public void acquire(RateLimit limit) {
-        if (limit == null) {
-            return;
-        }
-        Duration budget = Duration.ofSeconds(maxWaitSeconds);
-        Duration waited = Duration.ZERO;
-        while (true) {
-            Instant now = clock.instant();
-            Duration waitFor;
-            synchronized (lock) {
-                waitFor = reserve(limit, now);
+    Duration reserve(RateLimit limit, Instant now) {
+        synchronized (lock) {
+            Duration wait = penaltyRemaining(limit.key(), now);
+            if (limit.policy().isUnlimited()) {
+                return wait;
             }
-            if (waitFor.isZero()) {
-                return;
-            }
-            Instant retryAt = now.plus(waitFor);
-            if (limit.mode() == RateLimitMode.FAIL_FAST) {
-                throw new RateLimitedException(limit.key(), retryAt);
-            }
-            Duration remaining = budget.minus(waited);
-            if (waitFor.compareTo(remaining) > 0) {
-                // Longer than a scheduler thread should be held. Hand the caller the reopening instant
-                // so it can defer the work durably rather than sleeping through a daily quota.
-                LOG.log(Level.FINE, () -> "Deferring " + limit.key() + " until " + retryAt
-                        + " (wait " + waitFor + " exceeds " + budget + ")");
-                throw new RateLimitedException(limit.key(), retryAt);
-            }
-            LOG.log(Level.FINE, () -> "Waiting " + waitFor + " for " + limit.key());
-            try {
-                waiter.await(waitFor);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RateLimitedException(limit.key(), retryAt);
-            }
-            waited = waited.plus(waitFor);
-        }
-    }
-
-    /**
-     * <p>The value is clamped to {@code app.ratelimit.max-penalty-seconds}. {@code Retry-After} is
-     * remote input — delta-seconds and HTTP-dates are confused for each other in the wild, and this
-     * instant is load-bearing now that a rate-limited cursor is held until it passes. The clamp lives
-     * here rather than in a caller so one bound covers the in-process pause, cursors and entities; if
-     * the server really did mean longer, the next call simply earns another 429 and another pause.
-     */
-    @Override
-    public void penalize(RateLimitKey key, Instant until) {
-        if (key == null || until == null) {
-            return;
-        }
-        Instant capped = clock.instant().plusSeconds(maxPenaltySeconds);
-        Instant pauseUntil = until.isAfter(capped) ? capped : until;
-        // Keep the furthest-out instant: two concurrent 429s must not shorten each other's backoff.
-        penalties.merge(key.value(), pauseUntil, (a, b) -> a.isAfter(b) ? a : b);
-        LOG.log(Level.WARNING, () -> "Rate limited by the server on " + key
-                + "; pausing until " + pauseUntil);
-    }
-
-    /**
-     * Either records one admission in every window and returns {@link Duration#ZERO}, or records nothing
-     * and returns how long the caller must wait.
-     *
-     * <p><strong>Acquisition is all-or-nothing across rules.</strong> A call that could pay the
-     * per-second ceiling but not the daily one spends nothing, so it cannot deplete the short window
-     * while stalled on the long one. Called under {@link #lock}.
-     */
-    private Duration reserve(RateLimit limit, Instant now) {
-        Duration wait = penaltyRemaining(limit.key(), now);
-        // An unlimited policy still respects a penalty: the server's own answer about its capacity
-        // outranks our absent guess about it.
-        if (limit.policy().isUnlimited()) {
-            return wait;
-        }
-        for (RateLimitRule rule : limit.policy().rules()) {
-            Window window = windowFor(limit.key(), rule, now);
-            window.evictExpired(rule, now);
-            if (window.isFull()) {
-                Duration need = window.timeToFreeSlot(rule, now);
-                if (need.compareTo(wait) > 0) {
-                    wait = need;
+            for (RateLimitRule rule : limit.policy().rules()) {
+                Window window = windowFor(limit.key(), rule, now);
+                window.evictExpired(rule, now);
+                if (window.isFull()) {
+                    Duration need = window.timeToFreeSlot(rule, now);
+                    if (need.compareTo(wait) > 0) {
+                        wait = need;
+                    }
                 }
             }
+            if (!wait.isZero()) {
+                return wait;
+            }
+            for (RateLimitRule rule : limit.policy().rules()) {
+                windowFor(limit.key(), rule, now).record(now);
+            }
+            return Duration.ZERO;
         }
-        if (!wait.isZero()) {
-            return wait;
-        }
-        for (RateLimitRule rule : limit.policy().rules()) {
-            windowFor(limit.key(), rule, now).record(now);
-        }
-        return Duration.ZERO;
+    }
+
+    @Override
+    void storePenalty(RateLimitKey key, Instant until) {
+        penalties.merge(key.value(), until, (a, b) -> a.isAfter(b) ? a : b);
     }
 
     private Duration penaltyRemaining(RateLimitKey key, Instant now) {

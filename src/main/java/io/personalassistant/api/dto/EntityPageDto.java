@@ -23,6 +23,8 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
      * {@code IndexInfo} is flattened so a table binds straight to the fields.
      *
      * @param id             internal entity id
+     * @param iterableId     the group it was walked from; the console names it by joining with the
+     *                       knowledge's cursors, so a renamed group never shows a stale copy here
      * @param externalId     natural key within the source (path, message id…)
      * @param entityType     coarse classification (FILE / MESSAGE / …)
      * @param status         indexing lifecycle state
@@ -43,6 +45,7 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
      */
     public record Item(
             String id,
+            String iterableId,
             String externalId,
             String entityType,
             String status,
@@ -67,6 +70,7 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
         var index = e.index();
         return new Item(
                 e.id(),
+                e.iterableId(),
                 e.externalId(),
                 e.entityType() == null ? null : e.entityType().name(),
                 e.status() == null ? null : e.status().name(),

@@ -1,6 +1,7 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.storage.repository.EntityRepository;
@@ -230,10 +231,10 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
-    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset) {
+    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityQuery query, int limit, int offset) {
         // Mirrors the Mongo adapter's ordering exactly: updatedAt descending, id ascending as tiebreak.
         return store.values().stream()
-                .filter(e -> e.knowledgeId().equals(knowledgeId) && (status == null || e.status() == status))
+                .filter(e -> matchesListing(e, knowledgeId, query))
                 .sorted(Comparator.comparing(Entity::updatedAt).reversed().thenComparing(Entity::id))
                 .skip(offset)
                 .limit(limit)
@@ -241,8 +242,37 @@ public class InMemoryEntityRepository implements EntityRepository {
                 .toList();
     }
 
+    @Override
+    public long countByKnowledge(String knowledgeId, EntityQuery query) {
+        return store.values().stream().filter(e -> matchesListing(e, knowledgeId, query)).count();
+    }
+
+    /** Mirrors {@code MongoEntityRepository.listingFilter}, including its DELETED-is-hidden default. */
+    private static boolean matchesListing(Entity e, String knowledgeId, EntityQuery query) {
+        if (!e.knowledgeId().equals(knowledgeId)) {
+            return false;
+        }
+        if (query.hasStatusFilter() ? !query.statuses().contains(e.status())
+                : e.status() == EntityStatus.DELETED) {
+            return false;
+        }
+        if (query.hasIterableFilter() && !query.iterableIds().contains(e.iterableId())) {
+            return false;
+        }
+        if (!query.hasTextFilter()) {
+            return true;
+        }
+        String needle = query.titleContains().toLowerCase();
+        return contains(e.title(), needle) || contains(e.externalId(), needle);
+    }
+
+    private static boolean contains(String value, String lowercaseNeedle) {
+        return value != null && value.toLowerCase().contains(lowercaseNeedle);
+    }
+
     private static EntitySummary toSummary(Entity e) {
-        return new EntitySummary(e.id(), e.knowledgeId(), e.externalId(), e.entityType(), e.status(),
+        return new EntitySummary(e.id(), e.knowledgeId(), e.iterableId(), e.externalId(), e.entityType(),
+                e.status(),
                 e.title(), e.uri(), e.checksum(),
                 e.index() == null ? Entity.IndexInfo.empty() : e.index(),
                 e.retry() == null ? 0 : e.retry().count(),

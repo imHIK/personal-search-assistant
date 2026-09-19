@@ -35,8 +35,9 @@ import {
 export const keys = {
   knowledge: ['knowledge'] as const,
   knowledgeOne: (id: string) => ['knowledge', id] as const,
-  entities: (id: string, status: EntityStatus | null, offset: number, limit: number) =>
-    ['knowledge', id, 'entities', status ?? 'all', offset, limit] as const,
+  /** `filters` is the whole values map, so a new filter needs no change here. */
+  entities: (id: string, filters: Record<string, string>, offset: number, limit: number) =>
+    ['knowledge', id, 'entities', filters, offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
   digests: ['digests'] as const,
   digestOne: (id: string) => ['digests', id] as const,
@@ -133,13 +134,20 @@ export function useKnowledge(id: string | undefined) {
 
 export function useEntities(
   id: string | undefined,
-  status: EntityStatus | null,
+  filters: Record<string, string>,
   offset: number,
   limit: number,
 ) {
   return useQuery({
-    queryKey: keys.entities(id!, status, offset, limit),
-    queryFn: () => knowledgeApi.entities(id!, { status, offset, limit }),
+    queryKey: keys.entities(id!, filters, offset, limit),
+    queryFn: () =>
+      knowledgeApi.entities(id!, {
+        status: filters.status ? (filters.status.split(',') as EntityStatus[]) : null,
+        q: filters.q || null,
+        iterableId: filters.group || null,
+        offset,
+        limit,
+      }),
     enabled: Boolean(id),
     placeholderData: (previous) => previous, // keeps the table steady while paging
     refetchInterval: (q) => {

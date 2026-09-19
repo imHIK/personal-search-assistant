@@ -82,7 +82,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String handle, BoardFilter filter) {
+    public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
         List<RawItem> items = new ArrayList<>();
         int offset = 0;
         for (int page = 0; page < MAX_PAGES; page++) {
@@ -100,7 +100,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
                         || !AtsNormalization.matchesLocation(location(summary), filter.locations())) {
                     continue;
                 }
-                RawItem item = toItem(handle, summary);
+                RawItem item = toItem(handle, company, summary);
                 if (item != null) {
                     items.add(item);
                 }
@@ -114,7 +114,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
     }
 
     /** Fetch a posting in full and map it; null when it cannot be read or is unusable. */
-    private RawItem toItem(String company, JsonNode summary) {
+    private RawItem toItem(String company, String label, JsonNode summary) {
         String id = summary.path("id").asText(null);
         String title = summary.path("name").asText(null);
         if (id == null || title == null) {
@@ -136,7 +136,9 @@ public class SmartRecruitersPlatform implements BoardPlatform {
         String location = location(summary);
         String applyUrl = firstNonBlank(detail.path("applyUrl").asText(null),
                 detail.path("postingUrl").asText(null));
-        String companyName = firstNonBlank(detail.path("company").path("name").asText(null), company);
+        // The board's own name outranks the label, which only replaces the bare handle.
+        String stated = detail.path("company").path("name").asText(null);
+        String companyName = firstNonBlank(stated, AtsNormalization.company(label, company));
         String content = sections(detail);
         String descriptionText = AtsNormalization.plainText(content);
         String releasedDate = summary.path("releasedDate").asText("");
@@ -178,7 +180,9 @@ public class SmartRecruitersPlatform implements BoardPlatform {
                 // Like Lever, SmartRecruiters exposes no update timestamp — releasedDate is when the
                 // posting first went live and does not move on an edit. Hashing the body is the only
                 // signal available, or an edited posting would be skipped forever (invariant 3).
-                "sr:" + id + ";rel:" + releasedDate + ";body:" + content.hashCode(),
+                AtsNormalization.withCompany(
+                        "sr:" + id + ";rel:" + releasedDate + ";body:" + content.hashCode(),
+                        companyName, firstNonBlank(stated, company)),
                 AtsNormalization.instantOrNull(releasedDate),
                 raw,
                 content,

@@ -14,6 +14,8 @@ import java.time.Instant;
  *
  * @param id           internal id, e.g. {@code "ent_..."}
  * @param knowledgeId  owning knowledge
+ * @param iterableId   the group (folder, label, company) it was walked from — how the console says
+ *                     where an item came from, by joining with that knowledge's cursors
  * @param externalId   natural key within the source (path, message id…)
  * @param entityType   coarse classification (FILE / MESSAGE / …)
  * @param status       indexing lifecycle state
@@ -32,6 +34,7 @@ import java.time.Instant;
 public record EntitySummary(
         String id,
         String knowledgeId,
+        String iterableId,
         String externalId,
         EntityType entityType,
         EntityStatus status,

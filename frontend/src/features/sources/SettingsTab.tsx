@@ -9,12 +9,13 @@ import { Field, Input } from '@/components/ui/Input'
 import { ErrorState } from '@/components/ui/States'
 import { Toggle } from '@/components/ui/Toggle'
 import { connectorFor } from '@/config/connectors'
-import { schedulePresetFor } from '@/config/constants'
+import { normalizeDuration, schedulePresetFor } from '@/config/constants'
 import { features } from '@/config/features'
 import { initialValues } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { usePatchKnowledge } from '@/hooks/queries'
 import { ChunkingFields } from './ChunkingFields'
+import { RetentionField } from './RetentionField'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
 
 /**
@@ -50,6 +51,10 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
     initialValues(descriptor.inputFields, knowledge.inputs as Record<string, unknown>),
   )
   const [backfill, setBackfill] = useState(knowledge.config.backfill.enabled)
+  // Normalised so a window stored in ISO-8601 (`P14D`) still shows as an amount and a unit.
+  const [retention, setRetention] = useState(() =>
+    normalizeDuration(knowledge.config.retention.period),
+  )
 
   const save = (body: PatchKnowledgeBody, message: string) =>
     patch.mutate(body, {
@@ -169,6 +174,31 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
         </CardBody>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>{labels.settings.retention}</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <RetentionField
+            value={retention}
+            onChange={setRetention}
+            inherited={descriptor.defaultRetention}
+          />
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              size="sm"
+              loading={patch.isPending}
+              // An empty window sends an explicit null, which this endpoint reads as "clear back to
+              // inherit" — unlike cron/interval, which it can only set.
+              onClick={() => save({ retentionPeriod: retention || null }, labels.settings.saved)}
+            >
+              {labels.settings.save}
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+
       {descriptor.inputFields.length > 0 && (
         <Card className="border-[var(--tone-wait)]/40">
           <CardHeader>
@@ -201,7 +231,12 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
                 loading={patch.isPending}
                 onClick={() =>
                   save(
-                    { inputs, backfillEnabled: backfill },
+                    {
+                      inputs: descriptor.deriveInputs
+                        ? descriptor.deriveInputs(inputs, knowledge.inputs as Record<string, unknown>)
+                        : inputs,
+                      backfillEnabled: backfill,
+                    },
                     'Rechecking the source — this may take a moment',
                   )
                 }

@@ -14,7 +14,7 @@ One connector, one prompt, and one row of config. That is the whole of it:
 | The daily digest itself | one row in `digests` | Data, not code |
 | Ageing closed postings out | retention — [`knowledge-lifecycle.md`](./knowledge-lifecycle.md) §4b | Generic |
 | Filtering by company / remote / pay / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
-| One result per posting | `maxChunksPerEntity` | Generic |
+| One result per posting | results are one per entity on every search — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | Collapsing the same role from two boards | duplicate collapsing | Generic |
 | Ranking postings against a CV | document-as-query | Generic |
 | Scoring the shortlist and delivering it | [`digests.md`](./digests.md) | Generic |

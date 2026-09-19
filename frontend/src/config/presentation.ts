@@ -8,7 +8,6 @@ import type {
   Delivery,
   DeliveryStatus,
   EntityItem,
-  EntityStatus,
   Knowledge,
 } from '@/api/types'
 import { relativeTime } from '@/lib/utils'
@@ -111,19 +110,30 @@ export function presentSource(knowledge: Knowledge, cursors?: CursorInfo[]): Pre
 
 // ---- Item (Entity) state --------------------------------------------------------------------
 
-/** `DELETED` is absent on purpose: removed items are not listed rather than shown as a state. */
-export type ItemState = 'searchable' | 'processing' | 'failed'
+/**
+ * `DELETED` is absent on purpose: the API's listing hides tombstoned entities unless a filter names
+ * that status, so there is no state to show for one.
+ *
+ * A retry is not a state here either. An item that failed once and is waiting to be tried again is
+ * genuinely queued, and the red warning icon the row already renders beside the badge is what says
+ * something went wrong — two signals for one fact, rather than a "retrying" badge competing with it.
+ */
+export type ItemState = 'queued' | 'indexing' | 'indexed' | 'failed'
 
 const itemStates: Record<ItemState, Presented> = {
-  searchable: { label: 'Searchable', tone: 'ok', hint: 'Indexed and returned in results' },
-  processing: { label: 'Processing', tone: 'busy', hint: 'Waiting to be read and indexed' },
-  failed: { label: "Couldn't process", tone: 'alert', hint: 'This item could not be read' },
+  queued: { label: 'Queued', tone: 'busy', hint: 'Waiting to be read and indexed' },
+  indexing: { label: 'Indexing', tone: 'busy', hint: 'Being read and indexed right now' },
+  indexed: { label: 'Indexed', tone: 'ok', hint: 'Indexed and returned in results' },
+  failed: { label: 'Failed', tone: 'alert', hint: 'This item could not be read' },
 }
 
 export function itemState(item: Pick<EntityItem, 'status' | 'needsReindex'>): ItemState {
   if (item.status === 'FAILED') return 'failed'
-  if (item.status === 'INDEXED') return item.needsReindex ? 'processing' : 'searchable'
-  return 'processing'
+  if (item.status === 'INDEXING') return 'indexing'
+  // A re-index is queued work against content that is still searchable in its previous form, so it
+  // reads as queued rather than keeping an "indexed" badge that is about to stop being true.
+  if (item.status === 'INDEXED') return item.needsReindex ? 'queued' : 'indexed'
+  return 'queued'
 }
 
 export function presentItem(item: Pick<EntityItem, 'status' | 'needsReindex'>): Presented {
@@ -131,37 +141,29 @@ export function presentItem(item: Pick<EntityItem, 'status' | 'needsReindex'>): 
   return { ...itemStates[state], raw: item.status ?? undefined }
 }
 
-/** Maps the UI's filter tabs onto the `status` query param the API actually accepts. */
-export const itemFilters: { id: string; label: string; status: EntityStatus | null }[] = [
-  { id: 'all', label: 'All', status: null },
-  { id: 'searchable', label: 'Searchable', status: 'INDEXED' },
-  { id: 'processing', label: 'Processing', status: 'INGESTED' },
-  { id: 'failed', label: "Couldn't process", status: 'FAILED' },
-]
-
-// ---- Sync activity (Cursor) -----------------------------------------------------------------
+// ---- Groups (Cursor) ------------------------------------------------------------------------
 
 /**
  * Cursor status in plain language. Note the words "cursor", "lease" and "position" never appear —
  * a user is being told whether a stream of content is finished, waiting, or broken.
  */
 const cursorStates: Record<CursorStatus, Presented> = {
-  EXHAUSTED: { label: 'Complete', tone: 'ok', hint: 'Everything here has been imported' },
-  IDLE: { label: 'Waiting for the next check', tone: 'wait' },
+  EXHAUSTED: { label: 'Synced', tone: 'ok', hint: 'Everything here has been imported' },
+  IDLE: { label: 'Synced', tone: 'ok', hint: 'Up to date. Waiting for the next check.' },
   AVAILABLE: { label: 'Queued', tone: 'busy', hint: 'Will be picked up shortly' },
-  IN_PROGRESS: { label: 'Importing now', tone: 'busy' },
+  IN_PROGRESS: { label: 'Syncing', tone: 'busy' },
   SUSPENDED: { label: 'Paused', tone: 'wait' },
   RATE_LIMITED: {
-    label: 'Waiting on a rate limit',
-    tone: 'wait',
+    label: 'Syncing',
+    tone: 'busy',
     hint: 'The service is only letting us read so fast. This picks up again by itself.',
   },
   RETIRED: {
-    label: 'No longer in this source',
+    label: 'Removed at source',
     tone: 'wait',
     hint: 'It disappeared at the source. What was already imported is kept.',
   },
-  FAILED: { label: 'Stopped after repeated errors', tone: 'alert' },
+  FAILED: { label: 'Failed', tone: 'alert', hint: 'Stopped after repeated errors' },
 }
 
 /**
@@ -196,6 +198,83 @@ export function presentDirection(direction: CursorDirection): string {
   return directionLabels[direction] ?? direction
 }
 
+/**
+ * The one state shown for a group (an iterable), folded from its one or two cursors.
+ *
+ * A group is a folder, a label, a company — not a direction. Showing a line per direction meant
+ * every forward-only source (every job board) repeated "New items" on every row, saying nothing,
+ * while the fact a user wants — is this one moving, stuck, or done — was split across two badges.
+ */
+export type GroupState = 'failed' | 'syncing' | 'queued' | 'paused' | 'removed' | 'synced'
+
+const groupStates: Record<GroupState, Presented> = {
+  failed: { label: 'Failed', tone: 'alert', hint: 'Stopped after repeated errors' },
+  syncing: { label: 'Syncing', tone: 'busy', hint: 'Reading from the source now' },
+  queued: { label: 'Queued', tone: 'busy', hint: 'Will be picked up shortly' },
+  paused: { label: 'Paused', tone: 'wait', hint: 'Not checking until the source is resumed' },
+  removed: {
+    label: 'Removed at source',
+    tone: 'wait',
+    hint: 'It disappeared at the source. What was already imported is kept.',
+  },
+  synced: { label: 'Synced', tone: 'ok', hint: 'Up to date. Waiting for the next check.' },
+}
+
+/** True while a rate-limit hold is still in the future — see {@link presentCursorStatus}. */
+function onHold(cursor: CursorInfo): boolean {
+  if (cursor.status !== 'RATE_LIMITED') return false
+  const until = cursor.nextAttemptAt ? new Date(cursor.nextAttemptAt).getTime() : null
+  return until !== null && !Number.isNaN(until) && until > Date.now()
+}
+
+/**
+ * Worst-news-first, because a row is scanned for problems: anything broken outranks anything
+ * running, and "synced" is only claimed when nothing else is true of either direction.
+ */
+export function groupState(cursors: CursorInfo[]): GroupState {
+  const has = (status: CursorStatus) => cursors.some((cursor) => cursor.status === status)
+
+  if (has('FAILED')) return 'failed'
+  if (has('IN_PROGRESS') || cursors.some(onHold)) return 'syncing'
+  if (has('AVAILABLE') || has('RATE_LIMITED')) return 'queued'
+  if (has('SUSPENDED')) return 'paused'
+  if (cursors.length > 0 && cursors.every((cursor) => cursor.status === 'RETIRED')) return 'removed'
+  return 'synced'
+}
+
+export function presentGroup(cursors: CursorInfo[]): Presented {
+  const state = groupState(cursors)
+  return { ...groupStates[state], raw: cursors.map((cursor) => cursor.status).join(' / ') }
+}
+
+/**
+ * The one-line reason a group is showing a warning, or null when it is not. Kept separate from the
+ * badge so a rate-limited group can read "Syncing" and still carry the ⚠ that explains the wait —
+ * the same pairing an item row uses for a retry.
+ */
+export function groupAlert(cursors: CursorInfo[]): string | null {
+  const failed = cursors.find((cursor) => cursor.lastError);
+  if (failed?.lastError) return failed.lastError
+  const held = cursors.find(onHold)
+  if (held) {
+    const when = relativeTime(held.nextAttemptAt)
+    return when
+      ? `The service is only letting us read so fast. Next try ${when}.`
+      : 'The service is only letting us read so fast.'
+  }
+  return null
+}
+
+/** History is still being walked — the only time a direction is worth naming on a row. */
+export function isImportingHistory(cursors: CursorInfo[]): boolean {
+  return cursors.some(
+    (cursor) =>
+      cursor.direction === 'BACKWARD' &&
+      cursor.status !== 'EXHAUSTED' &&
+      cursor.status !== 'RETIRED',
+  )
+}
+
 // ---- Account (Connection) state ---------------------------------------------------------------
 
 const connectionStates: Record<ConnectionStatus, Presented> = {
@@ -215,6 +294,7 @@ const entityTypeLabels: Record<string, string> = {
   MESSAGE: 'Message',
   EMAIL: 'Email',
   PAGE: 'Page',
+  JOB_POSTING: 'Job posting',
   OTHER: 'Other',
 }
 
@@ -235,6 +315,17 @@ export function presentIterableId(iterableId: string, fallback: string): string 
     if (value) return value.split('/').filter(Boolean).pop() ?? value
   }
   return iterableId
+}
+
+/**
+ * The name shown for a group, by iterable id. Both the Groups tab and each item row go through this,
+ * so an item's "from" and the group's row can never name the same thing two ways. The backend
+ * snapshots a display name on the cursor at discovery; older cursors have none, so the
+ * id-shortening fallback stays.
+ */
+export function groupName(iterableId: string, cursors: CursorInfo[] | undefined, fallback: string): string {
+  const named = cursors?.find((cursor) => cursor.iterableId === iterableId && cursor.iterableName)
+  return named?.iterableName ?? presentIterableId(iterableId, fallback)
 }
 
 // ---- Publishing channel + delivery state ------------------------------------------------------

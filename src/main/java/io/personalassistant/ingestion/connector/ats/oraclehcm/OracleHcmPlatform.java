@@ -98,7 +98,7 @@ public class OracleHcmPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String handle, BoardFilter filter) {
+    public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
         OracleHcmSite site = OracleHcmSite.parse(handle).orElseThrow(
                 () -> new IllegalArgumentException("Not an Oracle HCM site: '" + handle
                         + "'. Expected host/siteNumber (e.g."
@@ -116,7 +116,7 @@ public class OracleHcmPlatform implements BoardPlatform {
 
         List<RawItem> items = new ArrayList<>(summaries.size());
         for (JsonNode summary : summaries.values()) {
-            RawItem item = toItem(site, summary);
+            RawItem item = toItem(site, company, summary);
             if (item != null) {
                 items.add(item);
             }
@@ -150,7 +150,7 @@ public class OracleHcmPlatform implements BoardPlatform {
     }
 
     /** Fetch a requisition in full and map it; null when it cannot be read or is unusable. */
-    private RawItem toItem(OracleHcmSite site, JsonNode summary) {
+    private RawItem toItem(OracleHcmSite site, String label, JsonNode summary) {
         String id = summary.path("Id").asText(null);
         String title = summary.path("Title").asText(null);
         if (id == null || title == null) {
@@ -175,11 +175,14 @@ public class OracleHcmPlatform implements BoardPlatform {
         String descriptionText = AtsNormalization.plainText(content);
         String posted = text(detail.path("ExternalPostedStartDate"),
                 summary.path("PostedDate").asText(""));
+        // The site number is the fallback only because nothing better is published: the requisition
+        // carries just a LegalEmployerId, and the site's own name is often "Candidate Experience site".
+        String company = AtsNormalization.company(label, site.site());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
         metadata.put("uri", url);
-        metadata.put("company", site.site());
+        metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", url);
         metadata.put("board", site.toString());
@@ -190,7 +193,7 @@ public class OracleHcmPlatform implements BoardPlatform {
                 || AtsNormalization.isRemote(location, descriptionText));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));
         putIfPresent(metadata, "team", nullableText(detail.path("Category")));
-        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(site.site(), title, location));
+        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         putIfPresent(metadata, "postedAt", AtsNormalization.instantOrNull(posted));
         AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
         if (comp != null) {
@@ -214,7 +217,9 @@ public class OracleHcmPlatform implements BoardPlatform {
                 // ExternalPostedStartDate is when the requisition went live and does not move on an
                 // edit, so the body is hashed as well — otherwise an edited posting is skipped forever
                 // (invariant 3).
-                "ohcm:" + id + ";posted:" + posted + ";body:" + content.hashCode(),
+                AtsNormalization.withCompany(
+                        "ohcm:" + id + ";posted:" + posted + ";body:" + content.hashCode(),
+                        company, site.site()),
                 AtsNormalization.instantOrNull(posted),
                 raw,
                 content,

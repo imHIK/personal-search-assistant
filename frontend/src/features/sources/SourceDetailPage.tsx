@@ -7,25 +7,45 @@ import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { ErrorState, SkeletonList } from '@/components/ui/States'
-import { connectorFor } from '@/config/connectors'
+import { connectorFor, type ConnectorDescriptor } from '@/config/connectors'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { presentSource } from '@/config/presentation'
 import { useCursors, useKnowledge, useKnowledgeLifecycle } from '@/hooks/queries'
 import { cn } from '@/lib/utils'
-import { ActivityTab } from './ActivityTab'
+import { GroupsTab } from './GroupsTab'
 import { ItemsTab } from './ItemsTab'
 import { OverviewTab } from './OverviewTab'
 import { SettingsTab } from './SettingsTab'
 
-const tabs = [
-  { id: 'overview', label: labels.detail.overview },
-  { id: 'items', label: labels.detail.items },
-  { id: 'activity', label: labels.detail.activity },
-  { id: 'settings', label: labels.detail.settings },
-] as const
+const tabIds = ['overview', 'items', 'groups', 'settings'] as const
 
-type TabId = (typeof tabs)[number]['id']
+type TabId = (typeof tabIds)[number]
+
+/**
+ * The groups tab takes the connector's own word for its iterables — Companies, Folders, Labels —
+ * falling back to the generic one. A descriptor lookup, so nothing here branches on a SourceType.
+ */
+function tabsFor(descriptor: ConnectorDescriptor): { id: TabId; label: string }[] {
+  return [
+    { id: 'overview', label: labels.detail.overview },
+    { id: 'items', label: labels.detail.items },
+    { id: 'groups', label: descriptor.groupNoun?.many ?? labels.detail.groups },
+    { id: 'settings', label: labels.detail.settings },
+  ]
+}
+
+/** Links and bookmarks from before the rename still say `activity`. */
+function tabFromParam(value: string | null): TabId {
+  if (value === 'activity') return 'groups'
+  return tabIds.includes(value as TabId) ? (value as TabId) : 'overview'
+}
+
+/** Filter values are per-tab, so leaving a tab drops the filters that belong to it. */
+const tabFilterParams: Record<string, string[]> = {
+  items: ['q', 'status', 'group'],
+  groups: ['gq', 'gstate'],
+}
 
 export function SourceDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -39,11 +59,13 @@ export function SourceDetailPage() {
   const { data: cursors } = useCursors(id)
   const { pause, resume, remove, sync } = useKnowledgeLifecycle(id ?? '')
 
-  const activeTab = (params.get('tab') as TabId | null) ?? 'overview'
+  const activeTab = tabFromParam(params.get('tab'))
   const setTab = (tab: TabId) => {
     const next = new URLSearchParams(params)
     next.set('tab', tab)
-    if (tab !== 'items') next.delete('filter')
+    for (const [id, keys] of Object.entries(tabFilterParams)) {
+      if (id !== tab) keys.forEach((key) => next.delete(key))
+    }
     setParams(next, { replace: true })
   }
 
@@ -126,7 +148,7 @@ export function SourceDetailPage() {
         aria-label={knowledge.name}
         className="mb-6 flex gap-1 border-b border-[var(--border)]"
       >
-        {tabs.map((tab) => (
+        {tabsFor(descriptor).map((tab) => (
           <button
             key={tab.id}
             role="tab"
@@ -147,8 +169,10 @@ export function SourceDetailPage() {
       {activeTab === 'overview' && (
         <OverviewTab knowledge={knowledge} cursors={cursors} onOpenItems={() => setTab('items')} />
       )}
-      {activeTab === 'items' && <ItemsTab knowledgeId={knowledge.id} />}
-      {activeTab === 'activity' && <ActivityTab knowledgeId={knowledge.id} />}
+      {activeTab === 'items' && <ItemsTab knowledgeId={knowledge.id} descriptor={descriptor} />}
+      {activeTab === 'groups' && (
+        <GroupsTab knowledgeId={knowledge.id} descriptor={descriptor} />
+      )}
       {activeTab === 'settings' && <SettingsTab knowledge={knowledge} />}
 
       <ConfirmDialog

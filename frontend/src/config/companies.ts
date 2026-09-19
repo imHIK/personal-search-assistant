@@ -123,3 +123,34 @@ export function knownCompany(handle: string): KnownCompany | undefined {
   const needle = handle.trim().toLowerCase()
   return knownCompanies.find((c) => c.handle.toLowerCase() === needle)
 }
+
+/**
+ * `inputs` with `companyLabels` filled in: the catalog's name for every listed company it knows, so
+ * a posting is filed under "Kotak Mahindra Bank" rather than Oracle's site number `CX` or Workday's
+ * tenant `ghr`. The server has no source for those names — neither platform publishes one — so this
+ * list is the only place they exist.
+ *
+ * A pinned entry (`lever:paytm`) is looked up without its prefix. An entry the catalog does not know
+ * keeps whatever label `previous` gave it, so a label set through the API survives an edit here.
+ * The key is omitted when nothing is labelled: an edit that changes nothing must send inputs equal to
+ * the stored ones, or the server treats it as a re-provision.
+ */
+export function withCompanyLabels(
+  inputs: Record<string, unknown>,
+  previous?: Record<string, unknown>,
+): Record<string, unknown> {
+  const companies = Array.isArray(inputs.companies) ? (inputs.companies as string[]) : []
+  const kept = (previous?.companyLabels ?? {}) as Record<string, unknown>
+  const companyLabels: Record<string, string> = {}
+  for (const company of companies) {
+    const label =
+      knownCompany(company)?.label ??
+      knownCompany(company.slice(company.indexOf(':') + 1))?.label ??
+      (typeof kept[company] === 'string' ? (kept[company] as string) : undefined)
+    if (label) companyLabels[company] = label
+  }
+  const out = { ...inputs }
+  delete out.companyLabels
+  if (Object.keys(companyLabels).length > 0) out.companyLabels = companyLabels
+  return out
+}

@@ -14,7 +14,7 @@ API and UI on one origin and **no CORS config exists — don't add any**.
 ## Commands
 
 ```bash
-docker compose up -d          # Mongo :27017, OpenSearch :9200 — required, Quarkus does NOT start them
+docker compose up -d          # Mongo :27017, OpenSearch :9200, Redis :6379 — required, Quarkus does NOT start them
 ./gradlew quarkusDev          # dev mode, live reload, :8080
 ./gradlew build               # fast-jar in build/quarkus-app; runs spotlessCheck + test
 ./gradlew test

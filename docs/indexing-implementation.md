@@ -183,7 +183,7 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 |---|---|
 | `POST /api/knowledge` | Register a knowledge (validates, discovers, creates cursors, activates) |
 | `GET /api/knowledge` / `GET /api/knowledge/{id}` | List / fetch knowledge |
-| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status`, `limit` ≤ 200, `offset`); returns projections, not full entities |
+| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status` — a comma-separated list of names, `q` — title/externalId substring, `iterableId` — repeatable, one group per value, `limit` ≤ 200, `offset`); returns projections (including `iterableId`, which the console names by joining with the cursors), not full entities. `DELETED` is excluded unless `status` names it |
 | `GET /api/knowledge/{id}/cursors` | Its cursors — per-iterable walk state, the real sync-progress view |
 | `PATCH /api/knowledge/{id}` | Edit a knowledge — see [`knowledge-edit-design.md`](./knowledge-edit-design.md) |
 | `POST /api/knowledge/{id}/pause` / `.../resume` | Pause or resume scheduling |
@@ -279,7 +279,7 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`/`table`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | `app.chunking.mime-aware` | `true` | Allow content type to pick the strategy when the knowledge has not chosen one explicitly (`ChunkingStrategy.prefers`). An explicit per-knowledge choice always wins. Off restores name-only selection |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
-| `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
+| `app.chunking.token.size` / `.overlap` | `512` / `64` | Token size + overlap for the `token` strategy |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
 | `app.embedding.provider` | `openai-embed` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `openai-embed` (hosted) / `onnx-bge` (local in-JVM ONNX) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
 | `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v3_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
@@ -291,12 +291,15 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.llm.base-url` / `.model` / `.api-key` | Groq / `llama-3.3-70b-versatile` / `${GROQ_API_KEY:}` | Grounded-answer LLM. Point `base-url` at `http://localhost:11434/v1` for Ollama — no code change |
 | `app.search.snippet-chars` | `280` | Length of a hit's **display** excerpt. Display only: the agent is grounded in the full chunk text, not this. `0` returns chunks untruncated. Used to be a hardcoded constant applied *before* the text reached the agent — see [`opensearch-index.md`](./opensearch-index.md) |
 | `app.search.highlight-fragments` | `2` | Highlight fragments requested per field, so the excerpt is the region that matched rather than the head of the chunk. `0` disables highlighting. Lexical leg only — a knn query has no query terms to mark up |
-| `app.search.max-top-k` | `100` | Ceiling on `topK`, clamped in `DefaultSearchService`. `topK` is multiplied before it becomes the OpenSearch `size` and knn `k`, so this is what bounds a single request |
-| `app.search.candidate-multiplier` | `4` | Candidates fetched per leg per requested result. Over-fetch is what lets a chunk only one leg ranks well reach the fusion step |
+| `app.search.max-top-k` | `100` | Ceiling on `topK` — results, i.e. entities — clamped in `DefaultSearchService` |
+| `app.search.candidate-multiplier` / `.min-candidates` / `.max-candidates` | `10` / `100` / `500` | Chunk candidates fetched per leg per requested result, held between the floor and ceiling. Sized in chunks for `topK` *entities*: at 4, a topK of 10 fetched 40 chunks, about 6 job postings. `max-candidates` becomes the OpenSearch `size` and knn `k`, so it bounds a single request |
 | `app.search.lexical.fields` / `.type` / `.minimum-should-match` / `.phrase-boost` | `text,title^2` / `best_fields` / `2<70%` / `2.0` | BM25 query shape. A bare `multi_match` scores a document for matching **any** term, so a conversational query ranked documents containing "give"/"all"/"this"/"year" above the one document on topic and flooded the candidate set with them. Blank `minimum-should-match` sends nothing; `0` phrase-boost omits the phrase clause |
 | `app.search.rrf-k` | `60` | RRF rank-smoothing constant. Larger rewards agreement between the legs over either leg's exact ordering |
 | `app.search.rrf.lexical-weight` / `.vector-weight` | `1.0` / `1.0` | Per-leg weights on the fused score, for discounting a leg you trust less on your corpus |
-| `app.search.max-chunks-per-entity` | `0` (unlimited) | Cap on how many chunks one entity may contribute. **Off by default on purpose** — it buys source diversity but harms the case where the right answer *is* many chunks of one document |
+| `app.search.max-chunks-per-entity` | `3` | Matching chunks one result carries, its best included; `0` = every match in the pool. Results are always one per entity (`EntityGrouper`); the further matches show under the result and ground the answer, so an answer spanning many chunks of one document keeps them. Overridable per request; digests send `1` |
+| `app.search.grouping.extra-match-weight` | `0.1` | Share of each further match's score added to its entity's best chunk — breaks near-ties toward items matching in several passages without letting length outrank a clearly better match |
+| `app.search.dedupe.title-similarity` | `0.5` | Title token overlap required before matching text may collapse two results. Identical text under unrelated titles is shared boilerplate (a company's "About us"), not a copy |
+| `app.search.recency.weight` / `.half-life-days` | `0.1` / `14` | Freshness boost: a brand-new result's score grows by up to 10%, halving every half-life — breaks near-ties only. The date field is the `recency` field set in `config/field-sets.json` (`postedAt`); `0` weight turns it off |
 | _(moved)_ `embedContext` field set | `["title"]` | Context fields prefixed to a chunk's text **before embedding** now live in `config/field-sets.json`, scoped per connector — a Gmail chunk is best identified by sender, a Drive chunk by heading path, and a flat key can say only one thing. `title`/`uri` resolve against the chunk, anything else against its metadata. **Changing it requires a re-index** |
 | `app.embedding.openai.task-type-enabled` | `false` | Send `task_type` to distinguish a query embedding from a document one. **Must stay off for the shipped base-url**: it is a *native* Gemini parameter and the OpenAI-compatible endpoint rejects it with `400 … Unknown name "task_type"`, failing all indexing. The asymmetry is real but unreachable through the compat layer; the ONNX provider gets it via `app.embedding.onnx.query-instruction` |
 | `app.embedding.onnx.query-instruction` | BGE's published wording | Instruction prepended to a **query** only. Blank for a symmetric model — the wrong instruction is worse than none |
@@ -365,5 +368,7 @@ seams already in place:
 - **Metrics endpoints** beyond the current counters/logging (e.g. Micrometer gauges for lag and
   queue depth, surfaced through the existing health/metrics infrastructure).
 - **Redis-backed `PermitService`** for multi-node deployments. The in-memory implementation is
-  single-node only.
+  single-node only. Redis already ships in `docker-compose.yml` for the rate-limit counters
+  ([L9](./limitations.md#l9--rate-limit-counters-are-per-process-and-lost-on-restart)), so this is a
+  new implementation rather than new infrastructure.
 - **A cross-encoder `Reranker`** in place of `NoopReranker`.

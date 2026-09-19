@@ -28,10 +28,10 @@ public class ChunkingSpecResolver {
     @ConfigProperty(name = "app.chunking.overlap", defaultValue = "150")
     int defaultOverlap;
 
-    @ConfigProperty(name = "app.chunking.token.size", defaultValue = "256")
+    @ConfigProperty(name = "app.chunking.token.size", defaultValue = "512")
     int defaultTokenSize;
 
-    @ConfigProperty(name = "app.chunking.token.overlap", defaultValue = "32")
+    @ConfigProperty(name = "app.chunking.token.overlap", defaultValue = "64")
     int defaultTokenOverlap;
 
     public ChunkingSpec resolve(Knowledge knowledge) {

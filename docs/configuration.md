@@ -161,8 +161,8 @@ directly instead of standing up a container, and every path that produces one is
 > against another.
 
 > **A per-request override belongs on the query, not in config.** `app.search.max-chunks-per-entity`
-> and the dedupe knobs are deployment-wide defaults, but whether a *particular* search wants one result
-> per document, or wants duplicates grouped, is a property of that call — so both are fields on
+> and the dedupe knobs are deployment-wide defaults, but how many matching passages a *particular* search
+> wants per result, or whether it wants duplicates grouped, is a property of that call — so both are fields on
 > `SearchQuery` that fall back to the configured value. The rule of thumb: config sets the default,
 > the request states the exception.
 

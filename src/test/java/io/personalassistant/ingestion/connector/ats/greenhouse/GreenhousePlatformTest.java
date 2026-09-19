@@ -48,6 +48,27 @@ class GreenhousePlatformTest {
     }
 
     @Test
+    void theBoardsOwnCompanyNameOutranksALabelAndLeavesTheChecksumAlone() {
+        // company_name is a real name, so a label adds nothing and must not re-embed the board.
+        RawItem labelled = platform.fetch("acme", "Acme Labelled", BoardFilter.NONE).get(0);
+
+        Assertions.assertEquals("Acme", labelled.metadata().get("company"));
+        Assertions.assertEquals(grab().get(0).checksum(), labelled.checksum());
+    }
+
+    @Test
+    void aLabelReplacesTheTokenWhenTheBoardStatesNoName() {
+        String unnamed = BOARD.replace("\"company_name\":\"Acme\",", "");
+        GreenhousePlatform bare = new GreenhousePlatform(new FakeGreenhouseApi().withBoard("acme", unnamed));
+
+        RawItem labelled = bare.fetch("acme", "Acme Inc", BoardFilter.NONE).get(0);
+
+        Assertions.assertEquals("acme", bare.fetch("acme", BoardFilter.NONE).get(0).metadata().get("company"));
+        Assertions.assertEquals("Acme Inc", labelled.metadata().get("company"));
+        Assertions.assertNotEquals(bare.fetch("acme", BoardFilter.NONE).get(0).checksum(), labelled.checksum());
+    }
+
+    @Test
     void theChecksumIgnoresUpdatedAtBecauseGreenhouseMovesItInBulk() {
         // Measured live: 178 of GitLab's 227 postings share one updated_at to the second, and 233 of
         // Okta's 313 do. Trusting it re-embedded three quarters of a board for a change that never

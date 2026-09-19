@@ -1,9 +1,9 @@
 package io.personalassistant.domain.service;
 
 import io.personalassistant.domain.model.Cursor;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.Knowledge;
-import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
 import java.util.Map;
@@ -65,11 +65,11 @@ public interface KnowledgeService {
      * <p>{@code limit} is clamped to {@code 1..200} ({@code <= 0} means the default of 50) so a
      * caller cannot ask for an unbounded page.
      *
-     * @param status optional status filter; {@code null} means all statuses
+     * @param query which entities to return; {@code null} is read as {@link EntityQuery#all()}
      * @throws java.util.NoSuchElementException if no knowledge with {@code id} exists
      * @throws IllegalArgumentException          if {@code offset} is negative
      */
-    EntityPage listEntities(String id, EntityStatus status, int limit, int offset);
+    EntityPage listEntities(String id, EntityQuery query, int limit, int offset);
 
     /**
      * This knowledge's cursors — one per {@code (iterableId, direction)} — ordered by

@@ -125,7 +125,7 @@ public class WorkdayPlatform implements BoardPlatform {
      * {@link AtsNormalization#matchesLocation} still runs afterwards and remains the real filter.
      */
     @Override
-    public List<RawItem> fetch(String handle, BoardFilter filter) {
+    public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
         WorkdaySite site = WorkdaySite.parse(handle).orElseThrow(
                 () -> new IllegalArgumentException("Not a Workday site: '" + handle
                         + "'. Expected tenant/site/wd (e.g. adobe/external_experienced/wd5) or the"
@@ -145,7 +145,7 @@ public class WorkdayPlatform implements BoardPlatform {
 
         List<RawItem> items = new ArrayList<>(summaries.size());
         for (JsonNode summary : summaries.values()) {
-            RawItem item = toItem(site, summary);
+            RawItem item = toItem(site, company, summary);
             if (item != null) {
                 items.add(item);
             }
@@ -178,7 +178,7 @@ public class WorkdayPlatform implements BoardPlatform {
         }
     }
 
-    private RawItem toItem(WorkdaySite site, JsonNode summary) {
+    private RawItem toItem(WorkdaySite site, String label, JsonNode summary) {
         String path = summary.path("externalPath").asText(null);
         String title = summary.path("title").asText(null);
         if (path == null || title == null) {
@@ -203,11 +203,13 @@ public class WorkdayPlatform implements BoardPlatform {
         String content = detail.path("jobDescription").asText("");
         String descriptionText = AtsNormalization.plainText(content);
         String startDate = detail.path("startDate").asText("");
+        // Not hiringOrganization.name: that is a legal entity with a tax id in front of it.
+        String company = AtsNormalization.company(label, site.tenant());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
         metadata.put("uri", applyUrl);
-        metadata.put("company", site.tenant());
+        metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", site.toString());
@@ -215,7 +217,7 @@ public class WorkdayPlatform implements BoardPlatform {
         metadata.put("sourceRank", SOURCE_RANK);
         metadata.put("remote", AtsNormalization.isRemote(location, descriptionText));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));
-        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(site.tenant(), title, location));
+        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         // postedOn is relative prose ("Posted Today"), so startDate is the only usable date.
         putIfPresent(metadata, "postedAt", AtsNormalization.instantOrNull(startDate + "T00:00:00Z"));
         AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
@@ -240,7 +242,9 @@ public class WorkdayPlatform implements BoardPlatform {
                 // No update timestamp is published — postedOn is prose and startDate is the requisition
                 // date, neither of which moves on an edit. Hashing the body is the only change signal
                 // available, as with Lever and SmartRecruiters (invariant 3).
-                "wd:" + id + ";start:" + startDate + ";body:" + content.hashCode(),
+                AtsNormalization.withCompany(
+                        "wd:" + id + ";start:" + startDate + ";body:" + content.hashCode(),
+                        company, site.tenant()),
                 AtsNormalization.instantOrNull(startDate + "T00:00:00Z"),
                 raw,
                 content,

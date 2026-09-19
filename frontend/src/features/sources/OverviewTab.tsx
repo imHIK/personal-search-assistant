@@ -35,7 +35,7 @@ export function OverviewTab({
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile
-          label={labels.detail.searchable}
+          label={labels.detail.indexed}
           value={formatNumber(indexed)}
           tone="ok"
           onClick={onOpenItems}
@@ -116,6 +116,7 @@ export function OverviewTab({
             ['connectorDetails.connectionId', knowledge.connectorDetails.connectionId ?? 'null'],
             ['inputs', JSON.stringify(knowledge.inputs)],
             ['config.chunking', JSON.stringify(knowledge.config.chunking)],
+            ['config.retention', JSON.stringify(knowledge.config.retention)],
             ['config.scheduleSettings', JSON.stringify(knowledge.config.scheduleSettings)],
             ['config.backfill', JSON.stringify(knowledge.config.backfill)],
             ['derived state', presentSource(knowledge, cursors).label],

@@ -34,6 +34,12 @@
         "sheet",
         "page"
       ]
+    },
+    "recency": {
+      "description": "Metadata holding a result's date for the search-time freshness boost (app.search.recency.*), tried in order; the first parseable value wins and a result with none is not boosted. Only the default list is used: results carry no source type at that point, so bySourceType has no effect here. postedAt only on purpose — a file's modifiedAt moves on every save and would reward churn rather than newness.",
+      "default": [
+        "postedAt"
+      ]
     }
   }
 }

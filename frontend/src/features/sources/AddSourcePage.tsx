@@ -20,6 +20,7 @@ import { useConnections, useCreateKnowledge } from '@/hooks/queries'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { cn } from '@/lib/utils'
 import { ChunkingFields } from './ChunkingFields'
+import { RetentionField } from './RetentionField'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
 
 const DEFAULT_SCHEDULE: ScheduleValue = { preset: '1h', cron: '' }
@@ -41,6 +42,7 @@ export function AddSourcePage() {
   const [schedule, setSchedule] = useState<ScheduleValue>(DEFAULT_SCHEDULE)
   const [backfill, setBackfill] = useState(true)
   const [chunking, setChunking] = useState<FormValues>({})
+  const [retention, setRetention] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   /** Set when the server answers 200 but parks the source in ERROR. */
   const [activationError, setActivationError] = useState<string | null>(null)
@@ -72,15 +74,16 @@ export function AddSourcePage() {
   const dirty = useMemo(
     () =>
       descriptor !== null &&
-      JSON.stringify({ name, inputs, schedule, backfill, chunking }) !==
+      JSON.stringify({ name, inputs, schedule, backfill, chunking, retention }) !==
         JSON.stringify({
           name: descriptor.label,
           inputs: initialValues(descriptor.inputFields),
           schedule: DEFAULT_SCHEDULE,
           backfill: true,
           chunking: {},
+          retention: '',
         }),
-    [descriptor, name, inputs, schedule, backfill, chunking],
+    [descriptor, name, inputs, schedule, backfill, chunking, retention],
   )
   const unsaved = useUnsavedChangesGuard(dirty)
 
@@ -161,13 +164,14 @@ export function AddSourcePage() {
       name: name.trim() || descriptor.label,
       type: descriptor.id,
       connectionId: descriptor.requiresConnection ? connectionId || null : null,
-      inputs: pruneEmpty(inputs),
+      inputs: pruneEmpty(descriptor.deriveInputs ? descriptor.deriveInputs(inputs) : inputs),
       backfillEnabled: backfill,
       ...scheduleToBody(schedule),
       chunkingStrategy: (chunking.chunkingStrategy as string) || null,
       chunkingMaxSize: (chunking.chunkingMaxSize as number | undefined) ?? null,
       chunkingOverlap: (chunking.chunkingOverlap as number | undefined) ?? null,
       chunkingSeparators: (chunking.chunkingSeparators as string[] | undefined) ?? null,
+      retentionPeriod: retention || null,
     }
 
     create.mutate(body, {
@@ -194,6 +198,7 @@ export function AddSourcePage() {
     setSchedule(DEFAULT_SCHEDULE)
     setBackfill(true)
     setChunking({})
+    setRetention('')
     setShowAdvanced(false)
     setActivationError(null)
   }
@@ -329,6 +334,11 @@ export function AddSourcePage() {
               <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                 {labels.wizard.advancedHint}
               </p>
+              <RetentionField
+                value={retention}
+                onChange={setRetention}
+                inherited={descriptor.defaultRetention}
+              />
               <ChunkingFields values={chunking} onChange={setChunking} />
             </CardBody>
           )}

@@ -61,6 +61,15 @@ public interface BoardPlatform {
      *     896 into 69. {@link BoardFilter#matchesTitle} is the part that is always safe to apply — the
      *     title is the same string in a listing as in the detail, where a location often is not.
      *     Workday and Oracle HCM go further and send the terms as a server-side query.
+     * @param company the user's name for this company, or null when none was given. Filed as
+     *     {@code metadata.company} in preference to anything derived from the handle — see
+     *     {@link AtsNormalization#company} — and built into the checksum through
+     *     {@link AtsNormalization#withCompany} so a relabelled board is re-ingested.
      */
-    List<RawItem> fetch(String handle, BoardFilter filter);
+    List<RawItem> fetch(String handle, String company, BoardFilter filter);
+
+    /** {@link #fetch(String, String, BoardFilter)} with no label: the company is whatever the board says. */
+    default List<RawItem> fetch(String handle, BoardFilter filter) {
+        return fetch(handle, null, filter);
+    }
 }

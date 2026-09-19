@@ -97,6 +97,34 @@ public final class AtsNormalization {
         return c + "|" + t + "|" + normalizeToken(location);
     }
 
+    /**
+     * The name a posting is filed under: the user's label for the company when there is one, otherwise
+     * what the platform can say for itself.
+     *
+     * <p>The label exists because a handle is not a name. Oracle's site number ({@code CX_1}), a Workday
+     * tenant ({@code ghr} is Bank of America) and a board token ({@code digitalocean98}) all used to land
+     * in {@code metadata.company}, where they are shown to the user, handed to the answer prompt and
+     * built into {@link #dedupeKey} — which then never matched the same role on another platform.
+     * Neither Oracle nor Workday publishes a usable employer name to fall back on: Oracle's site name
+     * is "Candidate Experience site" on Kotak's pod, and Workday's {@code hiringOrganization} is a legal
+     * entity prefixed with a tax id.
+     */
+    public static String company(String label, String fallback) {
+        return label == null || label.isBlank() ? fallback : label.trim();
+    }
+
+    /**
+     * {@code checksum}, extended with the company only when a label changed it.
+     *
+     * <p>Invariant 3: the company is indexed metadata, so a posting whose company changed has changed,
+     * and without this every posting stored under a handle would be skipped forever. Extending only
+     * when {@code company} differs from what the platform would have filed it under keeps unlabelled
+     * boards' checksums exactly as they were — no re-embedding for a change that changed nothing.
+     */
+    public static String withCompany(String checksum, String company, String unlabelled) {
+        return company == null || company.equals(unlabelled) ? checksum : checksum + ";co:" + company;
+    }
+
     /** Lowercase, strip punctuation, collapse separators — the canonical form used inside a dedupe key. */
     public static String normalizeToken(String value) {
         if (value == null) {

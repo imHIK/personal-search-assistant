@@ -177,7 +177,10 @@ public class AnswerPromptBuilder {
             SearchHit hit = hits.get(i);
             String header = header(i + 1, hit);
             String override = textByChunkId.get(hit.chunkId());
-            String text = override != null ? override : (hit.text() == null ? "" : hit.text());
+            // groundingText, not text: a result carries every matching chunk of its entity, and an answer
+            // spanning several of them must see them all.
+            String grounding = hit.groundingText();
+            String text = override != null ? override : (grounding == null ? "" : grounding);
             // The fences are part of what the budget has to pay for, or a tight budget overruns it.
             int overhead = header.length() + (FENCE.length() + 1) * 2;
             int available = remaining - overhead;

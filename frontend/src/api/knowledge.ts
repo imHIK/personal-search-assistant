@@ -32,13 +32,29 @@ export const knowledgeApi = {
   remove: (id: string) =>
     http<null>(`/api/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  /**
+   * `status` is a set, not one value: the API takes a comma-separated list, which is what lets one
+   * filter chip cover both in-flight states. `q` matches the title or the external id.
+   */
   entities: (
     id: string,
-    params: { status?: EntityStatus | null; limit?: number; offset?: number } = {},
+    params: {
+      status?: EntityStatus[] | null
+      q?: string | null
+      iterableId?: string | null
+      limit?: number
+      offset?: number
+    } = {},
   ) =>
     http<EntityPage>(
       `/api/knowledge/${encodeURIComponent(id)}/entities` +
-        query({ status: params.status, limit: params.limit, offset: params.offset }),
+        query({
+          status: params.status?.length ? params.status.join(',') : null,
+          q: params.q,
+          iterableId: params.iterableId,
+          limit: params.limit,
+          offset: params.offset,
+        }),
     ),
 
   cursors: (id: string) =>

@@ -301,6 +301,40 @@ migrates ATS keeps resolving; the platform shown next to each name is display on
 must be verified through this endpoint before it is added — an unverified handle there looks
 authoritative and is worse than no catalog.
 
+### What a posting is filed under (`companyLabels`)
+
+A handle is not a name, and `metadata.company` is what search shows, what the answer prompt reads and
+what `dedupeKey` is built from. Before labels, Kotak's postings were filed as `CX` (Oracle's site
+number), Bank of America's as `ghr` (its Workday tenant) and DigitalOcean's as `digitalocean98`.
+Neither Oracle nor Workday publishes a usable name to fall back on — Oracle's site name on Kotak's pod
+is "Candidate Experience site" and the requisition carries only a `LegalEmployerId`; Workday's
+`hiringOrganization.name` is a legal entity prefixed with a tax id — so the name has to come from the
+user.
+
+`inputs.companyLabels` maps a `companies` entry, exactly as written, to a display name. The console
+fills it from the catalog on every create and edit (`withCompanyLabels` in `companies.ts`; a pinned
+entry is looked up without its prefix, and an uncatalogued entry keeps the label it already had). The
+connector hands the label to `BoardPlatform.fetch(handle, company, filter)`, and each platform files a
+posting under, in order:
+
+| Platform                        | 1st                          | 2nd   | fallback          |
+|---------------------------------|------------------------------|-------|-------------------|
+| Greenhouse                      | `company_name` on the job    | label | board token       |
+| SmartRecruiters                 | `company.name` on the detail | label | handle            |
+| Lever, Ashby, Workday, Oracle   | label                        | —     | board / tenant / site number |
+
+It is a map beside the list rather than a name folded into each entry because an entry is an iterable
+id: renaming a company must not reset its cursor or stop the catalog recognising the stored value. It
+is left out of `membershipSignature` for the same reason — a name decides how a posting is filed, not
+whether it belongs.
+
+**The checksum carries the company whenever a label changed it** (`AtsNormalization.withCompany`, a
+`;co:<name>` suffix). Without it invariant 3 skips every posting already stored under a handle forever.
+Where the label changes nothing — no label, or a Greenhouse board that states its own name — the
+checksum is exactly what it was, so labelling a board costs one re-embed of the postings whose company
+actually moved, and nothing for the rest. An existing source picks this up by being re-saved from the
+console (which fills `companyLabels`) and then syncing.
+
 Which of a real 126-company watchlist reached a board, which did not, and the manual step each
 remaining one needs is worked out in [`job-board-companies.md`](./job-board-companies.md).
 
@@ -319,7 +353,9 @@ list would be a long-running request against APIs that are someone else's to pay
 
 ### Adding a platform
 
-Add an `@ApplicationScoped` bean implementing `BoardPlatform` (`id()`, `countPostings()`, `fetch()`),
+Add an `@ApplicationScoped` bean implementing `BoardPlatform` (`id()`, `countPostings()`,
+`fetch(handle, company, filter)` — file postings under `AtsNormalization.company(label, fallback)` and
+wrap the checksum in `withCompany`, see above),
 discovered by CDI and registered nowhere — the same shape as connectors, parsers and chunking
 strategies. `countPostings` must return an empty `OptionalInt` rather than throw for a miss, since
 resolution probes every platform and a miss is the normal outcome for all but one; `hasBoard` is a
@@ -516,7 +552,8 @@ with no country, so a term list should name cities. And a narrow include list ha
 the measured corpus a backend-flavoured list dropped 1,025 clearly technical roles, including Adobe's
 `Computer Scientist` and all 57 of Samsung's silicon roles.
 
-`membershipSignature` covers **every** filter dimension and still excludes `companies`. Each dimension
+`membershipSignature` covers **every** filter dimension and still excludes `companies` and
+`companyLabels`. Each dimension
 is a within-iterable membership boundary — tightening one changes which postings of a board survive,
 which is a §3.2 re-walk. Leaving one out would mean editing it never re-walks, so the board keeps
 whatever it already had.

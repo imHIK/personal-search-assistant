@@ -1,9 +1,10 @@
 import { FileText, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { Input, Select } from '@/components/ui/Input'
 import { EmptyState, SkeletonList } from '@/components/ui/States'
+import type { EntityStatus } from '@/api/types'
 import { labels } from '@/config/labels'
 import { useEntities, useKnowledgeList } from '@/hooks/queries'
 
@@ -11,6 +12,11 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onPick: (id: string, title: string) => void
+  /** Dialog heading and explanation; default to the digest form's wording. */
+  title?: string
+  description?: string
+  /** Only offer items in this state — search by document needs one that is already searchable. */
+  status?: EntityStatus | null
 }
 
 const PAGE = 25
@@ -19,24 +25,37 @@ const PAGE = 25
  * Choose an indexed document to search *by* — a CV, a brief.
  *
  * Replaces pasting a raw `ent_…` id, which meant the only way to set up the feature the digest was
- * built for was to turn on technical details, find an item, and copy an opaque string. Filtering is
- * client-side over the current page because the entities endpoint takes no search term; that is
- * honest for browsing a source you know, and the page control is right there when it is not enough.
+ * built for was to turn on technical details, find an item, and copy an opaque string. Searching
+ * goes to the server (`q`), so it reaches every item in the source rather than the 25 currently on
+ * screen — a document picker that could only find what was already visible was barely a picker.
  */
-export function DocumentPicker({ open, onOpenChange, onPick }: Props) {
+export function DocumentPicker({ open, onOpenChange, onPick, title, description, status = null }: Props) {
   const { data: sources } = useKnowledgeList()
   const [knowledgeId, setKnowledgeId] = useState<string>('')
   const [offset, setOffset] = useState(0)
   const [filter, setFilter] = useState('')
 
+  // Debounced, so typing is one request when you stop rather than one per keystroke.
+  const [search, setSearch] = useState('')
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(filter.trim())
+      setOffset(0)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [filter])
+
   const active = (sources ?? []).filter((source) => source.status !== 'DELETED')
   const selected = knowledgeId || active[0]?.id || ''
-  const { data, isLoading } = useEntities(selected || undefined, null, offset, PAGE)
+  const filters = useMemo(() => {
+    const values: Record<string, string> = {}
+    if (status) values.status = status
+    if (search) values.q = search
+    return values
+  }, [status, search])
+  const { data, isLoading } = useEntities(selected || undefined, filters, offset, PAGE)
 
-  const needle = filter.trim().toLowerCase()
-  const items = (data?.items ?? []).filter(
-    (item) => !needle || (item.title ?? '').toLowerCase().includes(needle),
-  )
+  const items = data?.items ?? []
 
   const pick = (id: string, title: string | null) => {
     onPick(id, title ?? id)
@@ -47,8 +66,8 @@ export function DocumentPicker({ open, onOpenChange, onPick }: Props) {
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={labels.digests.pickDocument}
-      description={labels.digests.sourceEntityHint}
+      title={title ?? labels.digests.pickDocument}
+      description={description ?? labels.digests.sourceEntityHint}
       className="max-w-2xl"
     >
       <div className="space-y-3">

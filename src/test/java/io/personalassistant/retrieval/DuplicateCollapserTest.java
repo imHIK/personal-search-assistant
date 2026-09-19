@@ -9,11 +9,19 @@ import org.junit.jupiter.api.Test;
 /** Grouping rules, and the properties that stop collapsing from hiding a real result. */
 class DuplicateCollapserTest {
 
-    private final DuplicateCollapser collapser = new DuplicateCollapser(5, 0.85, 100);
+    private final DuplicateCollapser collapser = new DuplicateCollapser(5, 0.85, 100, 0.5);
+
+    /** Hits share a title unless a test is about titles: the text layers only group under agreeing titles. */
+    private static final String TITLE = "Quarterly report";
+
+    private static SearchHit hit(String chunkId, String title, String text, double score,
+                                 Map<String, Object> metadata) {
+        return new SearchHit(chunkId, "ent_" + chunkId, "kn_1", 0, title, text,
+                "snippet", "uri://" + chunkId, score, metadata);
+    }
 
     private static SearchHit hit(String chunkId, String text, double score, Map<String, Object> metadata) {
-        return new SearchHit(chunkId, "ent_" + chunkId, "kn_1", 0, "Title " + chunkId, text,
-                "snippet", "uri://" + chunkId, score, metadata);
+        return hit(chunkId, TITLE, text, score, metadata);
     }
 
     private static SearchHit hit(String chunkId, String text, double score) {
@@ -74,6 +82,41 @@ class DuplicateCollapserTest {
                 hit("b", "Senior Frontend Engineer working on the design system in React and CSS", 0.9)));
 
         Assertions.assertEquals(List.of("a", "b"), ids(out));
+    }
+
+    /**
+     * Every posting of one company carries the same "About us". When that is the passage two different
+     * roles matched on, text alone called them one thing and hid a real result.
+     */
+    @Test
+    void identicalBoilerplateUnderUnrelatedTitlesIsNotCollapsed() {
+        String aboutUs = "Acme is a financial infrastructure platform for businesses of every size worldwide";
+        List<SearchHit> out = collapser.collapse(List.of(
+                hit("a", "Backend Engineer, Payments", aboutUs, 1.0, Map.of()),
+                hit("b", "Data Scientist, Risk", aboutUs, 0.9, Map.of())));
+
+        Assertions.assertEquals(List.of("a", "b"), ids(out));
+    }
+
+    @Test
+    void aForwardedCopyWithAPrefixedTitleStillCollapses() {
+        String body = "The quarterly revenue report for the third quarter of the year";
+        List<SearchHit> out = collapser.collapse(List.of(
+                hit("a", "Q3 revenue report", body, 1.0, Map.of()),
+                hit("b", "Fwd: Q3 revenue report", body, 0.9, Map.of())));
+
+        Assertions.assertEquals(List.of("a"), ids(out));
+    }
+
+    @Test
+    void comparesTheWholeResultNotJustItsBestChunk() {
+        // Two items whose best passages agree but whose further matches do not are not the same item.
+        SearchHit a = hit("a", "Shared opening passage about the team and its mission", 1.0)
+                .withMoreMatches(1.0, List.of(new SearchHit.Match("a_1", 1, "Requirements: Go and Postgres", "s", 0.8)));
+        SearchHit b = hit("b", "Shared opening passage about the team and its mission", 0.9)
+                .withMoreMatches(0.9, List.of(new SearchHit.Match("b_1", 1, "Requirements: React and CSS", "s", 0.7)));
+
+        Assertions.assertEquals(List.of("a", "b"), ids(collapser.collapse(List.of(a, b))));
     }
 
     @Test

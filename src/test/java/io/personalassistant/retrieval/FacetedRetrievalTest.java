@@ -74,6 +74,10 @@ class FacetedRetrievalTest {
 
         Assertions.assertEquals("broad", fused.get(0).chunkId());
         Assertions.assertEquals(2, fused.size(), "each hit appears once, however many facets found it");
+        Assertions.assertEquals(3, fused.get(0).ranking().facetsMatched());
+        Assertions.assertEquals(1, fused.get(1).ranking().facetsMatched());
+        Assertions.assertNull(fused.get(0).ranking().lexicalRank(),
+                "each facet ran its own legs, so no single leg rank describes the fused result");
     }
 
     @Test

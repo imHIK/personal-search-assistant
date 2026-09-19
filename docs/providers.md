@@ -76,6 +76,13 @@ back every 24 minutes gives out a unit too small to finish a single entity, so t
 parsed, chunked and deferred over and over; and against a service counting its own trailing day, the
 61st call is a 429 the local limiter thought it had avoided.
 
+**The windows are counted in Redis** (`app.ratelimit.store=redis`, the shipped default), so they survive
+a restart and a `quarkusDev` live reload. That matters most for the small daily quotas above. An
+in-memory `60/1d` starts empty on every restart while the provider's day keeps counting, so the calls
+after a restart are 429s. `app.ratelimit.store=memory` is for tests and setups without Redis, and is only
+honest with short windows. There is no fallback between the two: if Redis is down, outbound calls fail
+rather than quietly counting in memory. See [L9](./limitations.md#l9--rate-limit-counters-are-per-process-and-lost-on-restart).
+
 What happens on a breach depends on which call it is, and the split is free because the two paths
 already have separate entry points:
 

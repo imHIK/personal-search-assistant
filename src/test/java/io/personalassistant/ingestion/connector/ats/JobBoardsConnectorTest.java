@@ -32,6 +32,8 @@ class JobBoardsConnectorTest {
         int probes;
         /** Test observability: the filter the connector handed down as a hint. */
         BoardFilter lastFilter;
+        /** Test observability: the company label the connector handed down. */
+        String lastCompany;
 
         StubPlatform(String id, Map<String, List<RawItem>> boards) {
             this.id = id;
@@ -51,8 +53,9 @@ class JobBoardsConnectorTest {
         }
 
         @Override
-        public List<RawItem> fetch(String handle, BoardFilter filter) {
+        public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
             lastFilter = filter;
+            lastCompany = company;
             return boards.getOrDefault(handle, List.of());
         }
     }
@@ -303,6 +306,23 @@ class JobBoardsConnectorTest {
         grabWith("filterable", Map.of(JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("Engineer")));
 
         Assertions.assertEquals(List.of("engineer"), greenhouse.lastFilter.titleInclude());
+    }
+
+    @Test
+    void theCompanyLabelIsHandedToThePlatformUnderItsEntry() {
+        // A handle is not a name: Oracle's site number and Workday's tenant used to be filed as the
+        // company. The label is keyed by the entry exactly as written, not by the resolved handle.
+        grabWith("lever:globex", Map.of(JobBoardsConnector.COMPANY_LABELS_INPUT,
+                Map.of("lever:globex", " Globex Corporation ", "globex", "wrong key")));
+
+        Assertions.assertEquals("Globex Corporation", lever.lastCompany);
+    }
+
+    @Test
+    void anEntryWithNoLabelHandsDownNull() {
+        grabWith("acme", Map.of(JobBoardsConnector.COMPANY_LABELS_INPUT, Map.of("globex", "Globex")));
+
+        Assertions.assertNull(greenhouse.lastCompany);
     }
 
     // ---- membershipSignature -------------------------------------------------------------------

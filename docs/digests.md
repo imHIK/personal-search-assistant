@@ -229,5 +229,5 @@ deleted (409) — dropping it from the digest instead would turn its emails off 
 
 > **Citations in the email.** The summary's `[n]` markers are rendered as written. The console resolves
 > them through the task's source mode; the email does not, so under a whole-document task a run holding
-> several chunks of one document can cite a number that differs from the item's position. Digests default
-> to one result per document, which avoids it.
+> several chunks of one document can cite a number that differs from the item's position. Search results
+> are one per entity, so a run never holds two chunks of one document as separate items, which avoids it.

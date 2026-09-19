@@ -35,6 +35,17 @@ export interface SearchFilterSpec {
 
 const jobBoards: SourceType[] = ['JOB_BOARDS']
 
+/** Posting levels, shared by the seniority filter and the result card so both say the same words. */
+export const seniorityOptions: { value: string; label: string }[] = [
+  { value: 'INTERN', label: 'Intern' },
+  { value: 'JUNIOR', label: 'Junior' },
+  { value: 'SENIOR', label: 'Senior' },
+  { value: 'STAFF', label: 'Staff' },
+  { value: 'PRINCIPAL', label: 'Principal' },
+  { value: 'LEAD', label: 'Lead' },
+  { value: 'LEADERSHIP', label: 'Leadership' },
+]
+
 export const searchFilters: SearchFilterSpec[] = [
   {
     id: 'company',
@@ -65,15 +76,7 @@ export const searchFilters: SearchFilterSpec[] = [
     kind: 'select',
     label: 'Seniority',
     hint: 'Only postings whose title states a level are labelled.',
-    options: [
-      { value: 'INTERN', label: 'Intern' },
-      { value: 'JUNIOR', label: 'Junior' },
-      { value: 'SENIOR', label: 'Senior' },
-      { value: 'STAFF', label: 'Staff' },
-      { value: 'PRINCIPAL', label: 'Principal' },
-      { value: 'LEAD', label: 'Lead' },
-      { value: 'LEADERSHIP', label: 'Leadership' },
-    ],
+    options: seniorityOptions,
     sourceTypes: jobBoards,
   },
   {

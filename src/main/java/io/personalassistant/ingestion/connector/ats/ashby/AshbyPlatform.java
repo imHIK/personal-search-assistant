@@ -56,13 +56,13 @@ public class AshbyPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, BoardFilter filter) {
+    public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
-            RawItem item = toItem(boardId, job);
+            RawItem item = toItem(boardId, company, job);
             if (item != null) {
                 items.add(item);
             }
@@ -70,7 +70,7 @@ public class AshbyPlatform implements BoardPlatform {
         return items;
     }
 
-    private RawItem toItem(String boardId, JsonNode job) {
+    private RawItem toItem(String boardId, String label, JsonNode job) {
         String id = job.path("id").asText(null);
         String title = job.path("title").asText(null);
         if (id == null || title == null) {
@@ -85,11 +85,12 @@ public class AshbyPlatform implements BoardPlatform {
         // publishedAt is the only timestamp Ashby publishes — there is no updatedAt on this API, and
         // reading the absent one used to yield a constant that made every posting look unchanged.
         String publishedAt = job.path("publishedAt").asText(null);
+        String company = AtsNormalization.company(label, boardId);
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
         metadata.put("uri", applyUrl);
-        metadata.put("company", boardId);
+        metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", boardId);
@@ -101,7 +102,7 @@ public class AshbyPlatform implements BoardPlatform {
                 : AtsNormalization.isRemote(location, descriptionText));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));
         putIfPresent(metadata, "team", nullableText(job.path("team")));
-        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(boardId, title, location));
+        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         Instant postedAt = AtsNormalization.instantOrNull(publishedAt);
         putIfPresent(metadata, "postedAt", postedAt);
         applyCompensation(metadata, job, descriptionText);
@@ -117,7 +118,9 @@ public class AshbyPlatform implements BoardPlatform {
                 html.isBlank() ? "text/plain" : "text/html",
                 title,
                 applyUrl,
-                "ashby:" + id + ";v:" + AtsNormalization.changeStamp(title, location, body),
+                AtsNormalization.withCompany(
+                        "ashby:" + id + ";v:" + AtsNormalization.changeStamp(title, location, body),
+                        company, boardId),
                 AtsNormalization.instantOrNull(publishedAt),
                 raw,
                 body,

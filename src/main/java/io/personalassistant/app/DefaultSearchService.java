@@ -7,7 +7,9 @@ import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.domain.service.SearchService;
 import io.personalassistant.indexing.embedding.EmbeddingProvider;
 import io.personalassistant.retrieval.DuplicateCollapser;
+import io.personalassistant.retrieval.EntityGrouper;
 import io.personalassistant.retrieval.FacetedRetrieval;
+import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Reranker;
 import io.personalassistant.retrieval.Retriever;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -18,9 +20,10 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Read-path orchestration: embed the query (unless purely lexical), retrieve candidates,
- * rerank, and optionally synthesize a grounded answer. Wires the retrieval ports together;
- * the concrete behaviour follows whatever adapters are installed.
+ * Read-path orchestration: embed the query (unless purely lexical), retrieve chunk candidates, group
+ * them into one result per entity, boost fresh results, collapse duplicates, rerank, and optionally
+ * synthesize a grounded answer. Wires the retrieval ports together; the concrete behaviour follows
+ * whatever adapters are installed.
  */
 @ApplicationScoped
 public class DefaultSearchService implements SearchService {
@@ -31,37 +34,56 @@ public class DefaultSearchService implements SearchService {
     private final Retriever retriever;
     private final FacetedRetrieval faceted;
     private final Reranker reranker;
+    private final EntityGrouper grouper;
+    private final RecencyBoost recency;
     private final DuplicateCollapser duplicates;
     private final SearchAgent agent;
 
     /**
      * Upper bound on {@code topK}. Clamped here rather than rejected at the DTO because the ceiling is
      * config-driven policy, matching how the entity-listing limit is clamped in the knowledge service.
-     * It matters: {@code topK} is multiplied before it becomes the OpenSearch {@code size} and the knn
-     * {@code k}, so an unbounded value asks the cluster for an unbounded result set.
      */
     @ConfigProperty(name = "app.search.max-top-k", defaultValue = "100")
     int maxTopK;
 
     /**
-     * How many candidates each retrieval leg fetches per requested result. Over-fetching gives fusion
-     * and reranking something to work with; too little and a chunk that only one leg ranks well never
-     * reaches the fusion step at all.
+     * How many chunk candidates each retrieval leg fetches per requested result.
+     *
+     * <p>Results are entities but retrieval returns chunks, and a matching entity brings several of its
+     * chunks into the pool at once — so the pool must be sized in chunks for the number of
+     * <em>entities</em> wanted. At the old 4, a topK of 10 bought 40 chunks, which over job postings of
+     * ~7 chunks each held about 6 distinct postings: fewer results than asked for, with nothing left to
+     * fill the rest.
      */
-    @ConfigProperty(name = "app.search.candidate-multiplier", defaultValue = "4")
+    @ConfigProperty(name = "app.search.candidate-multiplier", defaultValue = "10")
     int candidateMultiplier;
+
+    /** Floor on the candidate pool, so a small topK still fetches enough chunks to fill itself with entities. */
+    @ConfigProperty(name = "app.search.min-candidates", defaultValue = "100")
+    int minCandidates;
+
+    /**
+     * Ceiling on the candidate pool. It becomes the OpenSearch {@code size} and knn {@code k} on every leg
+     * (and on every facet of a document query), so this is what bounds the cost of one request.
+     */
+    @ConfigProperty(name = "app.search.max-candidates", defaultValue = "500")
+    int maxCandidates;
 
     @Inject
     public DefaultSearchService(EmbeddingProvider embeddings,
                                 Retriever retriever,
                                 FacetedRetrieval faceted,
                                 Reranker reranker,
+                                EntityGrouper grouper,
+                                RecencyBoost recency,
                                 DuplicateCollapser duplicates,
                                 SearchAgent agent) {
         this.embeddings = embeddings;
         this.retriever = retriever;
         this.faceted = faceted;
         this.reranker = reranker;
+        this.grouper = grouper;
+        this.recency = recency;
         this.duplicates = duplicates;
         this.agent = agent;
     }
@@ -71,7 +93,7 @@ public class DefaultSearchService implements SearchService {
         long start = System.currentTimeMillis();
         int topK = Math.clamp(query.topK(), 1, Math.max(maxTopK, 1));
 
-        int candidateLimit = topK * Math.max(candidateMultiplier, 1);
+        int candidateLimit = candidateLimit(topK);
         // A document query is decomposed into facets and fused; a typed query embeds its own text once.
         // Both produce the same candidate shape, so everything downstream is unchanged.
         List<SearchHit> candidates;
@@ -83,13 +105,17 @@ public class DefaultSearchService implements SearchService {
                     : embeddings.embedQuery(query.text()).vector();
             candidates = retriever.retrieve(query, queryVector, candidateLimit);
         }
+        // Chunks become results here. Everything after this line — freshness, collapsing, reranking, the
+        // topK trim and the answer — works on entities, so topK counts items and one item can no longer
+        // fill every slot with its own chunks.
+        List<SearchHit> results = recency.apply(grouper.group(candidates, query.maxChunksPerEntity()));
         // Collapse before reranking, not after: reranking trims to topK, so collapsing afterwards would
         // return fewer than topK results — the duplicates would have eaten slots that a distinct hit
         // further down the candidate list could have filled.
         if (query.collapseDuplicates()) {
-            candidates = duplicates.collapse(candidates);
+            results = duplicates.collapse(results);
         }
-        List<SearchHit> ranked = reranker.rerank(query.text(), candidates, topK);
+        List<SearchHit> ranked = reranker.rerank(query.text(), results, topK);
 
         String answer = null;
         String answerError = null;
@@ -106,5 +132,13 @@ public class DefaultSearchService implements SearchService {
             }
         }
         return new SearchResponse(ranked, answer, answerError, System.currentTimeMillis() - start);
+    }
+
+    /** {@code topK × candidate-multiplier}, held between the configured floor and ceiling. */
+    // Package-private for tests.
+    int candidateLimit(int topK) {
+        int ceiling = Math.max(maxCandidates, 1);
+        int floor = Math.min(Math.max(minCandidates, 1), ceiling);
+        return Math.clamp((long) topK * Math.max(candidateMultiplier, 1), floor, ceiling);
     }
 }

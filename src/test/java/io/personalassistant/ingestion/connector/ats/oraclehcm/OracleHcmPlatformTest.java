@@ -123,6 +123,32 @@ class OracleHcmPlatformTest {
         Assertions.assertNotEquals(before, after);
     }
 
+    @Test
+    void aLabelNamesTheCompanyInsteadOfTheSiteNumber() {
+        // The site number (CX, CX_1, BNY-Careers) is all the API gives; it is not a name.
+        RawItem unlabelled = fetch(board(), List.of("pune")).get(0);
+        RawItem labelled = new OracleHcmPlatform(board())
+                .fetch(SITE, "BNY Mellon", BoardFilter.ofLocations(List.of("pune"))).get(0);
+
+        Assertions.assertEquals("BNY-Careers", unlabelled.metadata().get("company"));
+        Assertions.assertEquals("BNY Mellon", labelled.metadata().get("company"));
+        Assertions.assertEquals("bny-mellon|backend-engineer|pune-maharashtra-india",
+                labelled.metadata().get("dedupeKey"));
+    }
+
+    @Test
+    void aLabelChangesTheChecksumSoPostingsFiledUnderTheSiteNumberAreReIngested() {
+        // Invariant 3: without this every posting already stored as "CX" is skipped forever.
+        String unlabelled = fetch(board(), List.of("pune")).get(0).checksum();
+        String labelled = new OracleHcmPlatform(board())
+                .fetch(SITE, "BNY Mellon", BoardFilter.ofLocations(List.of("pune"))).get(0).checksum();
+        String blankLabel = new OracleHcmPlatform(board())
+                .fetch(SITE, " ", BoardFilter.ofLocations(List.of("pune"))).get(0).checksum();
+
+        Assertions.assertNotEquals(unlabelled, labelled);
+        Assertions.assertEquals(unlabelled, blankLabel);
+    }
+
     // ---- resolution ----------------------------------------------------------------------------
 
     @Test

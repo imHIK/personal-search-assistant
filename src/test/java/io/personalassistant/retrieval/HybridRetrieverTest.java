@@ -26,7 +26,6 @@ class HybridRetrieverTest {
         retriever.rrfK = 60;
         retriever.lexicalWeight = 1.0;
         retriever.vectorWeight = 1.0;
-        retriever.maxChunksPerEntity = 0;
         return retriever;
     }
 
@@ -96,51 +95,47 @@ class HybridRetrieverTest {
         return hits.get(0).score() - hits.get(hits.size() - 1).score();
     }
 
-    /**
-     * Off by default on purpose: a cap buys source diversity but harms the case where the right answer
-     * <em>is</em> many chunks of one document, which is the query class that motivated this work.
-     */
+    /** The fused score cannot say which leg put a chunk where it is; the recorded ranks can. */
     @Test
-    void perEntityCapIsOffByDefaultAndTrimsWhenTurnedOn() {
+    void hybridRecordsWhereEachLegRankedAChunk() {
         RecordingSearchIndex index = new RecordingSearchIndex();
-        index.lexicalResult = List.of(hit("a0", "big"), hit("a1", "big"), hit("a2", "big"), hit("b0", "other"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL, false, null, false, null);
+        index.lexicalResult = List.of(hit("B"), hit("C"), hit("A"));
+        index.vectorResult = List.of(hit("A"), hit("B"));
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 3, SearchQuery.Mode.HYBRID, false, null, false, null);
 
-        assertEquals(4, retriever(index).retrieve(query, null, 10).size(), "unlimited by default");
+        Map<String, SearchHit> byId = new java.util.HashMap<>();
+        retriever(index).retrieve(query, new float[] {0f}, 3).forEach(h -> byId.put(h.chunkId(), h));
 
-        HybridRetriever capped = retriever(index);
-        capped.maxChunksPerEntity = 2;
-        List<SearchHit> trimmed = capped.retrieve(query, null, 10);
-        assertEquals(3, trimmed.size());
-        assertEquals(List.of("a0", "a1", "b0"),
-                trimmed.stream().map(SearchHit::chunkId).toList(),
-                "rank order is preserved; only the over-quota chunks drop out");
+        assertEquals(1, byId.get("B").ranking().lexicalRank());
+        assertEquals(2, byId.get("B").ranking().vectorRank());
+        assertEquals(2, byId.get("C").ranking().lexicalRank());
+        assertEquals(null, byId.get("C").ranking().vectorRank(), "the meaning leg never returned C");
+        assertEquals(byId.get("B").score(), byId.get("B").ranking().retrievalScore(), 1e-12);
     }
 
     @Test
-    void aPerRequestCapOverridesTheGlobalOne() {
-        // "one result per record" for a posting corpus, without forcing whole-document chunking.
+    void aSingleLegModeRecordsOnlyItsOwnRank() {
         RecordingSearchIndex index = new RecordingSearchIndex();
-        index.lexicalResult = List.of(hit("a0", "job1"), hit("a1", "job1"), hit("b0", "job2"));
+        index.lexicalResult = List.of(hit("A"), hit("B"));
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 5, SearchQuery.Mode.LEXICAL, false, null, false, null);
+
+        SearchHit second = retriever(index).retrieve(query, null, 5).get(1);
+
+        assertEquals(2, second.ranking().lexicalRank());
+        assertEquals(null, second.ranking().vectorRank());
+    }
+
+    /**
+     * The retriever hands back every chunk it fetched. A per-entity cap here used to trim the pool it had
+     * already sized, starving the result set; grouping into entities is {@link EntityGrouper}'s job.
+     */
+    @Test
+    void returnsChunksUncappedEvenWhenOneEntityDominates() {
+        RecordingSearchIndex index = new RecordingSearchIndex();
+        index.lexicalResult = List.of(hit("a0", "big"), hit("a1", "big"), hit("a2", "big"), hit("b0", "other"));
         SearchQuery oneEach = new SearchQuery("q", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL,
                 false, 1, false, null);
 
-        List<SearchHit> capped = retriever(index).retrieve(oneEach, null, 10);
-
-        assertEquals(List.of("a0", "b0"), capped.stream().map(SearchHit::chunkId).toList());
-    }
-
-    @Test
-    void aPerRequestZeroLiftsAConfiguredGlobalCap() {
-        // 0 means unlimited, and an explicit override must win even when the global is restrictive —
-        // otherwise a caller could tighten the cap but never loosen it.
-        RecordingSearchIndex index = new RecordingSearchIndex();
-        index.lexicalResult = List.of(hit("a0", "big"), hit("a1", "big"), hit("a2", "big"));
-        HybridRetriever retriever = retriever(index);
-        retriever.maxChunksPerEntity = 1;
-        SearchQuery unlimited = new SearchQuery("q", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL,
-                false, 0, false, null);
-
-        assertEquals(3, retriever.retrieve(unlimited, null, 10).size());
+        assertEquals(4, retriever(index).retrieve(oneEach, null, 10).size());
     }
 }

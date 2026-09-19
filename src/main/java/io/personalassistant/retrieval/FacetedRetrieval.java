@@ -6,7 +6,11 @@ import io.personalassistant.indexing.embedding.EmbeddingProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
@@ -69,6 +73,28 @@ public class FacetedRetrieval {
         }
         // Equal weights: no facet is knowably more important than another, and weighting by the order a
         // model happened to emit them would be reading meaning into nothing.
-        return Rrf.fuse(rankings, List.of(), rrfK, limit);
+        Map<String, Integer> facetsMatched = facetsMatched(rankings);
+        return Rrf.fuse(rankings, List.of(), rrfK, limit).stream()
+                .map(hit -> hit.withRanking(hit.ranking().withFacetsMatched(
+                        facetsMatched.getOrDefault(hit.chunkId(), 0), hit.score())))
+                .toList();
+    }
+
+    /**
+     * How many facet rankings returned each chunk — the breadth that fusion rewards, recorded for
+     * diagnosis. Per-leg ranks are cleared instead: each facet ran its own legs, so no single lexical or
+     * vector rank describes the fused result.
+     */
+    private static Map<String, Integer> facetsMatched(List<List<SearchHit>> rankings) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (List<SearchHit> ranking : rankings) {
+            Set<String> seen = new HashSet<>();
+            for (SearchHit hit : ranking == null ? List.<SearchHit>of() : ranking) {
+                if (seen.add(hit.chunkId())) {
+                    counts.merge(hit.chunkId(), 1, Integer::sum);
+                }
+            }
+        }
+        return counts;
     }
 }

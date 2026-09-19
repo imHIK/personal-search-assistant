@@ -79,6 +79,11 @@ public class MongoIndexInitializer {
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "status"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
+        // The same listing narrowed to one group (a company, a folder): without it, picking one company
+        // on a large job-board source walks every entity of the knowledge to find its rows.
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "iterableId"),
+                        Indexes.descending("updatedAt"), Indexes.ascending("_id")));
 
         // Retention sweeps: source-declared expiry is a global scan, so it needs its own index;
         // the window pass is always scoped to one knowledge.

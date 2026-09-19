@@ -55,13 +55,13 @@ public class LeverPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, BoardFilter filter) {
+    public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode postings = api.listPostings(boardId);
         List<RawItem> items = new ArrayList<>();
         for (JsonNode posting : postings) {
-            RawItem item = toItem(boardId, posting);
+            RawItem item = toItem(boardId, company, posting);
             if (item != null) {
                 items.add(item);
             }
@@ -69,7 +69,7 @@ public class LeverPlatform implements BoardPlatform {
         return items;
     }
 
-    private RawItem toItem(String boardId, JsonNode posting) {
+    private RawItem toItem(String boardId, String label, JsonNode posting) {
         String id = posting.path("id").asText(null);
         String title = posting.path("text").asText(null);
         if (id == null || title == null) {
@@ -83,11 +83,12 @@ public class LeverPlatform implements BoardPlatform {
         String body = html.isBlank() ? description : html;
         String descriptionText = html.isBlank() ? description : AtsNormalization.plainText(html);
         Instant createdAt = AtsNormalization.instantOrNull(longOrNull(posting.path("createdAt")));
+        String company = AtsNormalization.company(label, boardId);
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
         metadata.put("uri", applyUrl);
-        metadata.put("company", boardId);
+        metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", boardId);
@@ -97,7 +98,7 @@ public class LeverPlatform implements BoardPlatform {
                 || "remote".equalsIgnoreCase(categories.path("commitment").asText("")));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));
         putIfPresent(metadata, "team", nullableText(categories.path("team")));
-        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(boardId, title, location));
+        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         putIfPresent(metadata, "postedAt", createdAt);
         AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
         if (comp != null) {
@@ -119,7 +120,7 @@ public class LeverPlatform implements BoardPlatform {
                 html.isBlank() ? "text/plain" : "text/html",
                 title,
                 applyUrl,
-                checksumOf(id, posting, body),
+                AtsNormalization.withCompany(checksumOf(id, posting, body), company, boardId),
                 createdAt,
                 raw,
                 body,

@@ -17,7 +17,7 @@ export type SourceType =
 
 export type KnowledgeStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ERROR' | 'DELETED'
 export type EntityStatus = 'INGESTED' | 'INDEXING' | 'INDEXED' | 'FAILED' | 'DELETED'
-export type EntityType = 'FILE' | 'MESSAGE' | 'EMAIL' | 'PAGE' | 'OTHER'
+export type EntityType = 'FILE' | 'MESSAGE' | 'EMAIL' | 'PAGE' | 'JOB_POSTING' | 'OTHER'
 export type ConnectionStatus = 'ACTIVE' | 'ERROR' | 'DISABLED'
 export type CursorDirection = 'BACKWARD' | 'FORWARD'
 export type CursorStatus =
@@ -54,11 +54,21 @@ export interface ChunkingSettings {
   separators: string[]
 }
 
+/**
+ * How long items are kept. `period` null means "inherit" — the connector's own default, then the
+ * server's, and unset at every tier means never expire. There is deliberately no value meaning
+ * "keep forever regardless": inheriting *is* how you get that on connectors with no default.
+ */
+export interface RetentionSettings {
+  period: string | null
+}
+
 export interface KnowledgeConfig {
   scheduleSettings: ScheduleSettings
   webhookSettings: WebhookSettings
   backfill: { enabled: boolean }
   chunking: ChunkingSettings
+  retention: RetentionSettings
 }
 
 export interface ConnectorDetails {
@@ -111,11 +121,17 @@ export interface CreateKnowledgeBody {
   chunkingMaxSize?: number | null
   chunkingOverlap?: number | null
   chunkingSeparators?: string[] | null
+  /**
+   * A `Durations` window such as `14d`. Null inherits, and on PATCH an explicit null clears back to
+   * inherit.
+   */
+  retentionPeriod?: string | null
 }
 
 /**
- * Body for `PATCH /api/knowledge/{id}`. Every field is optional, and **absent and explicit null
- * both mean "unchanged"** — there is no way to clear `cron`/`interval` back to inherited.
+ * Body for `PATCH /api/knowledge/{id}`. Every field is optional, in three states: **absent** leaves
+ * a field unchanged, an explicit **null** clears it back to inherit (`cron`, `interval`, chunking,
+ * `retentionPeriod`), and a value sets it. `name`/`auth`/`inputs` reject null.
  */
 export type PatchKnowledgeBody = Partial<
   Omit<CreateKnowledgeBody, 'type' | 'connectionId'> & {
@@ -128,6 +144,8 @@ export type PatchKnowledgeBody = Partial<
 
 export interface EntityItem {
   id: string
+  /** The group (folder, label, company) it came from. Named by joining with the cursors. */
+  iterableId: string | null
   externalId: string
   entityType: EntityType | null
   status: EntityStatus | null
@@ -249,7 +267,10 @@ export interface SearchBody {
   topK?: number
   mode?: SearchMode
   answer?: boolean
-  /** Cap on how many chunks one entity may contribute. 1 gives one result per document. */
+  /**
+   * How many matching chunks one result carries, its best included. Results are always one per
+   * entity; 1 drops the further matches.
+   */
   maxChunksPerEntity?: number
   /** Group near-identical results and keep one of each. Off by default on the server. */
   collapseDuplicates?: boolean
@@ -261,13 +282,37 @@ export interface SearchBody {
   sourceEntityId?: string
 }
 
+/** A further matching chunk of a result's entity. */
+export interface SearchMatch {
+  chunkId: string
+  ordinal: number
+  snippet: string | null
+  score: number
+}
+
+/** How a result reached its score. Diagnostic — rendered only under technical details. */
+export interface SearchRanking {
+  /** Where the word-match leg ranked the best chunk; null when it did not return it. */
+  lexicalRank: number | null
+  /** Where the meaning leg ranked it; null when it did not return it. */
+  vectorRank: number | null
+  /** Facet queries that returned it, for a search by document; 0 otherwise. */
+  facetsMatched: number
+  retrievalScore: number
+  /** After the further-matches bonus. */
+  groupedScore: number
+  /** Freshness multiplier; 1 when none applied. */
+  recencyFactor: number
+}
+
+/** One result: an entity, shown through its best-matching chunk. */
 export interface SearchHit {
-  /** `<entityId>_<ordinal>` — pins the matched passage. */
+  /** `<entityId>_<ordinal>` of the best-matching chunk — pins the matched passage. */
   chunkId: string
   entityId: string
   /** What lets a result be attributed to the source it came from. */
   knowledgeId: string
-  /** Position of the chunk inside its entity — orders several hits from one document. */
+  /** Position of the best chunk inside its entity. */
   ordinal: number
   title: string | null
   /** Display excerpt: the matching region when the lexical leg produced a highlight, else the head. */
@@ -275,6 +320,9 @@ export interface SearchHit {
   uri: string | null
   score: number
   metadata: Blob
+  /** The entity's other matching chunks, best first. Empty when only one passage matched. */
+  moreMatches: SearchMatch[]
+  ranking: SearchRanking
 }
 
 export interface SearchResult {

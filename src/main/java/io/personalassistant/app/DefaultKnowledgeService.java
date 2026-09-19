@@ -6,6 +6,7 @@ import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.DiscoveryStatus;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
@@ -421,16 +422,17 @@ public class DefaultKnowledgeService implements KnowledgeService {
     private static final int MAX_PAGE = 200;
 
     @Override
-    public EntityPage listEntities(String id, EntityStatus status, int limit, int offset) {
+    public EntityPage listEntities(String id, EntityQuery query, int limit, int offset) {
         requireExists(id);
         if (offset < 0) {
             throw new IllegalArgumentException("offset must not be negative: " + offset);
         }
         int size = limit <= 0 ? DEFAULT_PAGE : Math.min(limit, MAX_PAGE);
-        long total = status == null
-                ? entities.countByKnowledge(id)
-                : entities.countByKnowledgeAndStatus(id, status);
-        return new EntityPage(entities.findByKnowledge(id, status, size, offset), total, size, offset);
+        // Count through the same query the page is fetched with: a total that ignored a filter would
+        // leave the console paging into empty pages.
+        EntityQuery effective = query == null ? EntityQuery.all() : query;
+        long total = entities.countByKnowledge(id, effective);
+        return new EntityPage(entities.findByKnowledge(id, effective, size, offset), total, size, offset);
     }
 
     @Override

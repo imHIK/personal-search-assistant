@@ -183,14 +183,48 @@ selects `LEXICAL` / `SEMANTIC` / `HYBRID` (the query embedding is skipped entire
 > engine, which the mapping above already pins — no re-index is involved. The BM25 leg keeps its
 > filter in `bool.filter`, where it is applied during scoring and is already correct.
 
-After fusion the `Reranker` port can reorder the top ~20 for final precision. The shipped
+After fusion and grouping the `Reranker` port can reorder the results for final precision. The shipped
 implementation is `NoopReranker` — a cross-encoder is tracked on the roadmap.
 
 `DefaultSearchService` over-fetches on each leg before fusion: `size` and knn `k` are both
-`topK × app.search.candidate-multiplier` (4 by default). A chunk that only one leg ranks well has to
-survive long enough to reach the fusion step, so a multiplier of 1 would make hybrid mode pointless.
-`topK` itself is clamped to `app.search.max-top-k` in the service — it is multiplied before it becomes
-`size`, so an unbounded `topK` is an unbounded request to the cluster.
+`topK × app.search.candidate-multiplier` (10 by default), held between `app.search.min-candidates`
+(100) and `app.search.max-candidates` (500). The pool is counted in **chunks** but must hold `topK`
+distinct **entities** (next section): at the old multiplier of 4, a topK of 10 fetched 40 chunks, which
+over job postings of ~7 chunks each held only about 6 postings. A chunk that only one leg ranks well also
+has to survive long enough to reach the fusion step. `topK` is clamped to `app.search.max-top-k`;
+`max-candidates` is what bounds the request to the cluster.
+
+### Results are entities, not chunks
+
+Retrieval ranks chunks; `EntityGrouper` then folds them into **one result per entity** on every search,
+before collapsing, reranking and the topK trim. Ranking chunks directly let one matching item fill every
+slot with its own siblings — every chunk of a job posting carries the posting's title and embeds with the
+same prefix, so a title match lifts all of them together and a top 10 came back as two postings shown
+five times each. That is true of any multi-chunk entity, so grouping is not a per-source option.
+
+- **Shape.** A result is its entity's best chunk, plus up to `app.search.max-chunks-per-entity − 1`
+  further matching chunks in `moreMatches` (3 chunks per result by default; 0 keeps every match in the
+  pool). `SearchQuery.maxChunksPerEntity` overrides it per request; a digest sends 1, since it reports items.
+- **Score.** Best chunk plus `app.search.grouping.extra-match-weight` (0.1) of each further match. Best
+  chunk alone ignores that matching in several passages is a better match; a plain sum would rank long
+  documents above short ones on length. Bounded by the per-result cap, the bonus breaks near-ties only.
+- **Answers keep every passage.** The answer is grounded in `SearchHit.groundingText()` — the best chunk
+  and its further matches in document order — so a question whose answer spans many chunks of one document
+  still sees them all. That is the case a per-entity cap on chunks used to harm, and why it was off by
+  default; grouping does not have that cost.
+
+The cap used to be applied inside `HybridRetriever`, to the pool it had already fetched, which is what
+starved the result set. It no longer exists there.
+
+### Freshness
+
+`RecencyBoost` runs right after grouping and multiplies a result's score by
+`1 + app.search.recency.weight × 0.5^(age / half-life)` — at most +10% for a brand-new item, halving every
+`app.search.recency.half-life-days` (14). A multiplier rather than a sort or a filter: an unfitting posting
+from yesterday is still worse than a fitting one from last week, so freshness may only break near-ties.
+The date comes from the `recency` field set in `config/field-sets.json`, tried in order; it ships as
+`postedAt` alone, because a file's `modifiedAt` moves on every save and would reward churn. A result with
+no such value is untouched. Only the set's default list applies — results carry no source type by then.
 
 ---
 
@@ -199,7 +233,7 @@ survive long enough to reach the fusion step, so a multiplier of 1 would make hy
 Two request-shaping details on both legs, and one distinction that has already caused a real bug:
 
 - **`_source` excludes `embedding`.** Nothing on the read path reads the vector back, so without this
-  every hit ships its full 768 floats to be parsed and dropped — on a 40-candidate hybrid search that
+  every hit ships its full 768 floats to be parsed and dropped — on a 100-candidate hybrid search that
   is two orders of magnitude more bytes than the text the caller wanted.
 - **`highlight` on `text` + `title`, lexical leg only** (`app.search.highlight-fragments`, 0 to
   disable). The `<em>` markers are stripped when the fragments are joined: the fragment *boundaries*
@@ -217,6 +251,14 @@ Two request-shaping details on both legs, and one distinction that has already c
   and then stated that the remaining rows were not present in the sources. Any new consumer of
   `SearchHit` has to pick a side of that line deliberately: display takes `snippet`, reasoning takes
   `text`.
+- **`moreMatches` follows the same split.** Each further match keeps its full `text` for grounding
+  (`SearchHit.groundingText()`), and only its `chunkId`, `ordinal`, `snippet` and `score` go on the wire.
+- **`ranking` says how the score was reached.** `lexicalRank` / `vectorRank` (where each leg placed the
+  best chunk; null when that leg did not return it), `retrievalScore` (fused, or the single leg's score),
+  `groupedScore` (after the further-matches bonus) and `recencyFactor`. A document search records
+  `facetsMatched` instead of leg ranks, since every facet ran its own legs. Nothing ranks on it: it exists
+  so that when the wrong item comes first, the stage responsible — and so the one setting worth changing —
+  is visible. The console shows it under Technical details.
 
 ---
 
@@ -254,10 +296,19 @@ floor — hence the range form. Two details are load-bearing:
 
 ### Collapsing duplicates
 
-Opt-in per request (`collapseDuplicates`), applied **after** retrieval and **before** the topK trim, so
-a collapsed result set is still full. It is a grouping over the returned hits — nothing is deleted and
-the index is never touched. Three layers: identical normalised text, an equal `metadata.dedupeKey`, then
-token-shingle overlap above `app.search.dedupe.near-duplicate-threshold`.
+Opt-in per request (`collapseDuplicates`; the console sends it unless the user turns grouping off),
+applied **after** entity grouping and **before** the topK trim, so a collapsed result set is still full.
+It is a grouping over the returned results — nothing is deleted and the index is never touched. Three
+layers: identical normalised text, an equal `metadata.dedupeKey`, then token-shingle overlap above
+`app.search.dedupe.near-duplicate-threshold`. The text compared is a result's whole grounding text (best
+chunk and further matches), not one chunk.
+
+The two text layers also require the titles to agree — token overlap of at least
+`app.search.dedupe.title-similarity` (0.5; a blank title does not block). Identical text under unrelated
+titles is shared boilerplate, not a copy: every posting of one company carries the same "About us", and a
+text-only comparison merged different roles whose best-matching passage was that intro. 0.5 still groups
+"Fwd: Q3 report" with "Q3 report". The key layer skips the check, since a source that states a
+`dedupeKey` has already defined "the same".
 
 > **Shingles rather than embedding cosine, deliberately.** Cosine answers a different question: two
 > genuinely distinct roles at one company, or two reports on one project, sit very close in embedding
@@ -296,10 +347,9 @@ very well.
 - `app.search.document-query.max-facets` caps the fan-out, so a model's verbosity cannot decide how
   expensive a search is.
 
-`SearchQuery.maxChunksPerEntity` overrides `app.search.max-chunks-per-entity` per request. Setting it
-to `1` gives one result per document — the right shape for a record-like corpus (a job posting) without
-forcing whole-document chunking, which would exceed the embedding provider's input limit on a long
-description.
+`SearchQuery.maxChunksPerEntity` overrides `app.search.max-chunks-per-entity` per request: how many
+matching chunks one result carries. Results are one per entity regardless (see
+[Results are entities, not chunks](#results-are-entities-not-chunks)); `1` drops the further matches.
 
 ---
 

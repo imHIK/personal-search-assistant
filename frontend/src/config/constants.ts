@@ -26,6 +26,11 @@ export const searchModes: { value: SearchMode; label: string; hint: string }[] =
 export const DEFAULT_SEARCH_MODE: SearchMode = 'HYBRID'
 export const DEFAULT_TOP_K = 10
 export const TOP_K_OPTIONS = [5, 10, 20, 50]
+/**
+ * Matching chunks one result may carry (`maxChunksPerEntity`). 0 means every match; choosing none
+ * leaves the server's `app.search.max-chunks-per-entity` in force.
+ */
+export const MATCHES_PER_RESULT_OPTIONS = [1, 3, 5, 0]
 
 /** Mirrors `app.chunking.strategy` in application.properties. */
 export const chunkingStrategies = [
@@ -107,6 +112,49 @@ export function formatDigestInterval(interval: string | null): string | null {
   if (!interval) return null
   const value = digestIntervalValue(interval)
   return digestIntervals.find((option) => option.value === value)?.label ?? interval
+}
+
+/** Units offered for `retentionPeriod`, as `Durations` shorthand suffixes. */
+export const retentionUnits = [
+  { value: 'm', label: 'Minutes' },
+  { value: 'h', label: 'Hours' },
+  { value: 'd', label: 'Days' },
+] as const
+
+export type RetentionUnit = (typeof retentionUnits)[number]['value']
+
+const unitSeconds: Record<RetentionUnit, number> = { m: 60, h: 3600, d: 86400 }
+
+/**
+ * Read a stored duration — `Durations` shorthand (`14d`) or ISO-8601 (`P14D`, `PT36H`) — as an amount
+ * in the largest unit that divides it evenly. Null for empty or anything it cannot represent.
+ */
+export function parseDuration(value: string | null | undefined): { amount: number; unit: RetentionUnit } | null {
+  if (!value) return null
+  let seconds: number | null = null
+  const shorthand = value.trim().match(/^(\d+)\s*(ms|s|m|h|d)$/i)
+  if (shorthand) {
+    const n = Number(shorthand[1])
+    const factor: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 }
+    seconds = n * factor[shorthand[2].toLowerCase()]
+  } else {
+    const iso = value.trim().match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i)
+    if (iso) {
+      const [, d, h, m, s] = iso.map((part) => Number(part ?? 0))
+      seconds = d * 86400 + h * 3600 + m * 60 + s
+    }
+  }
+  if (!seconds || seconds < 60) return null
+  for (const unit of ['d', 'h', 'm'] as const) {
+    if (seconds % unitSeconds[unit] === 0) return { amount: seconds / unitSeconds[unit], unit }
+  }
+  return { amount: Math.round(seconds / 60), unit: 'm' }
+}
+
+/** A stored duration normalised to shorthand (`P14D` → `14d`), or empty when unset. */
+export function normalizeDuration(value: string | null | undefined): string {
+  const parsed = parseDuration(value)
+  return parsed ? `${parsed.amount}${parsed.unit}` : ''
 }
 
 /**

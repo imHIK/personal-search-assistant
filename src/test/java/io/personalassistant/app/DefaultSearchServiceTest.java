@@ -5,26 +5,31 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.agent.SearchAgent;
+import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.retrieval.DocumentQueryPlanner;
 import io.personalassistant.retrieval.DuplicateCollapser;
+import io.personalassistant.retrieval.EntityGrouper;
 import io.personalassistant.retrieval.FacetedRetrieval;
 import io.personalassistant.retrieval.NoopReranker;
+import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Retriever;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.StubSearchAgent;
+import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * Read-path orchestration. Two behaviours are load-bearing enough to pin down: an answer failure must
- * not cost the caller its hits, and {@code topK} must be bounded before it is multiplied into the
- * OpenSearch {@code size} and knn {@code k}.
+ * Read-path orchestration. Three behaviours are load-bearing enough to pin down: an answer failure must
+ * not cost the caller its hits, the candidate pool must be bounded before it becomes the OpenSearch
+ * {@code size} and knn {@code k}, and topK must count entities rather than chunks.
  */
 class DefaultSearchServiceTest {
 
@@ -51,7 +56,7 @@ class DefaultSearchServiceTest {
 
     /** A collapser with the shipped defaults; unused unless a query opts in. */
     private static DuplicateCollapser collapser() {
-        return new DuplicateCollapser(5, 0.85, 100);
+        return new DuplicateCollapser(5, 0.85, 100, 0.5);
     }
 
     /** Faceted retrieval is only reached by a document query; these tests all pass typed text. */
@@ -63,11 +68,20 @@ class DefaultSearchServiceTest {
     }
 
     private DefaultSearchService service(RecordingRetriever retriever, SearchAgent agent) {
+        return service(new FakeEmbeddingProvider(768), retriever, agent);
+    }
+
+    /** Hand-wired with the shipped defaults. */
+    private DefaultSearchService service(FakeEmbeddingProvider embeddings, RecordingRetriever retriever,
+                                         SearchAgent agent) {
         DefaultSearchService svc = new DefaultSearchService(
-                new FakeEmbeddingProvider(768), retriever, faceted(retriever, agent),
-                new NoopReranker(), collapser(), agent);
+                embeddings, retriever, faceted(retriever, agent),
+                new NoopReranker(), new EntityGrouper(3, 0.1),
+                new RecencyBoost(FieldSets.bundled(), 0.1, 14, Clock.systemUTC()), collapser(), agent);
         svc.maxTopK = 100;
-        svc.candidateMultiplier = 4;
+        svc.candidateMultiplier = 10;
+        svc.minCandidates = 100;
+        svc.maxCandidates = 500;
         return svc;
     }
 
@@ -121,39 +135,59 @@ class DefaultSearchServiceTest {
     }
 
     @Test
-    void overFetchesCandidatesForFusionToWorkWith() {
-        RecordingRetriever retriever = new RecordingRetriever();
+    void overFetchesChunkCandidatesForEntitiesToBeFoundIn() {
+        RecordingRetriever small = new RecordingRetriever();
+        service(small, new StubSearchAgent("")).search(ask(10, false));
+        assertEquals(100, small.lastLimit, "topK 10 x multiplier 10");
 
-        service(retriever, new StubSearchAgent("")).search(ask(10, false));
-
-        assertEquals(40, retriever.lastLimit, "topK * candidate-multiplier");
+        RecordingRetriever larger = new RecordingRetriever();
+        service(larger, new StubSearchAgent("")).search(ask(20, false));
+        assertEquals(200, larger.lastLimit);
     }
 
     /**
-     * topK reaches OpenSearch multiplied, as both {@code size} and knn {@code k}, so an unbounded value
-     * is a request for an unbounded result set. A non-positive one previously produced a negative
+     * The pool reaches OpenSearch as both {@code size} and knn {@code k}, so an unbounded value is a
+     * request for an unbounded result set. A non-positive topK previously produced a negative
      * {@code size} with no validation anywhere on the path.
      */
     @Test
-    void clampsTopKIntoTheConfiguredRange() {
+    void holdsTheCandidatePoolBetweenItsFloorAndCeiling() {
         RecordingRetriever high = new RecordingRetriever();
         service(high, new StubSearchAgent("")).search(ask(5_000, false));
-        assertEquals(400, high.lastLimit, "clamped to max-top-k (100) before over-fetching");
+        assertEquals(500, high.lastLimit, "topK clamped to 100, and 100 x 10 held to max-candidates");
 
         RecordingRetriever low = new RecordingRetriever();
         service(low, new StubSearchAgent("")).search(ask(0, false));
-        assertEquals(4, low.lastLimit, "0 is raised to 1, never a negative size");
+        assertEquals(100, low.lastLimit, "0 is raised to 1, and a tiny pool raised to min-candidates");
+    }
+
+    /**
+     * The reported symptom: ten results that were two job postings shown five times each. Chunks of one
+     * entity must fold into one result, leaving the remaining slots to other entities.
+     */
+    @Test
+    void oneEntityCannotFillEveryResultSlotWithItsOwnChunks() {
+        RecordingRetriever retriever = new RecordingRetriever();
+        List<SearchHit> pool = new ArrayList<>();
+        double score = 1.0;
+        for (int i = 0; i < 5; i++) {
+            pool.add(new SearchHit("jobA_" + i, "jobA", "kn_1", i, "Backend Engineer", "a" + i, "s", "u",
+                    score -= 0.01, Map.of()));
+        }
+        pool.add(new SearchHit("jobB_0", "jobB", "kn_1", 0, "Platform Engineer", "b0", "s", "u",
+                score - 0.01, Map.of()));
+        retriever.result = pool;
+
+        SearchResponse response = service(retriever, new StubSearchAgent("")).search(ask(10, false));
+
+        assertEquals(List.of("jobA", "jobB"), response.hits().stream().map(SearchHit::entityId).toList());
+        assertEquals(2, response.hits().get(0).moreMatches().size(), "capped at 3 chunks per result");
     }
 
     @Test
     void skipsTheQueryEmbeddingForAPurelyLexicalSearch() {
         FakeEmbeddingProvider embeddings = new FakeEmbeddingProvider(768);
-        RecordingRetriever retriever = new RecordingRetriever();
-        StubSearchAgent agent = new StubSearchAgent("");
-        DefaultSearchService svc = new DefaultSearchService(
-                embeddings, retriever, faceted(retriever, agent), new NoopReranker(), collapser(), agent);
-        svc.maxTopK = 100;
-        svc.candidateMultiplier = 4;
+        DefaultSearchService svc = service(embeddings, new RecordingRetriever(), new StubSearchAgent(""));
 
         svc.search(new SearchQuery("holidays", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL, false, null, false, null));
 

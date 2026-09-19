@@ -53,6 +53,9 @@ public class FieldSets {
     /** Metadata shown in a grounded prompt's source header so an answer can cite a location. */
     public static final String PROMPT_LOCATOR = "promptLocator";
 
+    /** Metadata holding a result's date, for the search-time freshness boost. Default list only. */
+    public static final String RECENCY = "recency";
+
     /** Optional filesystem path replacing the bundled file wholesale; blank counts as absent. */
     @ConfigProperty(name = "app.field-sets.path")
     Optional<String> overridePath;

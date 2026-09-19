@@ -1,10 +1,24 @@
 import { Briefcase, Folder, HardDrive, Hash, Mail, NotebookPen } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SourceType } from '@/api/types'
-import { knownCompanies } from './companies'
+import { knownCompanies, withCompanyLabels } from './companies'
 import { knownLocations } from './locations'
 import { roleExcludeTerms, roleIncludeTerms } from './roleTerms'
+import { seniorityOptions } from './searchFilters'
 import type { FieldSpec } from './fields'
+
+/** A metadata value worth showing under a search result's title. */
+export interface ResultFieldSpec {
+  /** Key in the hit's `metadata`. */
+  key: string
+  /**
+   * `text` shows the value as it is; `flag` shows `label` when the value is true; `option` shows the
+   * matching option's label and hides anything unrecognised; `date` shows `label` plus a relative time.
+   */
+  kind: 'text' | 'flag' | 'option' | 'date'
+  label?: string
+  options?: { value: string; label: string }[]
+}
 
 /**
  * One descriptor per connector. This is the frontend's mirror of the backend's CDI discovery:
@@ -32,6 +46,15 @@ export interface ConnectorDescriptor {
   companyResolver?: boolean
   /** Written into `Knowledge.inputs`. */
   inputFields: FieldSpec[]
+  /**
+   * Inputs the form does not render, derived from the ones it does just before a create or edit is
+   * sent. `previous` is the stored `inputs` on an edit. A descriptor hook, so no page branches on a
+   * SourceType to add them.
+   */
+  deriveInputs?: (
+    inputs: Record<string, unknown>,
+    previous?: Record<string, unknown>,
+  ) => Record<string, unknown>
   /** Written into `Connection.auth` — rendered masked. */
   authFields: FieldSpec[]
   /** Written into `Connection.config`. */
@@ -44,6 +67,24 @@ export interface ConnectorDescriptor {
    * OAuth application is this one field plus one bean, and no component changes.
    */
   oauth?: { provider: string }
+  /**
+   * What a search result from this source shows under its title, in order — the facts that tell two
+   * results apart at a glance (a posting's company and level, a mail's sender). Omit to show none.
+   */
+  resultFields?: ResultFieldSpec[]
+  /**
+   * What this connector's iterables are called. The Groups tab is one row per iterable, and the
+   * generic word is nearly always the wrong one — a job board's groups are companies, Gmail's are
+   * labels. A descriptor entry rather than a lookup in the component, so no tab branches on a
+   * SourceType; omitted falls back to "Groups".
+   */
+  groupNoun?: { one: string; many: string }
+  /**
+   * The connector tier of `RetentionResolver` (`defaultRetention()`), as `Durations` shorthand —
+   * repeated here only so an empty retention field can say what it inherits. Omit when the
+   * connector has none.
+   */
+  defaultRetention?: string
 }
 
 export const googleAuthFields: FieldSpec[] = [
@@ -101,6 +142,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: Folder,
     implemented: true,
     requiresConnection: false,
+    groupNoun: { one: 'Folder', many: 'Folders' },
     inputFields: [
       {
         name: 'rootPath',
@@ -117,6 +159,7 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: [],
     configFields: [],
+    resultFields: [{ key: 'modifiedAt', kind: 'date', label: 'Modified' }],
   },
   {
     id: 'GMAIL',
@@ -125,6 +168,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: Mail,
     implemented: true,
     requiresConnection: true,
+    groupNoun: { one: 'Label', many: 'Labels' },
     inputFields: [
       {
         name: 'labelIds',
@@ -149,6 +193,10 @@ export const connectors: ConnectorDescriptor[] = [
       steps: googleHelpSteps,
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
     },
+    resultFields: [
+      { key: 'from', kind: 'text' },
+      { key: 'modifiedAt', kind: 'date', label: 'Received' },
+    ],
   },
   {
     id: 'GOOGLE_DRIVE',
@@ -157,6 +205,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: HardDrive,
     implemented: true,
     requiresConnection: true,
+    groupNoun: { one: 'Folder', many: 'Folders' },
     inputFields: [
       {
         name: 'folderIds',
@@ -174,6 +223,7 @@ export const connectors: ConnectorDescriptor[] = [
       steps: googleHelpSteps,
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],
     },
+    resultFields: [{ key: 'modifiedAt', kind: 'date', label: 'Modified' }],
   },
   {
     id: 'JOB_BOARDS',
@@ -183,6 +233,11 @@ export const connectors: ConnectorDescriptor[] = [
     implemented: true,
     requiresConnection: false,
     companyResolver: true,
+    deriveInputs: withCompanyLabels,
+    groupNoun: { one: 'Company', many: 'Companies' },
+    // Mirrors JobBoardsConnector.defaultRetention(). A closed posting is never tombstoned by the
+    // board — it just stops appearing — so this window is the only thing that removes it.
+    defaultRetention: '14d',
     inputFields: [
       {
         name: 'companies',
@@ -255,6 +310,13 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: [],
     configFields: [],
+    resultFields: [
+      { key: 'company', kind: 'text' },
+      { key: 'location', kind: 'text' },
+      { key: 'seniority', kind: 'option', options: seniorityOptions },
+      { key: 'remote', kind: 'flag', label: 'Remote' },
+      { key: 'postedAt', kind: 'date', label: 'Posted' },
+    ],
   },
   {
     id: 'SLACK',

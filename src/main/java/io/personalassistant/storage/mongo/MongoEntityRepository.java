@@ -3,11 +3,13 @@ package io.personalassistant.storage.mongo;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.gt;
+import static com.mongodb.client.model.Filters.in;
 import static com.mongodb.client.model.Filters.lt;
 import static com.mongodb.client.model.Filters.lte;
 import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.nin;
 import static com.mongodb.client.model.Filters.or;
+import static com.mongodb.client.model.Filters.regex;
 import static com.mongodb.client.model.Sorts.ascending;
 import static com.mongodb.client.model.Sorts.descending;
 import static com.mongodb.client.model.Sorts.orderBy;
@@ -19,6 +21,7 @@ import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
@@ -30,6 +33,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -388,16 +392,40 @@ public class MongoEntityRepository implements EntityRepository {
         return out;
     }
 
+    /**
+     * The filter behind both the listing and its count, so the two can never disagree.
+     *
+     * <p>The text clause is an unanchored case-insensitive regex, which cannot use an index — but it
+     * only ever scans within one knowledge, since {@code knowledgeId} leads the compound index the
+     * sort is served by. {@code Pattern.quote} is what keeps a user typing {@code C++} or {@code (}
+     * from either erroring or matching as a pattern.
+     */
+    private static Bson listingFilter(String knowledgeId, EntityQuery query) {
+        List<Bson> clauses = new ArrayList<>();
+        clauses.add(eq("knowledgeId", knowledgeId));
+        if (query.hasStatusFilter()) {
+            clauses.add(in("status", query.statuses().stream().map(EntityStatus::name).toList()));
+        } else {
+            clauses.add(ne("status", EntityStatus.DELETED.name()));
+        }
+        if (query.hasIterableFilter()) {
+            clauses.add(in("iterableId", query.iterableIds()));
+        }
+        if (query.hasTextFilter()) {
+            String quoted = Pattern.quote(query.titleContains());
+            clauses.add(or(regex("metadata.title", quoted, "i"), regex("externalId", quoted, "i")));
+        }
+        return and(clauses);
+    }
+
     @Override
-    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset) {
-        Bson filter = status == null ? eq("knowledgeId", knowledgeId)
-                : and(eq("knowledgeId", knowledgeId), eq("status", status.name()));
+    public List<EntitySummary> findByKnowledge(String knowledgeId, EntityQuery query, int limit, int offset) {
         List<EntitySummary> out = new ArrayList<>();
-        collection().find(filter)
+        collection().find(listingFilter(knowledgeId, query))
                 // Project away raw + content: they are the bulk of the document and a listing never
                 // reads them. _id comes back implicitly.
-                .projection(Projections.include("knowledgeId", "externalId", "entityType", "status",
-                        "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
+                .projection(Projections.include("knowledgeId", "iterableId", "externalId", "entityType",
+                        "status", "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
                         "needsReindex", "createdAt", "updatedAt"))
                 // _id is the tiebreak so two entities touched in the same millisecond can't swap
                 // places between pages. Served by the (knowledgeId, updatedAt, _id) compound index.
@@ -406,6 +434,11 @@ public class MongoEntityRepository implements EntityRepository {
                 .limit(limit)
                 .forEach(d -> out.add(toSummary(d)));
         return out;
+    }
+
+    @Override
+    public long countByKnowledge(String knowledgeId, EntityQuery query) {
+        return collection().countDocuments(listingFilter(knowledgeId, query));
     }
 
     @Override
@@ -503,6 +536,7 @@ public class MongoEntityRepository implements EntityRepository {
         return new EntitySummary(
                 d.getString("_id"),
                 d.getString("knowledgeId"),
+                d.getString("iterableId"),
                 d.getString("externalId"),
                 BsonSupport.enumOf(EntityType.class, d.get("entityType")),
                 BsonSupport.enumOf(EntityStatus.class, d.get("status")),

@@ -5,6 +5,7 @@ import io.personalassistant.api.dto.CursorDto;
 import io.personalassistant.api.dto.EntityPageDto;
 import io.personalassistant.api.dto.KnowledgeDto;
 import io.personalassistant.api.dto.KnowledgePatchDto;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.service.KnowledgeService;
@@ -19,8 +20,10 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Set;
 
 /**
  * Manage connected knowledge sources. {@code POST /api/knowledge} validates the connector,
@@ -86,24 +89,54 @@ public class KnowledgeResource {
     }
 
     /**
-     * Page this knowledge's entities, newest-first. {@code status} filters by {@code EntityStatus}
-     * name (blank/absent = all); {@code limit} is clamped to {@code 1..200} by the service. An
-     * unknown status name or a negative offset is a {@code 400}; an unknown id is a {@code 404}.
+     * Page this knowledge's entities, newest-first.
+     *
+     * <p>{@code status} filters by {@code EntityStatus} name and accepts a comma-separated list
+     * ({@code ?status=INGESTED,INDEXING}) — the console's filter chips map to sets, not single
+     * states, and {@code INDEXING} was unreachable while this took one name. Blank/absent means
+     * every status except {@code DELETED} (see {@link EntityQuery}). {@code q} is a case-insensitive
+     * substring of the title or the external id. {@code iterableId} narrows to groups (a company, a
+     * folder) and is <em>repeated</em> for several ({@code ?iterableId=a&iterableId=b}) rather than
+     * comma-separated: a local folder's id is a path, and a path may contain a comma. {@code limit} is
+     * clamped to {@code 1..200} by the
+     * service. An unknown status name or a negative offset is a {@code 400}; an unknown id is a
+     * {@code 404}.
      */
     @GET
     @Path("/{id}/entities")
     public EntityPageDto entities(@PathParam("id") String id,
                                   @QueryParam("status") String status,
+                                  @QueryParam("q") String q,
+                                  @QueryParam("iterableId") List<String> iterableIds,
                                   @QueryParam("limit") @DefaultValue("50") int limit,
                                   @QueryParam("offset") @DefaultValue("0") int offset) {
         try {
-            EntityStatus filter = status == null || status.isBlank() ? null : EntityStatus.valueOf(status);
-            return EntityPageDto.from(knowledgeService.listEntities(id, filter, limit, offset));
+            Set<String> groups = new LinkedHashSet<>();
+            if (iterableIds != null) {
+                iterableIds.stream().filter(v -> v != null && !v.isBlank()).forEach(groups::add);
+            }
+            EntityQuery query = new EntityQuery(parseStatuses(status), q, groups);
+            return EntityPageDto.from(knowledgeService.listEntities(id, query, limit, offset));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
         } catch (IllegalArgumentException e) {          // unknown status name / negative offset
             throw ApiErrors.badRequest(e.getMessage());
         }
+    }
+
+    /** Comma-separated {@code EntityStatus} names; blank/absent means "no status filter". */
+    private static Set<EntityStatus> parseStatuses(String status) {
+        if (status == null || status.isBlank()) {
+            return Set.of();
+        }
+        Set<EntityStatus> parsed = new LinkedHashSet<>();
+        for (String name : status.split(",")) {
+            String trimmed = name.trim();
+            if (!trimmed.isEmpty()) {
+                parsed.add(EntityStatus.valueOf(trimmed));
+            }
+        }
+        return parsed;
     }
 
     /** This knowledge's ingestion cursors — the real sync-progress view. {@code 404} on unknown id. */

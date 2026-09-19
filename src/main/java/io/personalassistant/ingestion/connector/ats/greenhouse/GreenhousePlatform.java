@@ -57,13 +57,13 @@ public class GreenhousePlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, BoardFilter filter) {
+    public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
         // Hint ignored: one request returns the whole board either way, so filtering
         // early would save nothing. The connector filters what comes back.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
-            RawItem item = toItem(boardId, job);
+            RawItem item = toItem(boardId, company, job);
             if (item != null) {
                 items.add(item);
             }
@@ -71,7 +71,7 @@ public class GreenhousePlatform implements BoardPlatform {
         return items;
     }
 
-    private RawItem toItem(String boardId, JsonNode job) {
+    private RawItem toItem(String boardId, String label, JsonNode job) {
         String id = job.path("id").asText(null);
         String title = job.path("title").asText(null);
         if (id == null || title == null) {
@@ -80,7 +80,7 @@ public class GreenhousePlatform implements BoardPlatform {
         String updatedAt = job.path("updated_at").asText("");
         String location = job.path("location").path("name").asText(null);
         String applyUrl = job.path("absolute_url").asText(null);
-        String company = companyOf(job, boardId);
+        String company = companyOf(job, label, boardId);
         // content is HTML-escaped in Greenhouse's payload; the HTML parser at index time unescapes
         // and strips it, so the entity keeps the source form rather than a lossy pre-flattened one.
         String content = job.path("content").asText("");
@@ -124,7 +124,9 @@ public class GreenhousePlatform implements BoardPlatform {
                 // second — so trusting it re-embedded three quarters of a board for a change that
                 // never touched the text. The stamp covers what is actually indexed instead; see
                 // AtsNormalization.changeStamp.
-                "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
+                AtsNormalization.withCompany(
+                        "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
+                        company, companyOf(job, null, boardId)),
                 AtsNormalization.instantOrNull(updatedAt),
                 raw,
                 content,
@@ -136,9 +138,14 @@ public class GreenhousePlatform implements BoardPlatform {
                 false);
     }
 
-    private static String companyOf(JsonNode job, String boardId) {
+    /**
+     * The board's own {@code company_name} first: unlike a token, it is the employer's real name, so
+     * it outranks even the user's label. The label only replaces the token it would otherwise fall
+     * back to ({@code digitalocean98}).
+     */
+    private static String companyOf(JsonNode job, String label, String boardId) {
         String name = job.path("company_name").asText(null);
-        return name == null || name.isBlank() ? boardId : name;
+        return name == null || name.isBlank() ? AtsNormalization.company(label, boardId) : name;
     }
 
     private static void putIfPresent(Map<String, Object> metadata, String key, Object value) {

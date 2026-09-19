@@ -109,10 +109,18 @@ Indexes:
 - `{ knowledgeId: 1, createdAt: 1 }` — its per-knowledge retention-window pass.
 - `{ knowledgeId: 1, updatedAt: -1, _id: 1 }` and `{ knowledgeId: 1, status: 1, updatedAt: -1, _id: 1 }`
   — the sorted listing behind `GET /api/knowledge/{id}/entities`, unfiltered and status-filtered.
+  The listing's `q` filter (`EntityQuery.titleContains`) adds an unanchored case-insensitive regex on
+  `metadata.title`/`externalId`, which no index can serve — it is allowed because `knowledgeId` still
+  leads, so the scan is bounded by one source rather than the collection. That listing also hides
+  `DELETED` unless the caller names the status, so a tombstone on its way out is not offered as a row.
   `_id` is the paging tiebreak so two entities touched in the same millisecond can't swap places
   between pages. Note `{ knowledgeId: 1, status: 1 }` is now a strict prefix of the second one and
   therefore redundant; `MongoIndexInitializer` only ever creates indexes (no drop path, no migration
   framework), so it is deliberately left in place rather than removed.
+- `{ knowledgeId: 1, iterableId: 1, updatedAt: -1, _id: 1 }` — the same listing narrowed to one or
+  more groups (`?iterableId=`), so picking one company on a large job-board source reads that
+  company's rows instead of the whole knowledge's. Each listed row also carries `iterableId`, which
+  the console names by joining with the knowledge's cursors.
 
 > **Listing reads a projection.** `EntityRepository.findByKnowledge` returns `EntitySummary`, not
 > `Entity` — `raw` and `content.text` are the bulk of the document and a table view needs neither.

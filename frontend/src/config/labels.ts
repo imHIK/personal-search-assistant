@@ -76,6 +76,22 @@ export const labels = {
     copyLink: 'Copy link',
     viewItem: `View ${nouns.item.toLowerCase()}`,
     citation: (n: number) => `Source ${n}`,
+    moreMatches: (n: number) => `${n} more ${n === 1 ? 'match' : 'matches'} in this ${nouns.item.toLowerCase()}`,
+    hideMatches: 'Hide other matches',
+    filters: 'Filters',
+    filtersActive: (n: number) => `Filters · ${n}`,
+    searchByDocument: 'Search by document',
+    searchByDocumentHint:
+      'Pick something already searchable — a CV, a brief, a posting. Results are the items most like it.',
+    similarTo: 'Items like',
+    changeDocument: 'Change',
+    clearDocument: 'Stop searching by this document',
+    placeholderWithDocument: 'Optionally, say what you are after — e.g. roles I could do next…',
+    findSimilar: 'Find similar',
+    matchesPerResult: 'Matches per result',
+    matchesDefault: 'Default matches',
+    matchesOption: (n: number) =>
+      n === 0 ? 'All matches' : `${n} ${n === 1 ? 'match' : 'matches'} per result`,
   },
 
   sources: {
@@ -105,24 +121,27 @@ export const labels = {
   detail: {
     overview: 'Overview',
     items: nouns.items,
-    activity: 'Sync activity',
+    groups: 'Groups',
     settings: 'Settings',
-    searchable: 'Searchable',
+    indexed: 'Indexed',
     processing: 'Processing',
-    failed: "Couldn't process",
+    failed: 'Failed',
     progress: (indexed: number, total: number) =>
       `${indexed.toLocaleString()} of ${total.toLocaleString()} ready to search`,
   },
 
+  /** Shared by every filter bar. The filters themselves are descriptors in `config/listFilters.ts`. */
+  filters: {
+    clear: 'Clear',
+    all: (noun: string) => `All ${noun.toLowerCase()}`,
+  },
+
   items: {
-    all: 'All',
-    searchable: 'Searchable',
-    processing: 'Processing',
-    failed: "Couldn't process",
     empty: 'Nothing here yet',
     emptyHint: 'Items appear as they are imported. This can take a few minutes after connecting.',
     emptyFiltered: 'Nothing matches this filter',
     errorHint: 'Why this item could not be processed',
+    showOnlyGroup: (name: string) => `Show only items from ${name}`,
     refresh: 'Reprocess',
     refreshHint: 'Read this item again from what was already downloaded',
     remove: 'Remove',
@@ -137,16 +156,22 @@ export const labels = {
     next: 'Next',
   },
 
-  activity: {
-    empty: 'No sync activity yet',
-    emptyHint: 'Activity appears once the first check runs.',
-    older: 'Older items',
-    newer: 'New items',
+  groups: {
+    empty: 'No groups yet',
+    emptyHint: 'Groups appear once the first check runs.',
+    emptyFiltered: 'No groups match this filter',
     everything: 'Everything',
     imported: (n: number) => `${n.toLocaleString()} imported`,
-    lastChecked: (when: string) => `last checked ${when}`,
+    lastChecked: (when: string) => `checked ${when}`,
     neverChecked: 'not checked yet',
+    importingHistory: 'importing history',
+    viewItems: 'View items',
+    importingHistoryHint:
+      'Still working backwards through what was already there when you connected. This runs once.',
     legend: 'What these mean',
+    legendSynced: 'is the normal resting state: everything here is imported and we are waiting for the next check.',
+    legendSyncing: 'means we are reading from it right now. A warning beside it means the service is making us wait.',
+    legendFailed: 'means it stopped after repeated errors and needs you — nothing new comes in until it is retried.',
   },
 
   reconnectBanner: {
@@ -240,6 +265,13 @@ export const labels = {
     scopeWarning:
       'Saving this re-checks the account and rescans the source. It can take a while, and the source pauses until it finishes.',
     chunking: 'Advanced processing',
+    retention: 'Retention',
+    retentionPeriod: 'Retention period',
+    retentionUnit: 'Unit',
+    retentionHint: (inherited?: string) =>
+      inherited
+        ? `Empty inherits the connector default (${inherited}).`
+        : 'Empty inherits the server default; unset means entities never expire.',
     name: 'Name',
     connector: 'Connected via',
     connectorFixed: 'Cannot be changed after creation.',
