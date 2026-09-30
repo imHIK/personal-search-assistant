@@ -144,7 +144,11 @@ posted-date instead, and treat comp as a bonus when it happens to be there.
   ranks and takes the top N rather than thresholding. The score is persisted for calibration; do not
   build a "fit >= 8" gate on it.
 - **`job-fit` uses the `lite` profile** because it runs over every new posting every day. Judgement
-  quality is bounded by that choice; raise the profile if the reasons read as shallow.
+  quality is bounded by that choice; raise the profile if the reasons read as shallow. Its
+  `contextChars` is 80000 so all ten postings of a run fit whole (median posting ~6k chars); a budget
+  that does not fit them drops the tail silently, since `AnswerPromptBuilder` stops at the budget. That
+  one request is ~20k tokens, which is why `lite` is on Gemini rather than Groq — see
+  [providers.md](./providers.md#llm-profiles-per-role-model-selection).
 - **Seniority, remoteness and pay are only as good as the posting.** The normalisers return null rather
   than guessing, so a filter on `metadata.seniority` silently excludes every posting whose title states
   no level — which is many of them, and a filter on comp excludes nearly every Indian one. Prefer

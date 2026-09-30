@@ -5,10 +5,10 @@ import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.domain.service.SearchService;
-import io.personalassistant.indexing.embedding.EmbeddingProvider;
 import io.personalassistant.retrieval.DuplicateCollapser;
 import io.personalassistant.retrieval.EntityGrouper;
 import io.personalassistant.retrieval.FacetedRetrieval;
+import io.personalassistant.retrieval.QueryEmbedder;
 import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Reranker;
 import io.personalassistant.retrieval.Retriever;
@@ -30,7 +30,7 @@ public class DefaultSearchService implements SearchService {
 
     private static final Logger LOG = Logger.getLogger(DefaultSearchService.class.getName());
 
-    private final EmbeddingProvider embeddings;
+    private final QueryEmbedder embeddings;
     private final Retriever retriever;
     private final FacetedRetrieval faceted;
     private final Reranker reranker;
@@ -70,7 +70,7 @@ public class DefaultSearchService implements SearchService {
     int maxCandidates;
 
     @Inject
-    public DefaultSearchService(EmbeddingProvider embeddings,
+    public DefaultSearchService(QueryEmbedder embeddings,
                                 Retriever retriever,
                                 FacetedRetrieval faceted,
                                 Reranker reranker,
@@ -95,16 +95,12 @@ public class DefaultSearchService implements SearchService {
 
         int candidateLimit = candidateLimit(topK);
         // A document query is decomposed into facets and fused; a typed query embeds its own text once.
-        // Both produce the same candidate shape, so everything downstream is unchanged.
-        List<SearchHit> candidates;
-        if (query.isDocumentQuery()) {
-            candidates = faceted.retrieve(query, candidateLimit);
-        } else {
-            float[] queryVector = query.mode() == SearchQuery.Mode.LEXICAL
-                    ? null
-                    : embeddings.embedQuery(query.text()).vector();
-            candidates = retriever.retrieve(query, queryVector, candidateLimit);
-        }
+        // Both produce the same candidate shape, so everything downstream is unchanged. A refused query
+        // embedding turns the retrieval lexical rather than failing it; see QueryEmbedder.
+        QueryEmbedder.Session vectors = embeddings.session();
+        List<SearchHit> candidates = query.isDocumentQuery()
+                ? faceted.retrieve(query, candidateLimit, vectors)
+                : vectors.retrieve(retriever, query, candidateLimit);
         // Chunks become results here. Everything after this line — freshness, collapsing, reranking, the
         // topK trim and the answer — works on entities, so topK counts items and one item can no longer
         // fill every slot with its own chunks.
@@ -131,7 +127,8 @@ public class DefaultSearchService implements SearchService {
                 LOG.log(Level.WARNING, "Answer synthesis failed; returning hits without an answer", e);
             }
         }
-        return new SearchResponse(ranked, answer, answerError, System.currentTimeMillis() - start);
+        return new SearchResponse(ranked, answer, answerError, vectors.vectorError(),
+                System.currentTimeMillis() - start);
     }
 
     /** {@code topK × candidate-multiplier}, held between the configured floor and ceiling. */

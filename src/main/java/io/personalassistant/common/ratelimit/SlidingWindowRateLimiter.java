@@ -60,7 +60,7 @@ public class SlidingWindowRateLimiter extends AbstractRateLimiter {
             for (RateLimitRule rule : limit.policy().rules()) {
                 Window window = windowFor(limit.key(), rule, now);
                 window.evictExpired(rule, now);
-                if (window.isFull()) {
+                if (window.isFull(rule)) {
                     Duration need = window.timeToFreeSlot(rule, now);
                     if (need.compareTo(wait) > 0) {
                         wait = need;
@@ -71,7 +71,7 @@ public class SlidingWindowRateLimiter extends AbstractRateLimiter {
                 return wait;
             }
             for (RateLimitRule rule : limit.policy().rules()) {
-                windowFor(limit.key(), rule, now).record(now);
+                windowFor(limit.key(), rule, now).record(now, rule);
             }
             return Duration.ZERO;
         }
@@ -124,20 +124,25 @@ public class SlidingWindowRateLimiter extends AbstractRateLimiter {
             Instant now = clock.instant();
             Window window = windowFor(key, rule, now);
             window.evictExpired(rule, now);
-            return window.capacity - window.size;
+            return Math.max(0, rule.permits() - window.size);
         }
     }
 
     /**
-     * The admission instants of one (key, rule), as a ring buffer holding at most {@code permits} of
-     * them — the rule's own ceiling bounds the memory, so a large window costs what it admits and no
-     * more. Entries are appended in time order, which is what lets eviction and {@link #timeToFreeSlot}
-     * look only at the head.
+     * The admission instants of one (key, window length), as a ring buffer sized to the highest ceiling
+     * that has charged it — the rules' own ceilings bound the memory, so a large window costs what it
+     * admits and no more. Entries are appended in time order, which is what lets eviction and
+     * {@link #timeToFreeSlot} work from the head.
+     *
+     * <p><strong>Fullness is judged against the caller's rule, not the buffer.</strong> Two rules with the
+     * same window share this counter at different ceilings (a background call stops short of the one a
+     * search may use; see {@code RateLimitPolicies}), so the count can legitimately sit above a lower
+     * ceiling, and the buffer grows when a higher one arrives after a lower one created it.
      */
     private static final class Window {
 
-        private final int capacity;
-        private final Instant[] admitted;
+        private int capacity;
+        private Instant[] admitted;
         private int head;
         private int size;
         private Instant lastTouched;
@@ -159,23 +164,41 @@ public class SlidingWindowRateLimiter extends AbstractRateLimiter {
             lastTouched = now;
         }
 
-        private boolean isFull() {
-            return size >= capacity;
+        private boolean isFull(RateLimitRule rule) {
+            return size >= rule.permits();
         }
 
         /**
-         * When the oldest admission ages out — the first instant this window admits again. Always
-         * positive: only reached while full, and {@link #evictExpired} has just dropped everything at or
-         * before the cutoff, so the head is strictly inside the window.
+         * When enough admissions age out to put the count back under {@code rule}'s ceiling — the first
+         * instant this window admits that rule again. That is the oldest admission only when the count
+         * is exactly at the ceiling; above it (a higher ceiling on the same counter spent past this one)
+         * it is the one {@code size - permits} further in, and waiting on the oldest would wake the
+         * caller to a window that is still full. Always positive: only reached while full, and
+         * {@link #evictExpired} has just dropped everything at or before the cutoff.
          */
         private Duration timeToFreeSlot(RateLimitRule rule, Instant now) {
-            return Duration.between(now, admitted[head].plus(rule.window()));
+            Instant freeing = admitted[(head + size - rule.permits()) % capacity];
+            return Duration.between(now, freeing.plus(rule.window()));
         }
 
-        private void record(Instant now) {
+        private void record(Instant now, RateLimitRule rule) {
+            if (size == capacity) {
+                grow(Math.max(capacity + 1, rule.permits()));
+            }
             admitted[(head + size) % capacity] = now;
             size++;
             lastTouched = now;
+        }
+
+        /** Re-lay the ring from index 0 into a larger buffer, preserving time order. */
+        private void grow(int newCapacity) {
+            Instant[] larger = new Instant[newCapacity];
+            for (int i = 0; i < size; i++) {
+                larger[i] = admitted[(head + i) % capacity];
+            }
+            admitted = larger;
+            capacity = newCapacity;
+            head = 0;
         }
     }
 }

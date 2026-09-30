@@ -55,7 +55,7 @@ class DefaultDigestServiceTest {
             }
             boolean windowed = query.filters().containsKey(DefaultDigestService.INDEXED_AT);
             List<SearchHit> hits = !windowed && withoutWindow != null ? withoutWindow : result;
-            return new SearchResponse(hits, null, null, 1);
+            return new SearchResponse(hits, null, null, null, 1);
         }
     }
 

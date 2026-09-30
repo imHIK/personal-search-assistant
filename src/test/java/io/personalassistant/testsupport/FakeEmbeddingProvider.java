@@ -26,9 +26,13 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
      */
     public int embedCalls;
 
+    /** Calls to {@link #embedQuery}, refused ones included — what the query-vector cache is proved by. */
+    public int queryCalls;
+
     /**
-     * When set, {@link #embedAll} throws {@link RateLimitedException} with this as its {@code retryAt} —
-     * how a caller is shown to defer rather than fail, without standing up a real bucket.
+     * When set, {@link #embedAll} and {@link #embedQuery} throw {@link RateLimitedException} with this as
+     * its {@code retryAt} — how a caller is shown to defer (indexing) or degrade (search) rather than
+     * fail, without standing up a real bucket.
      */
     public Instant rateLimitedUntil;
 
@@ -68,6 +72,15 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
             v[Math.floorMod(text.hashCode(), dim)] = 1.0f;
         }
         return new Embedding(model(), dim, v);
+    }
+
+    @Override
+    public Embedding embedQuery(String text) {
+        queryCalls++;
+        if (rateLimitedUntil != null) {
+            throw new RateLimitedException(RateLimitKey.embedding(providerId()), rateLimitedUntil);
+        }
+        return embed(text);
     }
 
     @Override

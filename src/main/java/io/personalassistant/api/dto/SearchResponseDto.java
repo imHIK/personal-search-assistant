@@ -13,9 +13,13 @@ import java.util.Map;
  * @param answerError why no answer came back despite being asked for — an unavailable or
  *                    misconfigured LLM. The hits are still valid and populated; a client can show
  *                    results and surface this as a notice rather than treating the search as failed
+ * @param vectorError why the query could not be embedded — a spent embedding quota, an unreachable
+ *                    endpoint. The search then ran keyword-only: the hits are valid, just without the
+ *                    semantic leg, so this too is a notice rather than a failure
  * @param tookMs      wall-clock time the search took
  */
-public record SearchResponseDto(List<Hit> hits, String answer, String answerError, long tookMs) {
+public record SearchResponseDto(List<Hit> hits, String answer, String answerError, String vectorError,
+                                long tookMs) {
 
     /**
      * One result: an entity, shown through its best-matching chunk. Component order mirrors
@@ -88,6 +92,6 @@ public record SearchResponseDto(List<Hit> hits, String answer, String answerErro
                                 h.ranking().facetsMatched(), h.ranking().retrievalScore(),
                                 h.ranking().groupedScore(), h.ranking().recencyFactor())))
                 .toList();
-        return new SearchResponseDto(hits, r.answer(), r.answerError(), r.tookMs());
+        return new SearchResponseDto(hits, r.answer(), r.answerError(), r.vectorError(), r.tookMs());
     }
 }

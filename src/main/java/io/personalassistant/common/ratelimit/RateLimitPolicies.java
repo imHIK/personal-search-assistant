@@ -22,6 +22,22 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * a new connector's default a config edit instead of a code change — the same reasoning
  * {@code LlmProfiles} applies to profiles — and avoids the core branching on {@code SourceType}.
  *
+ * <p><strong>Background calls get a lower ceiling on the same bucket.</strong> The LLM and embedding
+ * endpoints are one provider quota serving two kinds of caller: indexing and digests, which will happily
+ * spend all of it, and a user's search, which then has nothing left. So a {@link RateLimitMode#WAIT} call
+ * resolves {@code app.ratelimit.<area>.background.rules} while a {@link RateLimitMode#FAIL_FAST} call
+ * keeps {@code app.ratelimit.<area>.rules}, and both are charged to the <em>same key</em>. A window is
+ * counted per key and window length, so the two share one counter and differ only in where they stop:
+ * with {@code 100/1d} and {@code 120/1d}, background work halts at 100 and the last 20 are reserved for
+ * searches. The windows must match ({@code 1d} with {@code 1d}) to share a counter; an unmatched one is
+ * simply an extra ceiling of its own.
+ *
+ * <p>Separate keys with split budgets were the alternative, and are worse on both sides: a reserve that
+ * nobody searches into is wasted, and two independent counters can together exceed the provider's real
+ * ceiling. The mode is the discriminator because it already <em>is</em> the background/interactive
+ * split — see {@link RateLimitMode}. An unset background rule inherits the shared one, which is exactly
+ * the behaviour before it existed.
+ *
  * <p>Parsed policies are cached because the rule syntax is parsed per call otherwise; the values are
  * immutable and configuration does not change at runtime. Account-level rules are deliberately
  * <em>not</em> cached: they arrive on the {@code Connection} the caller already loaded, so an edit
@@ -33,7 +49,9 @@ public class RateLimitPolicies {
     private static final String CONNECTOR_PREFIX = "app.ratelimit.connector.";
     private static final String JOB_BOARDS_KEY = "app.ratelimit.job-boards.rules";
     private static final String LLM_KEY = "app.ratelimit.llm.rules";
+    private static final String LLM_BACKGROUND_KEY = "app.ratelimit.llm.background.rules";
     private static final String EMBEDDING_KEY = "app.ratelimit.embedding.rules";
+    private static final String EMBEDDING_BACKGROUND_KEY = "app.ratelimit.embedding.background.rules";
 
     private final Config config;
 
@@ -46,8 +64,14 @@ public class RateLimitPolicies {
     @ConfigProperty(name = LLM_KEY)
     Optional<String> llmRules;
 
+    @ConfigProperty(name = LLM_BACKGROUND_KEY)
+    Optional<String> llmBackgroundRules;
+
     @ConfigProperty(name = EMBEDDING_KEY)
     Optional<String> embeddingRules;
+
+    @ConfigProperty(name = EMBEDDING_BACKGROUND_KEY)
+    Optional<String> embeddingBackgroundRules;
 
     @Inject
     public RateLimitPolicies(Config config) {
@@ -83,12 +107,28 @@ public class RateLimitPolicies {
         return new RateLimit(RateLimitKey.board(platform), parsed(JOB_BOARDS_KEY, jobBoardRules), mode);
     }
 
+    /** One LLM provider's quota; a background call stops short of it. See the class Javadoc. */
     public RateLimit forLlm(String providerId, RateLimitMode mode) {
-        return new RateLimit(RateLimitKey.llm(providerId), parsed(LLM_KEY, llmRules), mode);
+        return new RateLimit(RateLimitKey.llm(providerId),
+                tiered(mode, LLM_KEY, llmRules, LLM_BACKGROUND_KEY, llmBackgroundRules), mode);
     }
 
+    /** One embedding provider's quota; indexing stops short of it. See the class Javadoc. */
     public RateLimit forEmbedding(String providerId, RateLimitMode mode) {
-        return new RateLimit(RateLimitKey.embedding(providerId), parsed(EMBEDDING_KEY, embeddingRules), mode);
+        return new RateLimit(RateLimitKey.embedding(providerId), tiered(mode, EMBEDDING_KEY, embeddingRules,
+                EMBEDDING_BACKGROUND_KEY, embeddingBackgroundRules), mode);
+    }
+
+    /** The background ceiling for a waiting call when one is set, else the shared one. */
+    private RateLimitPolicy tiered(RateLimitMode mode, String sharedKey, Optional<String> shared,
+                                   String backgroundKey, Optional<String> background) {
+        if (mode == RateLimitMode.WAIT) {
+            RateLimitPolicy policy = parsed(backgroundKey, background);
+            if (!policy.isUnlimited()) {
+                return policy;
+            }
+        }
+        return parsed(sharedKey, shared);
     }
 
     /** An injected property, parsed once and cached under its own config key. */

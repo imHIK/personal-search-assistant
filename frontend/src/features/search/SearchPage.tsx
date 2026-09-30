@@ -10,7 +10,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { SearchBody, SearchHit, SearchMode } from '@/api/types'
-import { Technical } from '@/components/TechnicalDetails'
+import { Technical, TechnicalInline } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Input'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
@@ -315,6 +315,19 @@ export function SearchPage() {
           <EmptyState icon={SearchX} title={labels.search.empty} description={labels.search.emptyHint} />
         ) : (
           <div className="space-y-4">
+            {result.vectorError && (
+              <div
+                role="status"
+                className="flex gap-2.5 rounded-xl border border-[var(--tone-wait)]/35 bg-[var(--tone-wait-bg)] px-4 py-3"
+              >
+                <Info className="mt-0.5 size-4 shrink-0 text-[var(--tone-wait)]" aria-hidden />
+                <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                  {labels.search.vectorUnavailable}
+                  <TechnicalInline> {result.vectorError}</TechnicalInline>
+                </p>
+              </div>
+            )}
+
             {search.answerUnavailable && (
               <div
                 role="status"

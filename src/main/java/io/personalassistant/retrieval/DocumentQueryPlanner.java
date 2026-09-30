@@ -117,7 +117,7 @@ public class DocumentQueryPlanner {
             return cached;
         }
 
-        List<String> facets = derive(entity, query);
+        List<String> facets = derive(entity, text, query);
         if (facets.isEmpty()) {
             // The fallback, deliberately not cached: the next call may find the model available.
             return List.of(opening(text));
@@ -153,12 +153,15 @@ public class DocumentQueryPlanner {
         return text;
     }
 
-    private List<String> derive(Entity entity, SearchQuery query) {
+    private List<String> derive(Entity entity, String text, SearchQuery query) {
         try {
             // A synthetic hit pointing at the entity: the task declares sourceText=ENTITY, so the
-            // prompt builder renders the whole document rather than any one chunk of it.
+            // prompt builder renders the whole document rather than any one chunk of it. The hit carries
+            // the validated text itself because ENTITY mode reads only inline text: for a file-backed
+            // entity it finds none and falls back to the hit's own, which as null sent the model an empty
+            // document — and a JSON-mode model asked for facets of nothing fails validation server-side.
             SearchHit source = new SearchHit(entity.id() + "_source", entity.id(), entity.knowledgeId(),
-                    0, entity.title(), null, null, entity.uri(), 1.0, Map.of());
+                    0, entity.title(), text, null, entity.uri(), 1.0, Map.of());
             // The cap is enforced in parse() regardless; telling the model keeps it from producing
             // work that is only going to be discarded.
             String reply = agent.runTask(TASK_ID, query, List.of(source),

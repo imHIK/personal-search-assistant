@@ -1,6 +1,7 @@
 package io.personalassistant.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,7 @@ import io.personalassistant.retrieval.DuplicateCollapser;
 import io.personalassistant.retrieval.EntityGrouper;
 import io.personalassistant.retrieval.FacetedRetrieval;
 import io.personalassistant.retrieval.NoopReranker;
+import io.personalassistant.retrieval.QueryEmbedder;
 import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Retriever;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
@@ -21,6 +23,7 @@ import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.StubSearchAgent;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,11 +39,13 @@ class DefaultSearchServiceTest {
     /** Records the limit it was asked for so the candidate over-fetch can be asserted. */
     private static final class RecordingRetriever implements Retriever {
         int lastLimit;
+        SearchQuery.Mode lastMode;
         List<SearchHit> result = List.of();
 
         @Override
         public List<SearchHit> retrieve(SearchQuery query, float[] queryVector, int limit) {
             this.lastLimit = limit;
+            this.lastMode = query.mode();
             return result;
         }
     }
@@ -64,7 +69,7 @@ class DefaultSearchServiceTest {
         return new FacetedRetrieval(
                 new DocumentQueryPlanner(new InMemoryEntityRepository(), agent,
                         new RecordingSearchIndex(), 40_000, 8),
-                retriever, new FakeEmbeddingProvider(768), 60);
+                retriever, 60);
     }
 
     private DefaultSearchService service(RecordingRetriever retriever, SearchAgent agent) {
@@ -75,7 +80,7 @@ class DefaultSearchServiceTest {
     private DefaultSearchService service(FakeEmbeddingProvider embeddings, RecordingRetriever retriever,
                                          SearchAgent agent) {
         DefaultSearchService svc = new DefaultSearchService(
-                embeddings, retriever, faceted(retriever, agent),
+                new QueryEmbedder(embeddings, 0), retriever, faceted(retriever, agent),
                 new NoopReranker(), new EntityGrouper(3, 0.1),
                 new RecencyBoost(FieldSets.bundled(), 0.1, 14, Clock.systemUTC()), collapser(), agent);
         svc.maxTopK = 100;
@@ -195,6 +200,36 @@ class DefaultSearchServiceTest {
 
         svc.search(ask(10, false));
         assertTrue(embeddings.embedCalls > 0, "hybrid and semantic do need one");
+    }
+
+    /**
+     * The failure this exists for: a spent embedding quota refuses the query vector, and that used to
+     * propagate as a 500 although the lexical leg could run perfectly well. Indexing sharing the same
+     * quota made it the common case, not an edge.
+     */
+    @Test
+    void aRefusedQueryEmbeddingFallsBackToLexicalAndReportsWhy() {
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(768);
+        throttled.rateLimitedUntil = Instant.now().plusSeconds(60);
+        RecordingRetriever retriever = new RecordingRetriever();
+        retriever.result = List.of(hit("ent_1_0"));
+
+        SearchResponse response = service(throttled, retriever, new StubSearchAgent("")).search(ask(10, false));
+
+        assertEquals(1, response.hits().size(), "the lexical leg's hits must survive");
+        assertEquals(SearchQuery.Mode.LEXICAL, retriever.lastMode,
+                "a hybrid retrieval cannot run on a null vector, so the query must be retrieved lexically");
+        assertNotNull(response.vectorError());
+    }
+
+    @Test
+    void aSuccessfulSearchReportsNoVectorError() {
+        RecordingRetriever retriever = new RecordingRetriever();
+
+        SearchResponse response = service(retriever, new StubSearchAgent("")).search(ask(10, false));
+
+        assertEquals(SearchQuery.Mode.HYBRID, retriever.lastMode);
+        assertNull(response.vectorError());
     }
 
     @Test

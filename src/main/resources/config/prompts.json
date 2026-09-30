@@ -71,7 +71,7 @@
       "description": "Rates job postings against what you are looking for, with a score and a reason on each.",
       "prompt": "job-fit",
       "llmProfile": "lite",
-      "contextChars": 30000,
+      "contextChars": 80000,
       "maxSources": 10,
       "sourceText": "ENTITY",
       "responseFormat": "JSON_OBJECT",

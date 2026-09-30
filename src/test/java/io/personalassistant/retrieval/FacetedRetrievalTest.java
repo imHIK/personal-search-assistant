@@ -8,6 +8,7 @@ import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.StubSearchAgent;
 import io.personalassistant.testsupport.TestData;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,10 +22,12 @@ class FacetedRetrievalTest {
     private static final class ScriptedRetriever implements Retriever {
         final Map<String, List<SearchHit>> byQuery = new java.util.HashMap<>();
         final List<String> asked = new ArrayList<>();
+        final List<SearchQuery.Mode> modes = new ArrayList<>();
 
         @Override
         public List<SearchHit> retrieve(SearchQuery query, float[] queryVector, int limit) {
             asked.add(query.text());
+            modes.add(query.mode());
             return byQuery.getOrDefault(query.text(), List.of());
         }
     }
@@ -42,7 +45,11 @@ class FacetedRetrievalTest {
         DocumentQueryPlanner planner =
                 new DocumentQueryPlanner(entities, new StubSearchAgent(facetsJson),
                         new RecordingSearchIndex(), 40_000, 8);
-        return new FacetedRetrieval(planner, retriever, new FakeEmbeddingProvider(768), 60);
+        return new FacetedRetrieval(planner, retriever, 60);
+    }
+
+    private static QueryEmbedder.Session vectors() {
+        return new QueryEmbedder(new FakeEmbeddingProvider(768), 0).session();
     }
 
     private static SearchQuery byDocument() {
@@ -55,7 +62,7 @@ class FacetedRetrievalTest {
         ScriptedRetriever retriever = new ScriptedRetriever();
 
         retrieval(retriever, "{\"facets\": [\"backend engineer\", \"platform engineer\"]}")
-                .retrieve(byDocument(), 10);
+                .retrieve(byDocument(), 10, vectors());
 
         Assertions.assertEquals(List.of("backend engineer", "platform engineer"), retriever.asked);
     }
@@ -70,7 +77,7 @@ class FacetedRetrievalTest {
 
         List<SearchHit> fused = retrieval(retriever,
                 "{\"facets\": [\"backend engineer\", \"platform engineer\", \"distributed systems\"]}")
-                .retrieve(byDocument(), 10);
+                .retrieve(byDocument(), 10, vectors());
 
         Assertions.assertEquals("broad", fused.get(0).chunkId());
         Assertions.assertEquals(2, fused.size(), "each hit appears once, however many facets found it");
@@ -87,7 +94,7 @@ class FacetedRetrievalTest {
 
         List<SearchHit> fused = retrieval(retriever,
                 "{\"facets\": [\"backend engineer\", \"underwater basket weaving\"]}")
-                .retrieve(byDocument(), 10);
+                .retrieve(byDocument(), 10, vectors());
 
         Assertions.assertEquals(List.of("a"), fused.stream().map(SearchHit::chunkId).toList());
     }
@@ -97,7 +104,28 @@ class FacetedRetrievalTest {
         ScriptedRetriever retriever = new ScriptedRetriever();
         retriever.byQuery.put("backend engineer", List.of(hit("a"), hit("b"), hit("c")));
 
-        Assertions.assertEquals(2,
-                retrieval(retriever, "{\"facets\": [\"backend engineer\"]}").retrieve(byDocument(), 2).size());
+        Assertions.assertEquals(2, retrieval(retriever, "{\"facets\": [\"backend engineer\"]}")
+                .retrieve(byDocument(), 2, vectors()).size());
+    }
+
+    /**
+     * One refused embedding makes the whole document query lexical: every facet is still retrieved, none
+     * is handed to the retriever with a null vector under a hybrid mode, and only one call is spent on a
+     * quota that is already gone.
+     */
+    @Test
+    void aRefusedEmbeddingTurnsEveryFacetLexical() {
+        ScriptedRetriever retriever = new ScriptedRetriever();
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(768);
+        throttled.rateLimitedUntil = Instant.now().plusSeconds(60);
+        QueryEmbedder.Session vectors = new QueryEmbedder(throttled, 0).session();
+
+        retrieval(retriever, "{\"facets\": [\"backend engineer\", \"platform engineer\"]}")
+                .retrieve(byDocument(), 10, vectors);
+
+        Assertions.assertEquals(List.of("backend engineer", "platform engineer"), retriever.asked);
+        Assertions.assertEquals(List.of(SearchQuery.Mode.LEXICAL, SearchQuery.Mode.LEXICAL), retriever.modes);
+        Assertions.assertEquals(1, throttled.queryCalls, "the second facet must not re-ask a refused quota");
+        Assertions.assertNotNull(vectors.vectorError());
     }
 }

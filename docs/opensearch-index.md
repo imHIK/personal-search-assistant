@@ -162,6 +162,9 @@ POST /chunks/_search
 **Reciprocal Rank Fusion (RRF)** in `HybridRetriever`. This avoids hand-tuning score scales between
 BM25 and cosine similarity. The `Retriever` port hides which approach we use, and `SearchQuery.mode`
 selects `LEXICAL` / `SEMANTIC` / `HYBRID` (the query embedding is skipped entirely for `LEXICAL`).
+Query vectors go through `retrieval.QueryEmbedder`, which caches them by text
+(`app.search.query-vector-cache-size`) and, when an embedding is refused — a spent quota, a bad key —
+retrieves the query as `LEXICAL` instead and reports why in the response's `vectorError`.
 
 > **Filter placement matters on the vector leg.** Note that example A above puts the scope filter in
 > the surrounding `bool.filter`, *outside* the `knn` clause. That is post-filtering: OpenSearch picks

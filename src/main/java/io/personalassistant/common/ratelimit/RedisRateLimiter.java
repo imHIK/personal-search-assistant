@@ -51,6 +51,13 @@ public class RedisRateLimiter extends AbstractRateLimiter {
      * {@code permits, windowMillis} pair per rule, in the same order, then a unique member for this
      * admission — unique because two admissions in the same millisecond must not collapse into one entry.
      * Returns the milliseconds to wait, or 0 once every window has recorded the admission.
+     *
+     * <p>The wait runs to the admission whose expiry brings the count back under <em>this</em> call's
+     * ceiling, which is the oldest only when the count is exactly at it. Two ceilings share one window
+     * (a background call stops short of a search's; see {@code RateLimitPolicies}), so the count can sit
+     * above the lower one, and waiting on the oldest would hand a deferred entity a {@code retryAt} at
+     * which the window is still full — one deferral per surplus admission, toward
+     * {@code app.ratelimit.max-deferrals} and a dead letter.
      */
     private static final String RESERVE = """
             local t = redis.call('TIME')
@@ -64,9 +71,10 @@ public class RedisRateLimiter extends AbstractRateLimiter {
               local permits = tonumber(ARGV[2 * i - 1])
               local windowMs = tonumber(ARGV[2 * i])
               redis.call('ZREMRANGEBYSCORE', key, '-inf', now - windowMs)
-              if redis.call('ZCARD', key) >= permits then
-                local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-                local need = math.floor(tonumber(oldest[2]) + windowMs - now)
+              local count = redis.call('ZCARD', key)
+              if count >= permits then
+                local freeing = redis.call('ZRANGE', key, count - permits, count - permits, 'WITHSCORES')
+                local need = math.floor(tonumber(freeing[2]) + windowMs - now)
                 if need > wait then wait = need end
               end
             end

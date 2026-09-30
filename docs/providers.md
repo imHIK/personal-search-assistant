@@ -67,8 +67,31 @@ it does mean a large first import can take hours on a free tier.
 ### Rate limiting the model endpoints
 
 Set ceilings with `app.ratelimit.embedding.rules` and `app.ratelimit.llm.rules`, in the same
-`"<permits>/<window>"` form the connectors use (`10/1s,500/1m,10000/1d`); blank means unlimited, which
-is the shipped default. Windows are keyed by provider id, so switching provider switches window.
+`"<permits>/<window>"` form the connectors use (`10/1s,500/1m,10000/1d`); blank means unlimited. The
+shipped embedding rules are `6/1m,120/1d`, sized for Gemini's free tier; the LLM's are blank. Windows are
+keyed by provider id, so switching provider switches window.
+
+**Background calls stop short of the ceiling, so search keeps a reserve.** Indexing and search embed
+through the same account, and a backfill would otherwise spend the whole day's quota and leave every
+search without a vector. `app.ratelimit.embedding.background.rules` (and `app.ratelimit.llm.background.rules`)
+is a lower ceiling that `RateLimitPolicies` applies to `WAIT`-mode calls — indexing, and LLM profiles
+with `rate-limit-mode=wait` — **on the same key** as the shared rules:
+
+```properties
+app.ratelimit.embedding.rules=6/1m,120/1d             # what the provider allows; searches may use all of it
+app.ratelimit.embedding.background.rules=4/1m,100/1d  # indexing stops here: 2/min and 20/day stay for search
+```
+
+A window is counted per key and window length, so the two are one counter with two stopping points,
+not two budgets: the reserve is only the gap, a quiet day's unused reserve is not lost to a split, and
+the pair can never exceed the provider's real ceiling. Match the window lengths (`1m` with `1m`, `1d`
+with `1d`) — an unmatched background rule is merely an extra ceiling of its own. Blank inherits the
+shared rules, i.e. no reserve. Both limiter stores time a deferred call to the admission that brings the
+count back under *its own* ceiling, which is not the oldest one when searches have pushed the count past
+it; the oldest would hand an entity a `nextAttemptAt` at which the window is still full.
+
+This splits one quota; it does not add any. If indexing inside its share is too slow, the fix is a
+second provider project (a second key and quota) or the local `onnx-bge` provider, not a larger reserve.
 
 Each rule is a **rolling** window, not a refilling bucket: `60/1d` admits 60 calls back to back and then
 nothing until those calls are a day old. That matters on a small quota — a bucket handing one permit
@@ -89,7 +112,7 @@ already have separate entry points:
 | Call | Entry point | On breach |
 |---|---|---|
 | Indexing a backfill | `EmbeddingProvider.embedAll` | **Waits**, then defers — the import slows down |
-| Embedding a search query | `EmbeddingProvider.embedQuery` | **Fails fast** — the search still returns lexical hits |
+| Embedding a search query | `EmbeddingProvider.embedQuery` via `QueryEmbedder` | **Fails fast** — the search runs `LEXICAL` and returns 200 with `vectorError` set, hits intact |
 | Answering | `LlmProvider.complete` under the `answer` profile | **Fails fast** — 200 with `answerError` set, hits intact |
 | A background digest | `LlmProvider.complete` under a profile with `rate-limit-mode=wait` | **Waits** |
 
@@ -225,10 +248,21 @@ app.llm.profile.answer.model=llama-3.3-70b-versatile
 app.llm.profile.answer.temperature=0.2
 app.llm.profile.answer.max-tokens=2048
 
-app.llm.profile.lite.model=llama-3.1-8b-instant
+app.llm.profile.lite.base-url=https://generativelanguage.googleapis.com/v1beta/openai
+app.llm.profile.lite.model=gemini-3.5-flash-lite
+app.llm.profile.lite.api-key=${GEMINI_API_KEY:}
 app.llm.profile.lite.temperature=0.0
-app.llm.profile.lite.max-tokens=512
+app.llm.profile.lite.max-tokens=4096
 ```
+
+`lite` (job-fit scoring and document-facets) is redirected to Gemini's OpenAI-compatible endpoint
+because of Groq's free-tier **tokens per minute**. Groq rejects any single request whose prompt plus
+`max_tokens` exceeds the per-minute limit (8000 for `gpt-oss-120b`) with a 413 that waiting cannot fix,
+and job-fit judges whole postings — ten of them run to ~60k chars. `max-tokens` is generous because
+a thinking model's reasoning is charged against it; a tight cap truncates the JSON and JSON mode then rejects the
+reply server-side (`json_validate_failed`). The rate limiter keys LLM calls by provider id
+(`openai-compat`), not endpoint, so Groq- and Gemini-bound calls share one counter — harmless while
+`app.ratelimit.llm.*` rules are blank.
 
 Recognised sub-keys: `base-url`, `model`, `temperature`, `max-tokens`, `api-key`. A caller asks for a
 profile by name — the answering *task* names `answer`, via `app.agent.task` — and gets the

@@ -335,6 +335,11 @@ export interface SearchResult {
    * so this is the primary signal; `useSearch`'s retry is only a fallback for older behaviour.
    */
   answerError: string | null
+  /**
+   * Why the query could not be embedded — usually a spent embedding quota. The search then ran
+   * keyword-only: the hits are valid, just without the semantic leg, so this is a notice too.
+   */
+  vectorError: string | null
   tookMs: number
 }
 

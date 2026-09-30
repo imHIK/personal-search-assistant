@@ -56,6 +56,7 @@ export const labels = {
     answerToggle,
     answerToggleHint: 'Reads the top results and writes a cited answer',
     answerHeading: 'Answer',
+    vectorUnavailable: 'Semantic search is unavailable, so these are keyword matches only.',
     answerUnavailable:
       'The answer service is unavailable, so only results are shown. Check that an LLM provider and API key are configured.',
     narrowBy: 'Narrow by',

@@ -12,6 +12,10 @@ import java.util.List;
  *                    beside the hits rather than thrown: retrieval already succeeded at that point, and
  *                    letting the failure propagate discarded a perfectly good result set over an
  *                    unavailable LLM
+ * @param vectorError why the query could not be embedded, when that happened. The search then ran
+ *                    lexically and {@code hits} are real, just without the semantic leg — a spent
+ *                    embedding quota degrades a search instead of failing it
  * @param tookMs      server-side latency
  */
-public record SearchResponse(List<SearchHit> hits, String answer, String answerError, long tookMs) {}
+public record SearchResponse(List<SearchHit> hits, String answer, String answerError, String vectorError,
+                             long tookMs) {}

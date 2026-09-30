@@ -93,7 +93,7 @@ export const knownCompanies: KnownCompany[] = [
   { label: 'Paytm', handle: 'paytm', platform: 'lever' },
   { label: 'Philips', handle: 'philips/jobs-and-careers/wd3', platform: 'workday' },
   { label: 'PhonePe', handle: 'PHONEPELIMITED', platform: 'smartrecruiters' },
-  { label: 'Postman', handle: 'postman', platform: 'greenhouse' },
+  { label: 'Postman', handle: 'postman/careers/wd108', platform: 'workday' },
   { label: 'Pure Storage', handle: 'purestorage', platform: 'ashby' },
   { label: 'Razorpay', handle: 'razorpaysoftwareprivatelimited', platform: 'greenhouse' },
   { label: 'Roblox', handle: 'roblox', platform: 'greenhouse' },

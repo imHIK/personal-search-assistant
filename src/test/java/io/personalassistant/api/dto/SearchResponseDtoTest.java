@@ -27,7 +27,7 @@ class SearchResponseDtoTest {
     @Test
     void carriesEveryHitFieldIncludingChunkAndKnowledgeIds() {
         SearchResponseDto dto = SearchResponseDto.from(
-                new SearchResponse(List.of(hit()), null, null, 42L));
+                new SearchResponse(List.of(hit()), null, null, null, 42L));
 
         assertEquals(1, dto.hits().size());
         SearchResponseDto.Hit mapped = dto.hits().get(0);
@@ -52,7 +52,7 @@ class SearchResponseDtoTest {
     @Test
     void doesNotShipTheFullChunkTextOnTheWire() {
         SearchResponseDto.Hit mapped = SearchResponseDto.from(
-                new SearchResponse(List.of(hit()), null, null, 1L)).hits().get(0);
+                new SearchResponse(List.of(hit()), null, null, null, 1L)).hits().get(0);
 
         assertEquals("revenue grew 12%", mapped.snippet(), "the display excerpt, not the whole chunk");
         assertTrue(Arrays.stream(SearchResponseDto.Hit.class.getRecordComponents())
@@ -63,7 +63,7 @@ class SearchResponseDtoTest {
 
     @Test
     void passesTheGroundedAnswerThrough() {
-        SearchResponse response = new SearchResponse(List.of(), "Revenue grew 12% [1].", null, 7L);
+        SearchResponse response = new SearchResponse(List.of(), "Revenue grew 12% [1].", null, null, 7L);
 
         assertEquals("Revenue grew 12% [1].", SearchResponseDto.from(response).answer());
     }
@@ -75,7 +75,7 @@ class SearchResponseDtoTest {
     @Test
     void carriesTheAnswerErrorBesideTheHits() {
         SearchResponseDto dto = SearchResponseDto.from(
-                new SearchResponse(List.of(hit()), null, "LLM API 401: invalid api key", 12L));
+                new SearchResponse(List.of(hit()), null, "LLM API 401: invalid api key", null, 12L));
 
         assertEquals(1, dto.hits().size(), "hits survive a failed answer");
         assertNull(dto.answer());

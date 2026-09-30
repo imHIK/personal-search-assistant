@@ -123,6 +123,23 @@ class DocumentQueryPlannerTest {
     }
 
     @Test
+    void handsTheModelAFileBackedEntitysTextNotAnEmptyDocument() {
+        // SourceTexts reads only inline text, so a fileRef entity's source hit must carry the text itself.
+        Entity file = TestData.ingestedFile("ent_cv", "kn_1", "cv.pdf", "/tmp/cv.pdf", "application/pdf");
+        entities.store.put(file.id(), file);
+        searchIndex.chunkTexts.put("ent_cv", List.of("Ten years of backend engineering.", "Go and Kubernetes."));
+        List<String> seen = new java.util.ArrayList<>();
+        StubSearchAgent agent = new StubSearchAgent((query, hits) -> {
+            hits.forEach(hit -> seen.add(hit.groundingText()));
+            return "{\"facets\": [\"backend engineer go\"]}";
+        });
+
+        planner(agent).facets(byDocument());
+
+        Assertions.assertEquals(List.of("Ten years of backend engineering.\n\nGo and Kubernetes."), seen);
+    }
+
+    @Test
     void rejectsAnEntityWithNeitherInlineTextNorChunks() {
         Entity file = TestData.ingestedFile("ent_cv", "kn_1", "cv.pdf", "/tmp/cv.pdf", "application/pdf");
         entities.store.put(file.id(), file);

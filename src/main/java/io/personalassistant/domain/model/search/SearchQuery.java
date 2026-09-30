@@ -60,4 +60,10 @@ public record SearchQuery(
         return new SearchQuery(facet, knowledgeIds, filters, topK, mode, answer, maxChunksPerEntity,
                 collapseDuplicates, sourceEntityId);
     }
+
+    /** A copy retrieving by {@code other} — how a search whose query vector was refused stays lexical. */
+    public SearchQuery withMode(Mode other) {
+        return new SearchQuery(text, knowledgeIds, filters, topK, other, answer, maxChunksPerEntity,
+                collapseDuplicates, sourceEntityId);
+    }
 }
