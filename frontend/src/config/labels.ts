@@ -70,7 +70,7 @@ export const labels = {
     empty: 'No results',
     emptyHint: 'Try different words, widen the scope, or check that indexing has finished.',
     idle: 'Search across everything you have connected.',
-    idleHint: `Results come from your own files, mail and documents. Turn off “${answerToggle}” to keep everything on this machine.`,
+    idleHint: 'Results come from your own files, mail and documents.',
     resultCount: (n: number, seconds: string) =>
       `${n} ${n === 1 ? 'result' : 'results'} in ${seconds}s`,
     openOriginal: 'Open',

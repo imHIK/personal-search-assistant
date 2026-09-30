@@ -1,50 +1,43 @@
-import { useMutation } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { searchApi } from '@/api/search'
 import type { SearchBody, SearchResult } from '@/api/types'
 
+export interface SearchOutcome {
+  result: SearchResult
+  /** Asked for an answer and did not get one; the hits are intact. */
+  answerUnavailable: boolean
+}
+
+async function run(body: SearchBody): Promise<SearchOutcome> {
+  if (!body.answer) {
+    return { result: await searchApi.search(body), answerUnavailable: false }
+  }
+  try {
+    const result = await searchApi.search(body)
+    return { result, answerUnavailable: Boolean(result.answerError) }
+  } catch (error) {
+    // Only worth a retry if the answer flag is what could have broken it — a failure with answers off
+    // is a genuine search failure and should surface as one.
+    const retried = await searchApi.search({ ...body, answer: false }).catch(() => null)
+    if (retried) {
+      return { result: retried, answerUnavailable: true }
+    }
+    throw error
+  }
+}
+
 /**
- * Runs a search and reports when the written answer could not be produced.
- *
- * The server now handles this itself: a failing LLM comes back as 200 with the hits intact and
- * `answerError` set, so the normal path is simply to read that field. It did not always — answer
- * synthesis used to run before the response was built and outside any try/catch, so an unavailable
- * provider 500d the whole request and took the successfully-retrieved hits with it, which to a user
- * looked like "turning on answers broke search".
- *
- * The retry below is kept as a fallback for exactly that older shape (and for any other 500 that the
- * answer flag turns out to trigger): if a request with `answer: true` fails outright, retry once with
- * `answer: false` so the user still gets results plus a banner. Both paths set the same flag.
+ * Cached per request for the whole session and never refetched on its own, so returning to a search
+ * costs no request and no LLM call. `refetch` is the explicit re-run.
  */
-export function useSearch() {
-  const [answerUnavailable, setAnswerUnavailable] = useState(false)
-
-  const mutation = useMutation<SearchResult, unknown, SearchBody>({
-    mutationFn: async (body) => {
-      setAnswerUnavailable(false)
-
-      if (!body.answer) {
-        return searchApi.search(body)
-      }
-
-      try {
-        const result = await searchApi.search(body)
-        if (result.answerError) {
-          setAnswerUnavailable(true)
-        }
-        return result
-      } catch (error) {
-        // Only worth a retry if the answer flag is what could have broken it — a failure with
-        // answers off is a genuine search failure and should surface as one.
-        const retried = await searchApi.search({ ...body, answer: false }).catch(() => null)
-        if (retried) {
-          setAnswerUnavailable(true)
-          return retried
-        }
-        throw error
-      }
-    },
+export function useSearch(body: SearchBody | null) {
+  return useQuery({
+    queryKey: ['search', body],
+    queryFn: () => run(body!),
+    enabled: body !== null,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
   })
-
-  return { ...mutation, answerUnavailable }
 }

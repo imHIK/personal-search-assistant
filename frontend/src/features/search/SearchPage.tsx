@@ -1,5 +1,5 @@
 import { Info, Search as SearchIcon, SearchX, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { SearchBody, SearchMode } from '@/api/types'
 import { Technical, TechnicalInline } from '@/components/TechnicalDetails'
@@ -22,6 +22,7 @@ import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
 import { SearchFilters } from './SearchFilters'
+import { rememberSearch } from './lastSearch'
 import { useSearch } from './useSearch'
 
 /**
@@ -31,9 +32,6 @@ import { useSearch } from './useSearch'
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const { data: sources } = useKnowledgeList()
-  const search = useSearch()
-  // Ranks only mean anything within one result set, so the highlight is cleared whenever a new
-  // search runs.
   const { citedRank, jumpTo, register, clear: clearCitation } = useCitationJump()
 
   const urlQuery = params.get('q') ?? ''
@@ -43,11 +41,10 @@ export function SearchPage() {
   const matchesParam = params.get('matches')
   const matches = matchesParam !== null && Number.isInteger(Number(matchesParam)) ? Number(matchesParam) : null
   const scope = params.get('scope') ?? ''
-  // Opt-out, not opt-in: the summary is the default reading of a result set, so a bare `?q=` URL
-  // produces one and only an explicit `answer=0` suppresses it.
-  const wantsAnswer = params.get('answer') !== '0'
-  // Opt-out too: the same item reached by two routes (one role on two boards, a forwarded mail) is
-  // noise in nearly every search, so only an explicit `group=0` shows both.
+  // Opt-in: every answer is an LLM call.
+  const wantsAnswer = params.get('answer') === '1'
+  // Opt-out: the same item reached by two routes (one role on two boards, a forwarded mail) is noise
+  // in nearly every search, so only an explicit `group=0` shows both.
   const groupDuplicates = params.get('group') !== '0'
 
   const activeSources = (sources ?? []).filter((source) => source.status !== 'DELETED')
@@ -60,38 +57,39 @@ export function SearchPage() {
     filterSpecs.map((spec) => [spec.id, params.get(spec.id) ?? '']),
   )
   const activeFilterCount = filterSpecs.filter((spec) => filterValues[spec.id]).length
-  // Serialised so the effect below re-runs when a filter changes without depending on a fresh
-  // object identity every render.
-  const filterKey = JSON.stringify(filterValues)
 
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
   const [filtersOpen, setFiltersOpen] = useState(false)
 
   const hasSearch = urlQuery.trim() !== ''
+  // A scoped search waits for the source list: its filters depend on the source's type, and running
+  // without them first would spend a request (and an answer) on the wrong query.
+  const ready = !scope || sources !== undefined
 
-  // Re-run whenever the URL changes, so back/forward replays the search rather than showing a
-  // stale result set.
-  const runRef = useRef(search.mutate)
-  runRef.current = search.mutate
-  useEffect(() => {
-    if (!urlQuery.trim()) return
-    const filters = buildFilters(filterSpecs, JSON.parse(filterKey) as Record<string, string>)
-    const body: SearchBody = {
-      query: urlQuery,
-      mode,
-      topK,
-      answer: wantsAnswer,
-      knowledgeIds: scope ? [scope] : [],
-      ...(Object.keys(filters).length > 0 ? { filters } : {}),
-      ...(groupDuplicates ? { collapseDuplicates: true } : {}),
-      ...(matches !== null ? { maxChunksPerEntity: matches } : {}),
-    }
-    clearCitation()
-    runRef.current(body)
-    // filterSpecs is derived from scope and sources, and filterKey already captures what it changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlQuery, mode, topK, matches, wantsAnswer, scope, filterKey, groupDuplicates])
+  const filters = buildFilters(filterSpecs, filterValues)
+  const body: SearchBody | null =
+    hasSearch && ready
+      ? {
+          query: urlQuery,
+          mode,
+          topK,
+          answer: wantsAnswer,
+          knowledgeIds: scope ? [scope] : [],
+          ...(Object.keys(filters).length > 0 ? { filters } : {}),
+          ...(groupDuplicates ? { collapseDuplicates: true } : {}),
+          ...(matches !== null ? { maxChunksPerEntity: matches } : {}),
+        }
+      : null
+  const search = useSearch(body)
+
+  const bodyKey = JSON.stringify(body)
+  // Ranks only mean anything within one result set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => clearCitation(), [bodyKey])
+
+  const queryString = params.toString()
+  useEffect(() => rememberSearch(hasSearch ? queryString : ''), [hasSearch, queryString])
 
   const update = (next: Record<string, string | null>) => {
     const merged = new URLSearchParams(params)
@@ -104,10 +102,15 @@ export function SearchPage() {
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    update({ q: draft.trim() || null })
+    const next = draft.trim()
+    if (next !== '' && next === urlQuery.trim()) {
+      void search.refetch()
+    } else {
+      update({ q: next || null })
+    }
   }
 
-  const result = search.data
+  const result = search.data?.result
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -130,7 +133,7 @@ export function SearchPage() {
             variant="primary"
             size="sm"
             className="absolute right-2 top-1/2 -translate-y-1/2"
-            loading={search.isPending}
+            loading={search.isFetching}
           >
             {labels.search.submit}
           </Button>
@@ -222,7 +225,7 @@ export function SearchPage() {
             />
             <Toggle
               checked={wantsAnswer}
-              onCheckedChange={(checked) => update({ answer: checked ? null : '0' })}
+              onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
               label={labels.search.answerToggle}
             />
           </div>
@@ -239,10 +242,10 @@ export function SearchPage() {
       </form>
 
       <div className="mt-7">
-        {search.isPending ? (
+        {search.isFetching ? (
           <SkeletonList rows={4} />
         ) : search.error ? (
-          <ErrorState error={search.error} onRetry={() => update({ q: urlQuery })} />
+          <ErrorState error={search.error} onRetry={() => void search.refetch()} />
         ) : !hasSearch ? (
           <EmptyState
             icon={Sparkles}
@@ -266,7 +269,7 @@ export function SearchPage() {
               </div>
             )}
 
-            {search.answerUnavailable && (
+            {search.data?.answerUnavailable && (
               <div
                 role="status"
                 className="flex gap-2.5 rounded-xl border border-[var(--tone-wait)]/35 bg-[var(--tone-wait-bg)] px-4 py-3"
