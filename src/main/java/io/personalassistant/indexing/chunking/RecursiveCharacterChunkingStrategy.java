@@ -8,21 +8,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Recursive character splitting — the common RAG default. It tries to keep semantic units intact by
- * splitting on a hierarchy of separators (paragraph → line → sentence → word → character) and only
- * descending to a finer separator for fragments that still exceed {@code maxSize}, then merges
- * neighbours back up to the target size with overlap. The result respects paragraph and sentence
- * boundaries far better than a blind fixed window, which usually improves retrieval quality.
- *
- * <p>Separators come from the {@link ChunkingSpec} when set, else the defaults below; the list is
- * always forced to end with {@code ""} so splitting bottoms out at character granularity.
+ * Splits on a separator ladder (paragraph, line, sentence, word, character), descending only for fragments
+ * still over maxSize, then merges back up with overlap. The ladder always ends with {@code ""} so splitting
+ * bottoms out.
  */
 @ApplicationScoped
 public class RecursiveCharacterChunkingStrategy implements ChunkingStrategy {
 
     static final String NAME = "recursive";
 
-    /** Paragraph, line, sentence, clause, word, then character — the usual English-prose ladder. */
     static final List<String> DEFAULT_SEPARATORS = List.of("\n\n", "\n", ". ", ", ", " ", "");
 
     @Override
@@ -41,7 +35,6 @@ public class RecursiveCharacterChunkingStrategy implements ChunkingStrategy {
         return ChunkSupport.toChunks(entity, sourceType, pieces);
     }
 
-    /** Ensure the ladder ends with {@code ""} so recursion always terminates at character level. */
     private static List<String> withCharFallback(List<String> separators) {
         if (!separators.isEmpty() && separators.get(separators.size() - 1).isEmpty()) {
             return separators;

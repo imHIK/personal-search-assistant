@@ -22,28 +22,19 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * Email, sent through the Gmail API from a {@code GMAIL_SEND} account.
- *
- * <p>The account is an OAuth connection holding only the {@code gmail.send} scope: it can send as its
- * owner and nothing else. That is why this is not SMTP — SMTP to Gmail needs an app password, which
- * skips two-step verification and opens the whole mailbox over IMAP to anyone holding it.
- *
- * <p>Target: {@code {to: ["a@x.com"] | "a@x.com", cc: [...], subjectPrefix: "[digest]"}}. There is no
- * {@code from}: Gmail sends as the authenticated account.
+ * Sent through the Gmail API from a GMAIL_SEND account that holds only {@code gmail.send}. Not SMTP: that
+ * needs an app password, which skips two-step verification and opens the whole mailbox over IMAP. Target:
+ * {@code {to, cc, subjectPrefix}}; there is no {@code from}, as Gmail sends as the account.
  */
 @ApplicationScoped
 public class EmailPublisher implements Publisher {
 
-    /**
-     * Deliberately loose. Real address validation is Gmail's and its refusal is reported; this only
-     * catches the pasted-the-wrong-field mistakes before they become a parked channel.
-     */
+    /** Deliberately loose: real validation is Gmail's; this only catches the wrong field pasted in. */
     private static final Pattern ADDRESS = Pattern.compile("^[^@\\s<>,]+@[^@\\s<>,]+\\.[^@\\s<>,]+$");
 
     /**
-     * The hostname the MIME encoder writes into the Message-ID it generates. Cosmetic: Gmail replaces the
-     * Message-ID with its own on send, so no id chosen here survives — which is also why a resent delivery
-     * cannot be made to collapse into the first copy (L13).
+     * Cosmetic: Gmail replaces the Message-ID on send, which is also why a resent delivery cannot collapse
+     * into the first copy.
      */
     static final String ENCODER_HOSTNAME = "personal-search-assistant";
 
@@ -83,7 +74,7 @@ public class EmailPublisher implements Publisher {
         }
     }
 
-    /** That the account still signs in and granted the send scope — the usual first-run failure. */
+    /** That the account still signs in and granted the send scope. */
     @Override
     public void verify(Channel channel, Connection connection) {
         try {
@@ -109,12 +100,7 @@ public class EmailPublisher implements Publisher {
         }
     }
 
-    /**
-     * The whole message as the Gmail API wants it: RFC 2822, multipart/alternative with a text and an
-     * HTML part, base64url-encoded. Vert.x's encoder does the MIME work — header encoding of a non-ASCII
-     * subject, line lengths, boundaries — which is exactly the part not worth hand-rolling.
-     */
-    // Package-private for tests.
+    /** RFC 2822 multipart/alternative, base64url-encoded; Vert.x's encoder does the MIME work. */
     static String raw(List<String> to, List<String> cc, RenderedEmail email) {
         MailMessage mail = new MailMessage()
                 .setTo(to)
@@ -128,9 +114,7 @@ public class EmailPublisher implements Publisher {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(rfc2822.getBytes(StandardCharsets.UTF_8));
     }
 
-    /**
-     * @throws IllegalArgumentException if a value is present but is not an address or list of them
-     */
+    /** @throws IllegalArgumentException if a value is present but is not an address or a list of them */
     private static List<String> addresses(Map<String, Object> target, String key) {
         Object raw = target == null ? null : target.get(key);
         List<String> out = new ArrayList<>();

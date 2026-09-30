@@ -14,10 +14,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
-/**
- * The outbox's front door. Validates and writes rows; never sends — see
- * {@link io.personalassistant.publishing.job.DeliveryRunner} for that half.
- */
+/** Validates and queues; never sends (see {@link io.personalassistant.publishing.job.DeliveryRunner}). */
 @ApplicationScoped
 public class DefaultPublishingService implements PublishingService {
 
@@ -38,9 +35,8 @@ public class DefaultPublishingService implements PublishingService {
         if (message == null || message.isEmpty()) {
             throw new IllegalArgumentException("a message needs a title, an intro or at least one item");
         }
-        // A disabled or ERROR channel still accepts the message. It waits in the queue rather than
-        // being refused — pausing a channel or fixing its credentials should not lose what was sent
-        // to it meanwhile.
+        // A disabled or ERROR channel still accepts the message: it waits in the queue rather than being
+        // lost.
         return deliveries.insertIfAbsent(Delivery.pending(Ids.delivery(), channelId, origin, dedupeKey,
                 message, Instant.now()));
     }

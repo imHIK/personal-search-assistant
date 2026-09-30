@@ -8,14 +8,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
 
-/**
- * JSON/bytes HTTP for the Gmail and Drive adapters: the shared {@link OutboundHttp} transport plus the
- * two things local to this package — the {@code Authorization} header, and translating a failure into
- * {@link GoogleApiException}, which the connectors and the token refresher already branch on.
- *
- * <p>The {@link GoogleAuth} argument carries the account's quota alongside its token, so two accounts on
- * the same host are throttled independently.
- */
 @ApplicationScoped
 public class GoogleHttp {
 
@@ -26,7 +18,6 @@ public class GoogleHttp {
         this.http = http;
     }
 
-    /** GET a URL and parse the body as JSON. */
     public JsonNode getJson(String url, GoogleAuth auth, long timeoutSeconds) {
         try {
             return http.json(request(url, auth, timeoutSeconds).acceptJson());
@@ -35,7 +26,6 @@ public class GoogleHttp {
         }
     }
 
-    /** GET a URL and return the raw bytes (file download / export). */
     public byte[] getBytes(String url, GoogleAuth auth, long timeoutSeconds) {
         try {
             return http.bytes(request(url, auth, timeoutSeconds));
@@ -44,7 +34,6 @@ public class GoogleHttp {
         }
     }
 
-    /** POST a JSON body on behalf of an account and parse the JSON response. */
     public JsonNode postJson(String url, String jsonBody, GoogleAuth auth, long timeoutSeconds) {
         HttpCall call = HttpCall.post(url, jsonBody, Duration.ofSeconds(timeoutSeconds),
                         auth == null ? null : auth.limit())
@@ -58,8 +47,7 @@ public class GoogleHttp {
     }
 
     /**
-     * POST a form body with no credentials and parse the JSON response. For endpoints that take a token
-     * as a parameter — it belongs in a body, never in a URL that ends up in logs.
+     * For endpoints taking a token as a parameter: it belongs in a body, never in a URL that ends up in logs.
      */
     public JsonNode postForm(String url, String formBody, long timeoutSeconds) {
         try {

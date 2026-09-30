@@ -13,17 +13,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Re-arms forward cursors so incremental sync keeps flowing. The core operation is tiny: flip a
- * knowledge's forward cursors {@code IDLE → AVAILABLE}; the normal ingestion loop then re-picks them
- * like any other cursor. Webhooks/manual sync trigger the same flip on demand via {@link #armNow}.
- *
- * <p><b>Per-source cadence.</b> The {@code tick} interval is only the scheduler's <em>check</em>
- * granularity. How often each knowledge is actually re-armed is governed by its resolved
- * {@link io.personalassistant.domain.model.SyncSchedule} (custom &rarr; connector default &rarr;
- * global default — see {@link ScheduleResolver}). Each tick arms only the knowledges whose
- * {@link Knowledge#nextSyncDueAt()} has arrived, then rolls that due time forward by the resolved
- * schedule. A {@code null} due time means "due now" (e.g. a freshly activated knowledge), so the
- * first tick after activation establishes the cadence.
+ * Flips a knowledge's forward cursors from IDLE to AVAILABLE when its nextSyncDueAt arrives (null is due
+ * now), then rolls that forward by the resolved schedule. The tick is only the check granularity.
  */
 @ApplicationScoped
 public class ForwardCursorScheduler {
@@ -50,8 +41,8 @@ public class ForwardCursorScheduler {
             if (!schedulingEnabled(kn) || !isDue(kn, now)) {
                 continue;
             }
-            // One knowledge that cannot be rescheduled must not stop the rest: an exception escaping
-            // here aborts the loop, and every knowledge after it silently stops syncing.
+            // One knowledge that cannot be rescheduled must not stop the rest: an escaping exception would
+            // end the loop.
             try {
                 armAndReschedule(kn, now);
             } catch (RuntimeException e) {
@@ -65,13 +56,11 @@ public class ForwardCursorScheduler {
                 && kn.config().scheduleSettings().enabled();
     }
 
-    /** Due when no due time is recorded yet (treat as "due now") or the recorded time has passed. */
     private static boolean isDue(Knowledge kn, Instant now) {
         Instant due = kn.nextSyncDueAt();
         return due == null || !due.isAfter(now);
     }
 
-    /** Re-arm the knowledge's forward cursors and advance its next-due time by the resolved schedule. */
     private void armAndReschedule(Knowledge kn, Instant now) {
         int armed = cursors.armForwardCursors(kn.id());
         Instant next = schedules.nextDueAt(kn, now);
@@ -82,10 +71,7 @@ public class ForwardCursorScheduler {
     }
 
     /**
-     * Re-arm a single knowledge's forward cursors immediately, ignoring its schedule (used by
-     * webhooks / on-demand sync). When the knowledge exists and scheduling is enabled, its next
-     * scheduled due time is also rolled forward so the periodic tick doesn't immediately re-fire on
-     * top of this manual arm.
+     * Ignores the schedule, but rolls the next due time forward so the tick does not fire again on top of it.
      */
     public int armNow(String knowledgeId) {
         int armed = cursors.armForwardCursors(knowledgeId);

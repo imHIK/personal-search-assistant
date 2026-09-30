@@ -10,31 +10,18 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
 
-/**
- * Look up which job-board platform hosts a company, before committing it to a knowledge.
- *
- * <p>Read-only calls to public, unauthenticated board APIs — the same probes {@code discover()} makes.
- * Its purpose is the watchlist: reach here is a function of how many companies are named, and this
- * turns "is this company reachable?" from create-a-knowledge-and-see into one request for fifty names.
- */
 @Path("/api/connectors/job-boards")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class JobBoardsResource {
 
-    /**
-     * Cap on names per request. Each one probes several platforms, so an unbounded list would be a
-     * long-running request against APIs that are someone else's to pay for.
-     */
+    /** Each name probes several platforms' public APIs. */
     private static final int MAX_COMPANIES = 50;
 
     @Inject
     JobBoardsConnector connector;
 
-    /**
-     * Resolve each candidate name. A name that matches nothing comes back with {@code found: false}
-     * rather than being omitted — knowing a company is unreachable is the point of asking.
-     */
+    /** A name that matches nothing comes back with {@code found: false} rather than being omitted. */
     @POST
     @Path("/lookup")
     public List<CompanyLookupDto> lookup(CompanyLookupDto.Request request) {

@@ -21,16 +21,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * Chat completion over the OpenAI-compatible {@code POST {base-url}/chat/completions} schema. One
- * adapter covers every provider that speaks it — Groq, Google Gemini, Mistral, OpenRouter, Together and
- * a local Ollama server — so switching between hosted and local is config only (base-url + model +
- * api-key), with no code change. Selected with {@code app.llm.provider=openai-compat}.
- *
- * <p>Defaults target Groq's free tier ({@code llama-3.3-70b-versatile}); set the api key from an env var
- * via {@code app.llm.api-key=${GROQ_API_KEY:}}. To run locally later, point {@code app.llm.base-url} at
- * {@code http://localhost:11434/v1} (Ollama) and set {@code app.llm.model} — no other changes.
- */
 @ApplicationScoped
 @ProviderImpl
 public class OpenAiCompatibleLlmProvider implements LlmProvider {
@@ -43,7 +33,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
     @ConfigProperty(name = "app.llm.model", defaultValue = "openai/gpt-oss-120b")
     String modelName;
 
-    /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
+    /** Blank sends no Authorization header (a local Ollama). */
     @ConfigProperty(name = "app.llm.api-key")
     Optional<String> apiKey;
 
@@ -79,10 +69,6 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         return complete(LlmProfile.inherit("default"), system, messages);
     }
 
-    /**
-     * Applies only the fields the profile actually sets, so an inherit-everything profile produces
-     * exactly the request this adapter sent before profiles existed.
-     */
     @Override
     public String complete(LlmProfile profile, String system, List<Message> messages) {
         return complete(profile, ResponseFormat.TEXT, system, messages);
@@ -111,9 +97,6 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
             }
 
             String key = resolveKey(profile);
-            // The profile decides whether a throttled call waits: answering runs on a user's request
-            // thread and should degrade to answerError, while a digest runs in the background and should
-            // simply take longer. See LlmProfile#rateLimitMode.
             HttpCall call = HttpCall
                     .post(endpoint.replaceAll("/+$", "") + "/chat/completions",
                             mapper.writeValueAsString(body), Duration.ofSeconds(timeoutSeconds),
@@ -141,23 +124,14 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         }
     }
 
-    /**
-     * What a profile that says nothing gets. Fail-fast, because the only caller that reaches the LLM
-     * without naming a background profile is answering, on a user's request thread.
-     */
     private static RateLimitMode defaultMode() {
         return RateLimitMode.FAIL_FAST;
     }
 
     /**
-     * The credential for this call, or null to send no {@code Authorization} header.
-     *
-     * <p>A profile that redirects {@code base-url} must bring its own key. Inheriting the provider's
-     * would send one vendor's secret to another vendor's host — that is a credential leak, not a
-     * convenience, so a redirected profile without a key sends none (which is exactly right for a local
-     * Ollama, the main reason to redirect).
+     * A profile that redirects base-url never inherits the provider's key: that would send one vendor's
+     * secret to another vendor's host.
      */
-    // Package-private for tests.
     String resolveKey(LlmProfile profile) {
         Optional<String> fromProfile = profile.apiKey().filter(k -> !k.isBlank());
         if (profile.baseUrl().isPresent()) {
@@ -166,11 +140,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         return fromProfile.orElse(ConfigText.orNull(apiKey));
     }
 
-    /**
-     * What this specific call resolved to, profile included — so a failure names the model that actually
-     * failed rather than the provider's default. Never logs the key itself, only whether one resolved.
-     */
-    // Package-private for tests.
+    /** Never includes the key, only whether one resolved. */
     String callSummary(LlmProfile profile, String endpoint, String model, boolean hasKey) {
         return "profile=" + profile.name() + ", base-url=" + endpoint + ", model=" + model
                 + ", temperature=" + profile.temperature().orElse(temperature)
@@ -178,10 +148,6 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
                 + ", api-key=" + (hasKey ? "present" : "ABSENT -> sending no Authorization header");
     }
 
-    /**
-     * One INFO line, on first use, naming what this provider resolved to — see the embedding
-     * provider for why a blank api-key is legitimate (local Ollama) and therefore not fatal here.
-     */
     private void logConfigOnce() {
         if (configLogged.compareAndSet(false, true)) {
             LOG.info("LLM provider ready: " + configSummary());

@@ -9,23 +9,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Wire shape for one row of the task library, inbound (create / patch) and outbound (read).
+ * Absent fields are left untouched and null clears them; {@link #patchOnto} reads the body directly to tell
+ * the two apart.
  *
- * <p>Patch semantics follow {@code KnowledgePatchDto}: a field that is absent is left untouched, and
- * one present as JSON {@code null} is cleared. {@link #patchOnto} is what implements that, and it reads
- * the request body directly for the reason {@link PatchBody} explains — binding this record instead put
- * every unsent field through {@link Task}'s normalizing constructor, so a patch of the name alone
- * quietly blanked the description and reset {@code mode}, {@code output} and {@code llmProfile} to
- * their defaults. A RAW task could be turned back into a SIMPLE one by renaming it.
- *
- * @param builtIn        read-only, and true for everything shipped in {@code config/prompts.json}.
- *                       Outbound only; ignored on the way in
- * @param usedBy         what in the application depends on this task ({@code "search"}), outbound only
- * @param usableInDigest whether a digest may be pointed at it, outbound only
- * @param mode           {@code SIMPLE} builds the prompt from {@code instruction} and {@code fields};
- *                       {@code RAW} carries {@code system} / {@code user} verbatim
- * @param output         {@code SUMMARY} or {@code PER_ITEM}; SIMPLE only. PER_ITEM is what makes the
- *                       reply JSON and the results annotatable — neither is set separately
+ * @param builtIn outbound only; true for everything shipped in {@code config/prompts.json}
+ * @param mode {@code SIMPLE} builds the prompt from instruction and fields; {@code RAW} carries system and
+ *             user verbatim
+ * @param output {@code SUMMARY} or {@code PER_ITEM}, SIMPLE only. PER_ITEM makes the reply JSON and the
+ *               results annotatable
  */
 public record TaskDto(
         String id,
@@ -48,12 +39,12 @@ public record TaskDto(
         Instant updatedAt) {
 
     /**
-     * @param type {@code NUMBER} renders as a score badge on each result, {@code TEXT} as a line
-     * @param optional whether the model may reply null, in which case the field is simply not shown
+     * @param type {@code NUMBER} renders as a score badge, {@code TEXT} as a line
+     * @param optional the model may reply null, and the field is then not shown
      */
     public record FieldDto(String name, String type, String description, Boolean optional) {}
 
-    /** @throws IllegalArgumentException on an unknown enum name — mapped to 400 by the resource */
+    /** @throws IllegalArgumentException on an unknown enum name */
     public Task toDomain() {
         List<Task.Field> domainFields = new ArrayList<>();
         if (fields != null) {
@@ -90,7 +81,6 @@ public record TaskDto(
                 task.createdAt(), task.updatedAt());
     }
 
-    /** An unsaved task — a duplicate the console will show in the editor. No library flags yet. */
     public static TaskDto from(Task task) {
         return new TaskDto(task.id(), task.name(), task.description(), false, List.of(), true,
                 task.mode().name(), task.instruction(), task.output().name(), fieldsOf(task),
@@ -99,13 +89,10 @@ public record TaskDto(
     }
 
     /**
-     * {@code existing} with only the keys this body actually carries overlaid onto it.
+     * Overlays only the keys this body carries: past this point an unset field and a defaulted one look
+     * identical.
      *
-     * <p>Done here rather than in the service because this is the last place that knows which keys
-     * were sent: by the time a {@link Task} exists, an unset field and a defaulted one look identical.
-     *
-     * @throws IllegalArgumentException on an unknown enum name or a wrong-typed field — a 400, rather
-     *                                  than an edit that quietly writes something else
+     * @throws IllegalArgumentException on an unknown enum name or a wrong-typed field
      */
     public static Task patchOnto(Task existing, JsonNode body) {
         PatchBody patch = new PatchBody(body);
@@ -115,7 +102,6 @@ public record TaskDto(
         Patched<JsonNode> fields = patch.node("fields");
         return new Task(
                 existing.id(),
-                // A blank name is the one edit refused outright: the library lists by name.
                 blankToCurrent(patch.text("name"), existing.name()),
                 patch.text("description").orElse(existing.description()),
                 enumOrNull(Task.Mode.class, mode),
@@ -137,7 +123,7 @@ public record TaskDto(
         return value == null || value.isBlank() ? current : value;
     }
 
-    /** A cleared budget is the stored one: zero would silently drop every source. */
+    /** A cleared budget keeps the stored one: zero would silently drop every source. */
     private static int zeroToCurrent(Patched<Integer> patched, int current) {
         Integer value = patched.orElse(current);
         return value == null || value <= 0 ? current : value;

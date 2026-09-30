@@ -1,11 +1,8 @@
 package io.personalassistant.publishing.email;
 
 /**
- * A message rendered for email.
- *
- * @param subject single-line subject, header-safe
- * @param html    the HTML body
- * @param text    the plain-text alternative — always present, for clients and filters that ignore HTML
+ * @param subject single-line and header-safe
+ * @param text the plain-text alternative, always present
  */
 public record RenderedEmail(String subject, String html, String text) {
 }

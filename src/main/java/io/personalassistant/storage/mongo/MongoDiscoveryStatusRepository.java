@@ -22,15 +22,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * MongoDB adapter for {@link DiscoveryStatusRepository} over the {@code discovery} collection. One
- * document per {@code (knowledgeId, direction)} — the backward and forward grabbers each get their own.
- *
- * <p>{@link #record} is an atomic {@code upsert} with {@code $inc} counters, so concurrent or
- * repeated runs accumulate {@code runCount}/{@code failureCount} correctly without a read-modify-write
- * race. On a {@code FAILED} run the {@code iterablesFound}/{@code lastCounts} fields are deliberately
- * left untouched, so a failure never overwrites the last known-good snapshot.
- */
+/** One atomic upsert with $inc counters; a FAILED run leaves iterablesFound and lastCounts untouched. */
 @ApplicationScoped
 public class MongoDiscoveryStatusRepository implements DiscoveryStatusRepository {
 
@@ -58,7 +50,7 @@ public class MongoDiscoveryStatusRepository implements DiscoveryStatusRepository
         boolean ok = run.outcome() == DiscoveryOutcome.OK;
 
         List<Bson> updates = new ArrayList<>(List.of(
-                // _id comes from the filter on insert; immutable identity fields set only on insert.
+                // _id comes from the filter; identity fields are set only on insert.
                 Updates.setOnInsert("knowledgeId", run.knowledgeId()),
                 Updates.setOnInsert("direction", BsonSupport.enumName(run.direction())),
                 Updates.setOnInsert("createdAt", BsonSupport.date(now)),
@@ -99,8 +91,6 @@ public class MongoDiscoveryStatusRepository implements DiscoveryStatusRepository
     public void deleteByKnowledge(String knowledgeId) {
         collection().deleteMany(eq("knowledgeId", knowledgeId));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private DiscoveryStatus fromDoc(Document d) {
         Document counts = BsonSupport.sub(d, "lastCounts");

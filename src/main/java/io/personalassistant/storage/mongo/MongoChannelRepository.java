@@ -21,7 +21,6 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link ChannelRepository} over the {@code channels} collection. */
 @ApplicationScoped
 public class MongoChannelRepository implements ChannelRepository {
 

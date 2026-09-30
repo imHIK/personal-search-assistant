@@ -10,12 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.StringJoiner;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * {@link DriveApi} backed by the Google Drive REST API v3 ({@code www.googleapis.com/drive/v3}).
- * This adapter is pure transport + URL building: {@code files.list} always requests the field subset
- * the connector maps from, and enables shared-drive traversal so items in shared drives are visible.
- * No pagination or content policy lives here — that is the connector's job.
- */
+/** files.list enables shared-drive traversal, so items in shared drives are visible. */
 @ApplicationScoped
 public class HttpDriveApi implements DriveApi {
 

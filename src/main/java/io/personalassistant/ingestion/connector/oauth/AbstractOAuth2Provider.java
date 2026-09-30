@@ -12,16 +12,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The RFC 6749 half of an {@link OAuthProvider}: an authorization-code URL and a form-encoded token
- * endpoint, which is what nearly every vendor implements. A concrete provider supplies its two
- * endpoints, its scope mapping and any vendor-specific authorize parameters, and inherits the rest —
- * so the second provider costs about forty lines, not a second copy of this file.
- *
- * <p>The one genuinely vendor-specific judgement left abstract-ish is
- * {@link #isCredentialsRejected}: telling "this grant is permanently dead" apart from "the service is
- * having a bad minute" decides whether a connection gets marked {@code ERROR} or quietly retried, and
- * vendors spell that differently. The default recognises the RFC's own {@code invalid_grant}, which
- * covers Google and most others; override where a vendor deviates.
+ * The RFC 6749 half: an authorization-code URL and a form-encoded token endpoint. Subclasses supply the
+ * endpoints, scopes and vendor parameters. isCredentialsRejected decides between marking a connection ERROR
+ * and retrying; the default recognises {@code invalid_grant}.
  */
 public abstract class AbstractOAuth2Provider implements OAuthProvider {
 
@@ -30,11 +23,8 @@ public abstract class AbstractOAuth2Provider implements OAuthProvider {
     protected final OutboundHttp http;
 
     /**
-     * Exists only so CDI can synthesise a no-args constructor on a normal-scoped subclass for its
-     * client proxy. The proxy never executes a method against its own fields — every call is delegated
-     * to the real instance — so the null here is never read. Without it, {@code @ApplicationScoped} on
-     * any subclass fails the build with "not possible to automatically add a synthetic no-args
-     * constructor to an unproxyable bean class".
+     * Only so CDI can synthesise a no-args constructor for a normal-scoped subclass's client proxy; the proxy
+     * never reads these fields.
      */
     protected AbstractOAuth2Provider() {
         this.http = null;
@@ -44,22 +34,16 @@ public abstract class AbstractOAuth2Provider implements OAuthProvider {
         this.http = http;
     }
 
-    /** Consent endpoint the browser is sent to. */
     protected abstract String authorizeEndpoint();
 
-    /** Token endpoint used for both the code exchange and refreshes. */
     protected abstract String tokenEndpoint();
 
-    /**
-     * Extra query parameters on the consent URL. This is where a vendor's "and please do give me a
-     * refresh token" dialect goes — Google's {@code access_type=offline&prompt=consent}, and whatever
-     * the next vendor calls the same thing.
-     */
+    /** Where a vendor's "please return a refresh token" dialect goes. */
     protected Map<String, String> extraAuthorizeParams() {
         return Map.of();
     }
 
-    /** Separator between scopes in the authorize URL. Space for most; a comma for a few vendors. */
+    /** A space for most vendors; a comma for a few. */
     protected String scopeSeparator() {
         return " ";
     }
@@ -84,8 +68,7 @@ public abstract class AbstractOAuth2Provider implements OAuthProvider {
         params.put("redirect_uri", redirectUri);
         params.put("client_id", client.id());
         params.put("client_secret", client.secret());
-        // A user is sitting in front of this waiting for a redirect, and no connection exists yet to
-        // carry a quota, so the one-off exchange is not charged to a bucket.
+        // A user is waiting and no connection exists yet to carry a quota, so the exchange is not charged.
         return post(params, RateLimit.NONE, "code exchange");
     }
 
@@ -100,10 +83,9 @@ public abstract class AbstractOAuth2Provider implements OAuthProvider {
     }
 
     /**
-     * Whether this failure means the grant is dead for good rather than momentarily unavailable.
+     * Dead for good, as opposed to momentarily unavailable.
      *
-     * @param status HTTP status, or 0 when the call never got a response
-     * @param body   response body snippet
+     * @param status 0 when the call never got a response
      */
     protected boolean isCredentialsRejected(int status, String body) {
         return (status == 400 || status == 401)

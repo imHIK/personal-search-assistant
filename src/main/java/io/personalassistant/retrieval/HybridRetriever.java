@@ -12,18 +12,9 @@ import java.util.Map;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Default retriever. For HYBRID mode it runs lexical and vector retrieval independently and
- * merges them with Reciprocal Rank Fusion (RRF) — which avoids reconciling BM25 and cosine
- * score scales. LEXICAL/SEMANTIC delegate to a single primitive.
- *
- * <p>It returns <em>chunks</em>, uncapped; {@link EntityGrouper} turns them into one result per entity
- * downstream of every retrieval path. A per-entity cap used to be applied here, to the already-fetched
- * pool, and starved the result set: 40 chunks over job postings of ~7 chunks each held about 6 distinct
- * postings, so "one per posting" returned 6 results for a topK of 10 and nothing ever fetched more.
- *
- * <p>Every chunk leaves with {@link SearchHit.Ranking#lexicalRank()} / {@code vectorRank()} recorded —
- * where each leg placed it — because the fused score alone cannot say which leg was responsible for a
- * wrong result.
+ * HYBRID runs both legs and fuses them with RRF, which avoids reconciling BM25 and cosine scales. Returns
+ * chunks, uncapped; EntityGrouper makes the results. Each chunk records its rank in each leg, since the fused
+ * score cannot say which leg was responsible.
  */
 @ApplicationScoped
 public class HybridRetriever implements Retriever {
@@ -31,18 +22,14 @@ public class HybridRetriever implements Retriever {
     private final SearchIndex index;
 
     /**
-     * RRF's rank-smoothing constant. Larger flattens the contribution curve, so agreement between the
-     * two legs matters more than either leg's exact ordering; smaller makes top ranks dominate.
+     * Larger flattens the curve, so agreement between the legs matters more; smaller lets top ranks dominate.
      */
     @ConfigProperty(name = "app.search.rrf-k", defaultValue = "60")
     int rrfK;
 
     /**
-     * Per-leg weights on the fused score. Equal weighting assumes both legs are equally trustworthy for
-     * every query, which they are not: on a conversational query the BM25 leg matches incidental words
-     * ("give", "all", "this", "year") and contributes a run of irrelevant candidates that can outrank the
-     * vector leg's correct ones. Lowering the lexical weight is the blunt instrument for that; fixing the
-     * query shape (`app.search.lexical.minimum-should-match`) is the sharp one.
+     * On a conversational query BM25 matches incidental words. Lowering its weight is the blunt fix;
+     * {@code app.search.lexical.minimum-should-match} is the sharp one.
      */
     @ConfigProperty(name = "app.search.rrf.lexical-weight", defaultValue = "1.0")
     double lexicalWeight;
@@ -77,7 +64,6 @@ public class HybridRetriever implements Retriever {
                 .toList();
     }
 
-    /** A single leg's results, each recording its own position in that leg. */
     private static List<SearchHit> ranked(List<SearchHit> hits, boolean lexical) {
         List<SearchHit> out = new ArrayList<>(nonNull(hits).size());
         for (SearchHit hit : nonNull(hits)) {
@@ -88,7 +74,6 @@ public class HybridRetriever implements Retriever {
         return out;
     }
 
-    /** 1-based position of each chunk in one leg's list; the first occurrence wins. */
     private static Map<String, Integer> ranks(List<SearchHit> hits) {
         Map<String, Integer> ranks = new HashMap<>();
         List<SearchHit> list = nonNull(hits);

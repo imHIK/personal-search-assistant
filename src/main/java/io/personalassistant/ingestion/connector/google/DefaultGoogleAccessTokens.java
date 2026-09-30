@@ -8,17 +8,6 @@ import io.personalassistant.ingestion.connector.oauth.OAuthTokenService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-/**
- * Default {@link GoogleAccessTokens} implementation — a thin Google-shaped facade over the
- * provider-neutral {@link OAuthTokenService}.
- *
- * <p>It stays as its own type because {@link GoogleAuth} pairs the bearer with <em>Google's</em> rate
- * limit bucket and is threaded through {@code GoogleHttp}, both API clients and both connectors. The
- * credential handling behind it — refresh, caching, write-back, and the reaction to a revoked grant —
- * is not Google-specific and no longer lives here: see {@link OAuthTokenService} and
- * {@link GoogleOAuthProvider}. A second OAuth connector reuses that machinery and writes only its own
- * equivalent of this class, or none at all.
- */
 @ApplicationScoped
 public class DefaultGoogleAccessTokens implements GoogleAccessTokens {
 

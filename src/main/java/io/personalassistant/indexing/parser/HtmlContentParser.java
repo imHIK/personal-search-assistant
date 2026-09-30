@@ -6,12 +6,7 @@ import java.io.InputStream;
 import java.util.Set;
 import org.apache.tika.parser.ParseContext;
 
-/**
- * Dedicated HTML/XHTML extractor. Tika's HTML parser drops {@code <script>}/{@code <style>} and
- * markup, leaving the visible text in document order — far more meaningful than indexing raw HTML
- * source as plain text. Claims {@code text/html} explicitly (the {@link PlainTextParser} deliberately
- * excludes it) so this parser wins for web pages and HTML email bodies.
- */
+/** Claims {@code text/html}, which PlainTextParser deliberately leaves alone. */
 @ApplicationScoped
 public class HtmlContentParser implements ContentParser {
 

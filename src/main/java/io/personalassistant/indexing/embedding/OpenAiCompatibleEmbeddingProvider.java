@@ -25,18 +25,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Hosted embeddings over the OpenAI-compatible {@code POST {base-url}/embeddings} schema, which
- * Google Gemini, Jina, Mistral, Together, Ollama and others all speak. Adding another hosted model is
- * therefore config only (base-url + model + api-key), not code. Selected with
- * {@code app.embedding.provider=openai-embed}.
- *
- * <p>Defaults target Gemini's OpenAI-compatible endpoint with {@code models/gemini-embedding-001},
- * natively 3072-dim but requested at 768 via {@code app.embedding.openai.dimensions}. The returned
- * vector width must equal {@code app.embedding.dimension} and the OpenSearch {@code knn_vector}
- * mapping; a mismatch throws rather than corrupting the index. The API key is read from config so it
- * can be sourced from an env var, e.g. {@code app.embedding.openai.api-key=${GEMINI_API_KEY:}} —
- * note that an env var missing from the JVM's environment resolves to blank and is not an error
- * here, so the resolved state is logged and carried in failures (see {@code configSummary()}).
+ * Embeddings over the OpenAI-compatible {@code /embeddings} schema (Gemini, Jina, Ollama, …). A returned
+ * width other than {@code app.embedding.dimension} throws rather than corrupting the index.
  */
 @ApplicationScoped
 @ProviderImpl
@@ -44,7 +34,6 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
 
     private static final Logger LOG = Logger.getLogger(OpenAiCompatibleEmbeddingProvider.class.getName());
 
-    /** Gemini's asymmetric-retrieval task types. Indexing embeds documents; searching embeds queries. */
     private static final String DOCUMENT_TASK = "RETRIEVAL_DOCUMENT";
     private static final String QUERY_TASK = "RETRIEVAL_QUERY";
 
@@ -53,15 +42,13 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     String baseUrl;
 
     /**
-     * Model id exactly as the endpoint expects it. Gemini's compatibility layer wants the full
-     * resource name ({@code models/gemini-embedding-001}); a bare id returns 404 "Requested entity was
-     * not found", which is also what a retired model returns — so check {@code GET {base-url}/models}
-     * before assuming the model is gone. Other OpenAI-compatible servers take a bare id.
+     * Gemini's compatibility layer wants the full resource name ({@code models/gemini-embedding-001}); a bare
+     * id returns 404, as does a retired model.
      */
     @ConfigProperty(name = "app.embedding.openai.model", defaultValue = "models/gemini-embedding-001")
     String modelName;
 
-    /** Optional: blank means send no Authorization header (e.g. a local Ollama). See {@link ConfigText}. */
+    /** Blank sends no Authorization header (a local Ollama). */
     @ConfigProperty(name = "app.embedding.openai.api-key")
     Optional<String> apiKey;
 
@@ -69,21 +56,9 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     int dimension;
 
     /**
-     * Output width to ask the API for, sent as the OpenAI {@code dimensions} parameter; 0 omits it.
-     * Matryoshka-trained models return a meaningful shorter prefix on request — {@code
-     * gemini-embedding-001} is natively 3072 — which is what lets a 768-wide index keep working after
-     * a model swap instead of needing a re-map.
-     *
-     * <p>Deliberately separate from {@code app.embedding.dimension}: that one states what the index
-     * mapping <em>requires</em>, this one what we <em>ask</em> for. Deriving the request from the
-     * index width would silently start truncating vectors the moment someone edited the mapping, and
-     * a server that ignores the parameter (some OpenAI-compatible backends reject unknown fields
-     * instead) must fail loudly rather than write mis-sized vectors — hence the explicit check below.
-     *
-     * <p>The default tracks {@code application.properties} (the tiebreaker for any config default) rather
-     * than the "omit it" sentinel. It used to be {@code 0}, which meant an install missing this property
-     * silently requested {@code gemini-embedding-001}'s native 3072 width against a 768 {@code knn_vector}
-     * mapping — the failure mode invariant 5 exists to prevent. {@code 0} remains a legal value.
+     * The width to ask for (Matryoshka models return a meaningful prefix); 0 omits it. Separate from
+     * {@code app.embedding.dimension}, which is what the index requires, so a server that ignores the request
+     * fails the width check instead of writing mis-sized vectors.
      */
     @ConfigProperty(name = "app.embedding.openai.dimensions", defaultValue = "768")
     int requestedDimensions;
@@ -92,17 +67,8 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     long timeoutSeconds;
 
     /**
-     * Whether to send {@code task_type}, distinguishing a query embedding from a document one.
-     *
-     * <p><strong>Off by default, and the default is the important part.</strong> {@code task_type} is a
-     * <em>native</em> Gemini parameter. The OpenAI-compatible endpoint this provider ships against
-     * ({@code /v1beta/openai}) validates strictly and rejects it outright — {@code 400 Invalid JSON
-     * payload received. Unknown name "task_type": Cannot find field.} — which fails every embedding call
-     * and therefore all indexing. Enable it only against an endpoint documented to accept it.
-     *
-     * <p>The asymmetry is real and worth having (both configured models are asymmetrically trained), but
-     * on this endpoint it is unreachable: the compat layer exposes no way to signal query vs document.
-     * The ONNX provider gets it through {@code app.embedding.onnx.query-instruction} instead.
+     * Off by default: the OpenAI-compatible Gemini endpoint rejects {@code task_type} with a 400, which would
+     * fail every embedding.
      */
     @ConfigProperty(name = "app.embedding.openai.task-type-enabled", defaultValue = "false")
     boolean taskTypeEnabled;
@@ -138,11 +104,6 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         return embedAll(List.of(text == null ? "" : text)).get(0);
     }
 
-    /**
-     * Embeds with {@code task_type=RETRIEVAL_QUERY} rather than {@code RETRIEVAL_DOCUMENT}. Gemini's
-     * embedding models are asymmetrically trained, so telling the model which side it is embedding is
-     * what the model expects; sending both through the document path is a silent quality loss.
-     */
     @Override
     public Embedding embedQuery(String text) {
         return embed(List.of(text == null ? "" : text), QUERY_TASK, RateLimitMode.FAIL_FAST).get(0);
@@ -154,10 +115,8 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     }
 
     /**
-     * The two entry points differ in more than the task type: {@code embedQuery} is only ever reached
-     * from a user's search request, and {@code embedAll} only from the indexing runner. That existing
-     * split is exactly the rate-limit boundary, so a throttled backfill slows down while a throttled
-     * search still answers — without a limit ever having to be threaded through the callers.
+     * embedQuery is reached only from a search and embedAll only from indexing: that split is the rate-limit
+     * boundary.
      */
     private List<Embedding> embed(List<String> texts, String taskType, RateLimitMode mode) {
         logConfigOnce();
@@ -167,8 +126,6 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
             if (requestedDimensions > 0) {
                 body.put("dimensions", requestedDimensions);
             }
-            // Only sent when enabled: task_type is a Gemini extension to the OpenAI schema, and a strict
-            // OpenAI-compatible endpoint may reject an unknown field outright.
             if (taskTypeEnabled) {
                 body.put("task_type", taskType);
             }
@@ -191,24 +148,13 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                 throw new IllegalStateException("Embedding API returned " + data.size()
                         + " vectors for " + texts.size() + " inputs");
             }
-            // Place each vector at its reported index so order matches the input regardless of API
-            // ordering. Every slot is then checked for null below: the size check above does not
-            // catch a payload whose indices collide, and the resulting hole used to travel all the
-            // way into the index as a chunk with no vector — reported as a success and permanently
-            // unfindable by semantic search.
+            // Placed by reported index, then every slot is checked for null: colliding indices would
+            // otherwise leave a hole.
             Embedding[] ordered = new Embedding[texts.size()];
             int position = 0;
             for (JsonNode item : data) {
-                // `index` is genuinely absent on some items. Gemini's /embeddings serializes protobuf,
-                // where 0 is the proto3 default and default-valued fields are dropped — so the *first*
-                // item comes back as {"object","embedding"} with no "index" at all, while items 1..n
-                // carry theirs. Verified against the live endpoint, not inferred.
-                //
-                // Falling back to payload position is therefore correct twice over: the OpenAI schema
-                // returns `data` in input order, so position == index, and it also covers a server
-                // that omits the field entirely. Treating absence as an error instead breaks every
-                // batch on its first element. An index that is *present* and out of range is still
-                // rejected — that is the case that silently drops a vector.
+                // Gemini omits index on the first item (proto3 drops default-valued fields), so
+                // position is the fallback. An index present and out of range is still rejected.
                 int idx = item.hasNonNull("index") ? item.path("index").asInt(-1) : position;
                 position++;
                 if (idx < 0 || idx >= ordered.length) {
@@ -245,11 +191,8 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     }
 
     /**
-     * One INFO line, on first use, naming what this provider actually resolved to. A blank api-key is
-     * not an error — a local Ollama needs none — so the request simply goes out unauthenticated and
-     * the vendor decides what to call that; this line is what distinguishes "no key reached the JVM"
-     * from a genuine model or endpoint problem. Logged lazily rather than at startup because the bean
-     * is only initialised when the provider is actually selected.
+     * A blank api-key is legitimate (a local Ollama), so this line is what tells "no key reached the JVM"
+     * apart from a model problem.
      */
     private void logConfigOnce() {
         if (configLogged.compareAndSet(false, true)) {
@@ -257,7 +200,7 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         }
     }
 
-    /** Never logs the key itself — only whether one resolved, which is the part that goes wrong. */
+    /** Never logs the key itself, only whether one resolved. */
     private String configSummary() {
         return "base-url=" + baseUrl + ", model=" + modelName + ", index-dimension=" + dimension
                 + ", requested-dimensions=" + (requestedDimensions > 0 ? requestedDimensions : "omitted")
@@ -265,11 +208,6 @@ public class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
                         ? "ABSENT -> sending no Authorization header" : "present");
     }
 
-    /**
-     * Spells out the fix, because the two ways this fails are indistinguishable from the stack trace:
-     * a model whose native width simply differs, or a server that accepted {@code dimensions} and
-     * ignored it. Either way the vectors would be unusable against the knn mapping.
-     */
     private String widthMismatch(int actual) {
         String cause = requestedDimensions > 0
                 ? " even though dimensions=" + requestedDimensions + " was requested (the API ignored it)"

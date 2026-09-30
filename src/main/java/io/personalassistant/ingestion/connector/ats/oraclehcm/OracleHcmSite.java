@@ -5,22 +5,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * One Oracle Recruiting Cloud career site, identified by a {@code host/siteNumber} pair.
- *
- * <p>Like Workday, and unlike the four bare-name platforms, <strong>neither part is guessable</strong>.
- * The host is a per-customer Fusion pod ({@code eofe.fa.us2.oraclecloud.com},
- * {@code jpmc.fa.oraclecloud.com}, {@code hcbt.fa.em2.oraclecloud.com} — the prefix is not the company
- * name and the region segment is sometimes absent), and the site number is an arbitrary slug
- * ({@code CX_1}, {@code CX_1001}, {@code BNY-Careers}). Both have to be read off the careers URL, which
- * is why {@link #parse} accepts a pasted one.
- *
- * <p>The vanity-domain case is the reason this is a pair rather than a single string: employers front
- * the pod with their own hostname ({@code jobs.akamai.com}, {@code careers.americanexpress.com}) and
- * those hostnames serve the UI but <em>not</em> the REST API, so the underlying pod host is the part
- * that matters and a vanity URL cannot be used as-is.
+ * A host/siteNumber pair, neither guessable: the host is a per-customer Fusion pod and the site number an
+ * arbitrary slug, so both are read off the careers URL. Vanity domains serve the UI but not the REST API, so
+ * the pod host is what matters.
  *
  * @param host the Fusion host serving the REST API, without scheme
- * @param site the {@code siteNumber} of the career site on that host
  */
 public record OracleHcmSite(String host, String site) {
 
@@ -35,12 +24,7 @@ public record OracleHcmSite(String host, String site) {
                     + "/hcmUI/CandidateExperience/[\\w-]+/sites/([A-Za-z0-9_-]+).*$",
             Pattern.CASE_INSENSITIVE);
 
-    /**
-     * Parse a handle, accepting either the pair or a pasted career-site URL.
-     *
-     * <p>Returns empty rather than throwing for anything else — that is what tells the connector a bare
-     * company name is not an Oracle HCM site, and resolution asks that of every name.
-     */
+    /** Empty rather than a throw for anything else: that is how a bare company name is told apart. */
     public static Optional<OracleHcmSite> parse(String handle) {
         if (handle == null || handle.isBlank()) {
             return Optional.empty();
@@ -57,12 +41,10 @@ public record OracleHcmSite(String host, String site) {
         return Optional.empty();
     }
 
-    /** {@code https://{host}/hcmRestApi/resources/latest} — the API root. */
     public String apiRoot() {
         return "https://" + host + "/hcmRestApi/resources/latest";
     }
 
-    /** The public page for one requisition, used as the posting's {@code uri}. */
     public String jobUrl(String id) {
         return "https://" + host + "/hcmUI/CandidateExperience/en/sites/" + site + "/job/" + id;
     }

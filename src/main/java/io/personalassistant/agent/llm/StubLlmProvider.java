@@ -4,12 +4,7 @@ import io.personalassistant.common.ProviderImpl;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.List;
 
-/**
- * Placeholder LLM provider that keeps the bean graph complete and serves as the safe
- * {@code app.llm.provider=none} fallback. Selecting a real provider (e.g. {@code openai-compat})
- * supersedes it. Its {@link #complete} intentionally throws so a misconfiguration surfaces loudly
- * rather than silently returning nothing.
- */
+/** The app.llm.provider=none fallback. complete() throws on purpose, so a misconfiguration is loud. */
 @ApplicationScoped
 @ProviderImpl
 public class StubLlmProvider implements LlmProvider {

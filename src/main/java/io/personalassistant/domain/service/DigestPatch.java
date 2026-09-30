@@ -6,21 +6,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A partial edit to an existing {@link Digest}. Every value is a {@link Patched}: absent means "not
- * part of this edit", present means "set to this" — and present-with-null means "clear it".
- *
- * <p>That third state is why this does not use {@link java.util.Optional} the way
- * {@link KnowledgePatch} does. Half the console's controls for these fields exist to turn something
- * <em>off</em>, and every one of them sends a JSON null.
- *
- * <p><b>Why this exists at all.</b> Editing used to be delete-and-recreate, which quietly destroyed the
- * digest's runs — and the runs are the already-seen set, so renaming a digest cost it its memory and the
- * next run re-reported everything in the window. Nothing in the API said so. A patch that changes one
- * field and leaves the history alone is the fix; {@link DigestService#resetHistory} is there for when
- * clearing it is what you actually meant.
- *
- * <p>{@code collapseDuplicates}, {@code onlyNew}, {@code enabled}, {@code useLlm} and {@code topK} have
- * no "off" to clear to, so a null there means the field's default rather than an unset primitive.
+ * Absent means not part of this edit, present sets the field, present-with-null clears it.
+ * collapseDuplicates, onlyNew, enabled, useLlm and topK have no off state: a null there is their default.
  */
 public record DigestPatch(
         Patched<String> name,
@@ -38,7 +25,6 @@ public record DigestPatch(
         Patched<Boolean> enabled,
         Patched<List<String>> channelIds) {
 
-    /** Normalize any {@code null} to its absent form so callers can pass either. */
     public DigestPatch {
         name = Patched.orAbsent(name);
         query = Patched.orAbsent(query);
@@ -56,7 +42,6 @@ public record DigestPatch(
         channelIds = Patched.orAbsent(channelIds);
     }
 
-    /** An edit that leaves the digest's channels alone. */
     public DigestPatch(Patched<String> name, Patched<String> query, Patched<List<String>> knowledgeIds,
                        Patched<Map<String, Object>> filters, Patched<String> window,
                        Patched<SyncSchedule> schedule, Patched<String> taskId, Patched<Integer> topK,
@@ -67,13 +52,8 @@ public record DigestPatch(
     }
 
     /**
-     * This edit applied to {@code existing}. Deliberately does not touch {@code nextRunAt} — an edit is
-     * not a reason to re-run early, and moving it would let repeated saves starve the schedule — nor
-     * {@code historyResetAt}, which only {@link DigestService#resetHistory} sets.
-     *
-     * <p>A cleared field arrives here as a present null and is written as one. {@link Digest}'s own
-     * constructor is what turns that into the canonical empty form — a blank window or task id becomes
-     * null, a null topK becomes the default — so "cleared" means the same thing however it arrived.
+     * Leaves nextRunAt alone, since an edit is no reason to run early and moving it would let repeated saves
+     * starve the schedule, and historyResetAt, which only resetHistory sets.
      */
     public Digest applyTo(Digest existing) {
         return new Digest(
@@ -86,7 +66,6 @@ public record DigestPatch(
                 schedule.orElse(existing.schedule()),
                 taskId.orElse(existing.taskId()),
                 flag(useLlm.orElse(existing.useLlm()), true),
-                // A cleared topK is the default, not zero: the field has no "off".
                 topKOr(existing.topK()),
                 flag(collapseDuplicates.orElse(existing.collapseDuplicates()), false),
                 maxChunksPerEntity.orElse(existing.maxChunksPerEntity()),
@@ -96,7 +75,6 @@ public record DigestPatch(
                 existing.createdAt(),
                 existing.updatedAt(),
                 existing.historyResetAt(),
-                // A cleared list sends nowhere; the Digest constructor makes an empty list of the null.
                 channelIds.orElse(existing.channelIds()));
     }
 
@@ -105,11 +83,6 @@ public record DigestPatch(
         return patched == null ? Digest.DEFAULT_TOP_K : patched;
     }
 
-    /**
-     * A cleared boolean is its default rather than a {@link NullPointerException}. {@code onlyNew}
-     * defaults on — it is what makes a digest a digest — and {@code enabled} likewise: clearing the
-     * switch is not a way to pause something.
-     */
     private boolean onlyNewOr(boolean current) {
         return flag(onlyNew.orElse(current), true);
     }

@@ -7,12 +7,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Fixed-size character windows with overlap — the simplest, dependency-free strategy. It ignores
- * text structure entirely (no separators), sliding a {@code maxSize}-character window forward by
- * {@code maxSize - overlap} each step. Cheap and predictable; prefer {@code recursive} when you want
- * chunks to respect paragraph/sentence boundaries. Sizes come from the per-knowledge {@link ChunkingSpec}.
- */
 @ApplicationScoped
 public class FixedSizeChunkingStrategy implements ChunkingStrategy {
 

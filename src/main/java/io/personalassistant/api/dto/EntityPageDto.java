@@ -6,43 +6,11 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Outbound REST payload for one page of a knowledge's entities.
- *
- * <p>{@code total} is the count matching the same filter, not the page length, so a caller can
- * render page controls without walking to the end.
- *
- * @param items  the page, newest-first
- * @param total  entities matching the filter across all pages
- * @param limit  the page size actually applied (the service clamps it)
- * @param offset the offset actually applied
+ * @param total entities matching the filter across all pages
+ * @param limit the page size actually applied, after clamping
  */
 public record EntityPageDto(List<Item> items, long total, int limit, int offset) {
 
-    /**
-     * One row of the listing. {@code knowledgeId} is omitted — it is the path parameter — and
-     * {@code IndexInfo} is flattened so a table binds straight to the fields.
-     *
-     * @param id             internal entity id
-     * @param iterableId     the group it was walked from; the console names it by joining with the
-     *                       knowledge's cursors, so a renamed group never shows a stale copy here
-     * @param externalId     natural key within the source (path, message id…)
-     * @param entityType     coarse classification (FILE / MESSAGE / …)
-     * @param status         indexing lifecycle state
-     * @param title          display title, or null
-     * @param uri            citation locator, or null
-     * @param checksum       content hash for change detection
-     * @param chunkCount     chunks last written to the search index
-     * @param embeddingModel model that produced those chunks' vectors
-     * @param indexedAt      when the entity was last successfully indexed
-     * @param error          last indexing error, or null
-     * @param retryCount     indexing retry attempts so far
-     * @param needsReindex   whether the entity is queued for re-indexing
-     * @param createdAt      when the entity was first ingested — the console's "added" date. Immutable,
-     *                       unlike {@code updatedAt}
-     * @param updatedAt      last write to the row — the listing sort key, and indexing bookkeeping
-     *                       rather than a content date, so the console keeps it behind its technical
-     *                       toggle
-     */
     public record Item(
             String id,
             String iterableId,

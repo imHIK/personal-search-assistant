@@ -9,11 +9,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** HTTP adapter for {@link WorkdayApi} against the public career-site API (no auth). */
 @ApplicationScoped
 public class HttpWorkdayApi implements WorkdayApi {
 
-    /** These boards are public, so the platform — not an account — is the quota's owner. */
+    /** Public boards: the platform, not an account, owns the quota. */
     private static final String PLATFORM = "workday";
 
     @ConfigProperty(name = "app.ingestion.workday.timeout-seconds", defaultValue = "30")
@@ -30,19 +29,15 @@ public class HttpWorkdayApi implements WorkdayApi {
 
     @Override
     public JsonNode searchJobs(WorkdaySite site, int limit, int offset, String searchText) {
-        // The paging window travels in the body; there is no query-string form of this call.
-        // appliedFacets stays empty: its keys are tenant-specific GUIDs that cannot be derived from a
-        // place name, whereas searchText is the same field on every tenant.
+        // The paging window travels in the body. appliedFacets stays empty: its keys are tenant-specific
+        // GUIDs, whereas searchText is the same on every tenant.
         String body = "{\"appliedFacets\":{},\"limit\":" + limit
                 + ",\"offset\":" + offset
                 + ",\"searchText\":" + jsonString(searchText) + "}";
         return http.postJson(site.apiRoot() + "/jobs", body, timeoutSeconds, rateLimit());
     }
 
-    /**
-     * A JSON string literal. Hand-rolled rather than pulling in a mapper because this request body is
-     * the only JSON this class builds, and the one value that is not ours is now user-supplied.
-     */
+    /** Hand-rolled: this is the only JSON the class builds. */
     private static String jsonString(String value) {
         if (value == null || value.isBlank()) {
             return "\"\"";

@@ -7,10 +7,6 @@ import jakarta.inject.Inject;
 import java.util.EnumMap;
 import java.util.Map;
 
-/**
- * Discovers all {@link SourceConnector} beans via CDI and indexes them by type. Adding a
- * new connector = adding a new bean; no edits here. Empty today (no connectors yet).
- */
 @ApplicationScoped
 public class CdiConnectorRegistry implements ConnectorRegistry {
 

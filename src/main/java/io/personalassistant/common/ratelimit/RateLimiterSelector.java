@@ -10,15 +10,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Produces the single active {@link RateLimiter} — the {@code @Default} bean {@code OutboundHttp} injects
- * — from {@code app.ratelimit.store}. Same shape as {@code EmbeddingProviderSelector}: both stores carry
- * {@link ProviderImpl}, so neither is injectable on its own.
- *
- * <p>The lookups are lazy, and that is load-bearing: in {@code memory} mode the Redis store is never
- * constructed, so a test or a Redis-less setup never issues a Redis command.
- *
- * <p>An unknown value fails startup rather than defaulting to memory. A silent memory fallback is the
- * restart bug this switch exists to remove, and it would look exactly like a working limiter.
+ * Lookups are lazy, so in {@code memory} mode the Redis store is never built. An unknown store fails startup
+ * rather than falling back to memory, which would silently reintroduce the restart bug.
  */
 @ApplicationScoped
 public class RateLimiterSelector {
@@ -38,7 +31,6 @@ public class RateLimiterSelector {
         return selected;
     }
 
-    /** Extracted so the switch is testable without a CDI container. */
     static RateLimiter select(String store, Supplier<? extends RateLimiter> memory,
                               Supplier<? extends RateLimiter> redis) {
         return switch (normalize(store)) {

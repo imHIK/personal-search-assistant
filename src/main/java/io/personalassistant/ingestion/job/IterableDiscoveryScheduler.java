@@ -11,13 +11,8 @@ import jakarta.inject.Inject;
 import java.util.logging.Logger;
 
 /**
- * Periodically re-discovers iterables for sources whose set can grow over time (those whose
- * connector reports {@link io.personalassistant.ingestion.connector.SourceConnector#hasDynamicIterables()}),
- * creating cursors for any newly-appeared sub-streams. This is what lets a new child folder / Slack
- * channel / Drive folder start syncing without re-adding the knowledge.
- *
- * <p>Static-iterable sources are skipped entirely, so this costs nothing for them. Reconciliation
- * is idempotent (deterministic cursor ids + insert-if-absent), so it only ever <em>adds</em> work.
+ * Re-discovers iterables for connectors whose set can grow, so a new folder syncs without re-adding the
+ * knowledge. Idempotent: it only ever adds cursors.
  */
 @ApplicationScoped
 public class IterableDiscoveryScheduler {

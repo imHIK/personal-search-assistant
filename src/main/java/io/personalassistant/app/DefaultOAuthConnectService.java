@@ -24,14 +24,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Default OAuth connect flow, deliberately free of any provider-specific knowledge: it resolves an
- * {@link OAuthProvider} from the registry and asks it for scopes and URLs, so every vendor detail —
- * which parameters guarantee a refresh token, which endpoint issues one — stays inside that bean.
- *
- * <p>Credentials land on the connection through {@link ConnectionService}, not through the repository,
- * so the existing verify-on-auth-change behaviour applies unchanged: a connection that just completed
- * a consent is proved working against its connector before it is reported back as connected, and its
- * status resets from {@code ERROR} to {@code ACTIVE} in the same write.
+ * Credentials go through ConnectionService, not the repository, so a completed consent is verified against
+ * its connector before it is reported connected.
  */
 @ApplicationScoped
 public class DefaultOAuthConnectService implements OAuthConnectService {
@@ -39,10 +33,8 @@ public class DefaultOAuthConnectService implements OAuthConnectService {
     private static final Logger LOG = Logger.getLogger(DefaultOAuthConnectService.class.getName());
 
     /**
-     * Console origins a consent may be started from and returned to. An allow-list rather than "echo
-     * whatever the browser claimed" because the callback redirects to this value — an unchecked origin
-     * would make the endpoint an open redirect, and would also hand the provider a redirect URI it has
-     * no reason to trust. Package-private so tests can set it directly.
+     * An allow-list, not whatever the browser claims: the callback redirects to this value, so an unchecked
+     * origin would be an open redirect.
      */
     @ConfigProperty(name = "app.oauth.allowed-origins",
             defaultValue = "http://localhost:8080,http://localhost:5173")
@@ -70,7 +62,7 @@ public class DefaultOAuthConnectService implements OAuthConnectService {
 
     @Override
     public String start(StartConnect request) {
-        OAuthProvider provider = providers.get(request.providerId()); // unknown id → IllegalArgumentException
+        OAuthProvider provider = providers.get(request.providerId());
         if (!provider.supports().contains(request.type())) {
             throw new IllegalArgumentException(
                     provider.id() + " does not authenticate " + request.type());
@@ -104,8 +96,7 @@ public class DefaultOAuthConnectService implements OAuthConnectService {
         Connection existing = existing(pending.connectionId(), pending.type());
         OAuthClient client = clients.forProvider(providerId, existing);
 
-        // The redirect URI must be byte-identical to the one the consent URL carried; providers compare
-        // the two literally, which is why it is replayed from the state rather than rebuilt here.
+        // Providers compare the redirect URI literally, so it is replayed from the state rather than rebuilt.
         OAuthTokens tokens = provider.exchangeCode(code, pending.redirectUri(), client);
 
         Connection connection = existing == null
@@ -131,17 +122,16 @@ public class DefaultOAuthConnectService implements OAuthConnectService {
     }
 
     private Connection recredential(Connection existing, OAuthTokens tokens) {
-        // New credentials make any cached bearer for this connection irrelevant, and the update below
-        // re-verifies against the connector — which would otherwise be answered from that stale cache.
+        // Drop the cached bearer first: the update below re-verifies, and would otherwise be answered from
+        // the stale cache.
         tokenService.invalidate(existing.id());
         return connectionService.update(existing.id(), new ConnectionService.ConnectionEdit(
                 null, authBlob(tokens, existing), null, null));
     }
 
     /**
-     * Build the {@code auth} blob, keeping the stored refresh token when the provider returned none.
-     * A consent that yields only an access token is survivable; overwriting a working refresh token
-     * with null is not — it turns a one-hour hiccup into a permanently dead connection.
+     * Keeps the stored refresh token when the provider returned none: overwriting a working one with null
+     * kills the connection for good.
      */
     private Map<String, Object> authBlob(OAuthTokens tokens, Connection existing) {
         Map<String, Object> auth = new LinkedHashMap<>();
@@ -169,11 +159,7 @@ public class DefaultOAuthConnectService implements OAuthConnectService {
         return connection;
     }
 
-    /**
-     * @return {@code origin} when it is allow-listed, otherwise the first configured origin — a user
-     *         who reached the console some other way still completes the flow, just landing on the
-     *         canonical origin at the end
-     */
+    /** @return {@code origin} when allow-listed, otherwise the first configured origin */
     private String allowedOrigin(String origin) {
         List<String> allowed = allowed();
         String trimmed = origin == null ? "" : stripTrailingSlash(origin.trim());

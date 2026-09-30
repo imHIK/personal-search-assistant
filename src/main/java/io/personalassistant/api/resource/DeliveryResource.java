@@ -15,7 +15,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
 
-/** Read the publishing outbox, and put a dead-lettered delivery back in it. */
 @Path("/api/deliveries")
 @Produces(MediaType.APPLICATION_JSON)
 public class DeliveryResource {
@@ -26,10 +25,7 @@ public class DeliveryResource {
     @Inject
     PublishingService publishing;
 
-    /**
-     * Newest first. {@code ?channelId=}, {@code ?status=} and {@code ?refId=} (a digest run id) filter;
-     * {@code ?limit=} is capped at 100.
-     */
+    /** Newest first; {@code ?limit=} is capped at 100. */
     @GET
     public List<DeliveryDto> list(@QueryParam("channelId") String channelId,
                                   @QueryParam("refId") String refId,

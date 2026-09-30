@@ -19,7 +19,6 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link KnowledgeRepository} over the {@code knowledge} collection. */
 @ApplicationScoped
 public class MongoKnowledgeRepository implements KnowledgeRepository {
 
@@ -90,7 +89,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public void updateNextSyncDueAt(String id, Instant nextDueAt) {
-        // Scheduler bookkeeping only — deliberately does NOT touch updatedAt.
+        // Scheduler bookkeeping: leaves updatedAt alone.
         collection().updateOne(eq("_id", id),
                 Updates.set("nextSyncDueAt", BsonSupport.date(nextDueAt)));
     }
@@ -99,8 +98,6 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Knowledge k) {
         Knowledge.ConnectorDetails cd = k.connectorDetails();
@@ -186,12 +183,11 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         return o instanceof Number n ? n.longValue() : 0L;
     }
 
-    /** Read a nullable stored int (chunking size/overlap), tolerating either int32 or int64 storage. */
+    /** Tolerates int32 or int64 storage. */
     private static Integer intOrNull(Object o) {
         return o instanceof Number n ? n.intValue() : null;
     }
 
-    /** Read a stored string array (chunking separators), or an empty list if absent. */
     @SuppressWarnings("unchecked")
     private static java.util.List<String> stringList(Object o) {
         if (o instanceof java.util.List<?> list) {

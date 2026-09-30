@@ -1,10 +1,5 @@
 package io.personalassistant.common.http;
 
-/**
- * A failed outbound call, in provider-neutral terms. The per-area facades translate it into the
- * exceptions their connectors already branch on ({@code AtsApiException}, {@code GoogleApiException}),
- * which is why the shared transport can stay ignorant of who called it.
- */
 public class OutboundHttpException extends RuntimeException {
 
     private final int status;
@@ -25,7 +20,7 @@ public class OutboundHttpException extends RuntimeException {
         this.bodySnippet = "";
     }
 
-    /** HTTP status, or {@code 0} when the call failed before a response arrived. */
+    /** 0 when the call failed before a response arrived. */
     public int status() {
         return status;
     }

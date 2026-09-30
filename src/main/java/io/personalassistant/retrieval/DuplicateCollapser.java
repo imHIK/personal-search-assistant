@@ -13,82 +13,40 @@ import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Groups results that are the same material arriving by different routes, and keeps one member of each
- * group. A general corpus problem, not a job-board one: the same file lives in Drive and as a mail
- * attachment, a thread is forwarded, a document is copied between folders — and the unique
- * {@code (knowledgeId, externalId)} index cannot see any of that, because it is scoped to a single
- * knowledge by construction.
- *
- * <p>Runs on grouped results (one per entity), comparing each result's whole grounding text — its best
- * chunk and further matches — rather than one chunk.
- *
- * <p>Three layers, cheapest first, each one a grouping rule rather than a deletion:
- *
- * <ol>
- *   <li><b>Exact</b> — identical normalised text. Catches literal copies across knowledges.</li>
- *   <li><b>Canonical key</b> — an equal {@code metadata.dedupeKey}. The framework only groups on the
- *       key; what it <em>means</em> is the source's business (the ATS normalisers build
- *       {@code company|title|location}).</li>
- *   <li><b>Near-duplicate</b> — high token-shingle overlap, for copies that differ by a header, a
- *       footer or light re-wording.</li>
- * </ol>
- *
- * <p>The two text layers additionally require the titles to be alike. Identical text under unrelated
- * titles is shared boilerplate, not a copy: every posting of one company carries the same "About us",
- * so text alone merged different roles whose best-matching passage happened to be the company intro.
- *
- * <h2>Why shingles rather than embedding cosine</h2>
- * Cosine over the chunk vectors would answer a different question. Two genuinely distinct roles at the
- * same company, or two separate reports on one project, sit very close in embedding space — collapsing
- * them would hide a real result, which is a far worse failure than showing a duplicate. Shingle overlap
- * measures shared wording, which is what "the same document twice" actually looks like. It is also free
- * here: the hits already carry their text, whereas the vectors are deliberately excluded from
- * {@code _source} and would have to be fetched back.
- *
- * <h2>Non-destructive, and opt-in</h2>
- * Nothing is deleted and no index is touched — this reorders a result list. It runs only when the caller
- * sets {@code collapseDuplicates}; the console sets it by default, API callers choose.
+ * Groups results that are the same material by different routes and keeps one per group; nothing is deleted.
+ * Layers, cheapest first: identical normalised text, an equal {@code metadata.dedupeKey}, then high shingle
+ * overlap. The text layers also require alike titles, since identical text under unrelated titles is shared
+ * boilerplate. Shingles rather than embedding cosine: distinct roles at one company sit close in embedding
+ * space, and hiding a real result is worse than showing a duplicate.
  */
 @ApplicationScoped
 public class DuplicateCollapser {
 
-    /** Title agreement used by the test constructor that predates the title check; mirrors the config default. */
+    /** Mirrors the config default, for the constructor that predates the title check. */
     private static final double DEFAULT_TITLE_SIMILARITY = 0.5;
 
     /**
-     * Shingle width in tokens. Long enough that ordinary shared phrasing between two different documents
-     * does not register, short enough to survive light editing of a genuine copy.
+     * Long enough that shared phrasing between different documents does not register, short enough to survive
+     * light editing.
      */
     @ConfigProperty(name = "app.search.dedupe.shingle-size", defaultValue = "5")
     int shingleSize;
 
     /**
-     * Jaccard overlap at or above which two hits are treated as the same material. Set high on purpose:
-     * a false merge silently removes a result the user should have seen, and there is no way for them to
-     * discover it, whereas a missed merge is merely a visible duplicate.
-     *
-     * <p>Not higher, though, because overlap is sensitive to length. A boilerplate header costs a fixed
-     * number of shingles, so on a short chunk it moves the ratio a long way — an aggregator prefixing
-     * three words to a 30-token posting already lands near 0.89. The floor is set below that so a genuine
-     * copy with a banner still groups, while unrelated text (which shares almost no 5-token shingle at
-     * all, scoring near zero) stays nowhere close.
+     * High on purpose: a false merge silently hides a result, while a missed one is a visible duplicate. Not
+     * higher, because overlap is length-sensitive: a short posting behind a three-word banner already lands
+     * near 0.89.
      */
     @ConfigProperty(name = "app.search.dedupe.near-duplicate-threshold", defaultValue = "0.85")
     double nearDuplicateThreshold;
 
-    /**
-     * Cap on how many hits take part in the pairwise near-duplicate pass, which is O(n²) in the number of
-     * candidates. Everything beyond this still goes through the two exact layers.
-     */
+    /** The near-duplicate pass is O(n²); hits beyond this still go through the exact layers. */
     @ConfigProperty(name = "app.search.dedupe.max-comparisons", defaultValue = "100")
     int maxComparisons;
 
     /**
-     * Token overlap two titles need before matching text may group their hits. 0.5 still groups a
-     * forwarded or copied item ("Fwd: Q3 report" / "Q3 report", "Copy of Budget" / "Budget") while
-     * keeping "Backend Engineer" and "Frontend Engineer" apart. A blank title has nothing to compare and
-     * does not block. The key layer is unaffected: a source that states a {@code dedupeKey} has already
-     * said what "the same" means.
+     * 0.5 still groups "Fwd: Q3 report" with "Q3 report" while keeping "Backend Engineer" and "Frontend
+     * Engineer" apart. A blank title does not block.
      */
     @ConfigProperty(name = "app.search.dedupe.title-similarity", defaultValue = "0.5")
     double titleSimilarity;
@@ -96,11 +54,6 @@ public class DuplicateCollapser {
     public DuplicateCollapser() {
     }
 
-    /**
-     * Test-friendly constructor that sets the tunables explicitly (CDI uses the no-arg one). The
-     * {@code @ConfigProperty} fields are package-private per house style, which callers in another
-     * package cannot reach.
-     */
     public DuplicateCollapser(int shingleSize, double nearDuplicateThreshold, int maxComparisons) {
         this(shingleSize, nearDuplicateThreshold, maxComparisons, DEFAULT_TITLE_SIMILARITY);
     }
@@ -114,13 +67,9 @@ public class DuplicateCollapser {
     }
 
     /**
-     * Collapse {@code hits}, preserving rank order.
-     *
-     * <p>A group is represented by its <em>best-ranked</em> member's position, so collapsing never
-     * promotes anything above something it did not already outrank. Which member is kept is a separate
-     * question, answered by {@code metadata.sourceRank}: a higher rank wins, so a posting found both on a
-     * company's own board and through an aggregator keeps the canonical listing with the real apply URL.
-     * With no rank stated anywhere, the best-ranked member is kept.
+     * A group sits at its best-ranked member's position, so nothing is promoted. The member kept is the one
+     * with the highest {@code metadata.sourceRank} (a company's own board over an aggregator), else the
+     * best-ranked.
      */
     public List<SearchHit> collapse(List<SearchHit> hits) {
         if (hits == null || hits.size() < 2) {
@@ -154,9 +103,8 @@ public class DuplicateCollapser {
                 target = groups.size() - 1;
             } else {
                 groups.get(target).consider(hit);
-                // A later member's shingles are deliberately not merged into the group's: comparing
-                // against a union would let a group drift, chaining A~B and B~C into one group even when
-                // A and C share nothing.
+                // A later member's shingles are not merged into the group's, which would chain A~B and B~C
+                // into one group.
             }
             if (!normalised.isEmpty()) {
                 groupByExactText.putIfAbsent(normalised, target);
@@ -168,7 +116,6 @@ public class DuplicateCollapser {
         return groups.stream().map(Group::kept).toList();
     }
 
-    /** The index of the first group whose representative is a near-duplicate under an agreeing title, or null. */
     private Integer nearDuplicateOf(Set<String> candidate, Set<String> title, List<Set<String>> shingles,
                                     List<Group> groups) {
         if (candidate.isEmpty()) {
@@ -188,7 +135,6 @@ public class DuplicateCollapser {
         return a.isEmpty() || b.isEmpty() || jaccard(a, b) >= titleSimilarity;
     }
 
-    /** One cluster: where it sits in the ranking, and which member is worth showing. */
     private static final class Group {
         private final SearchHit best;   // earliest-ranked member; fixes the group's position
         private final Set<String> title; // the best member's title tokens, which later members must agree with
@@ -211,8 +157,8 @@ public class DuplicateCollapser {
         }
 
         /**
-         * The kept member, but scored with the group's best rank — otherwise preferring a
-         * lower-ranked member by {@code sourceRank} would also drag its position down the list.
+         * Scored with the group's best rank, or preferring a lower-ranked member would drag the group down
+         * the list.
          */
         SearchHit kept() {
             return kept == best ? best : kept.withScore(best.score());
@@ -233,7 +179,6 @@ public class DuplicateCollapser {
         return text.isEmpty() ? null : text;
     }
 
-    /** Lowercase and collapse everything non-alphanumeric, so formatting differences do not matter. */
     private static String normalise(String text) {
         if (text == null || text.isBlank()) {
             return "";
@@ -253,8 +198,7 @@ public class DuplicateCollapser {
         String[] tokens = normalised.split(" ");
         int width = Math.max(shingleSize, 1);
         if (tokens.length < width) {
-            // Too short to shingle at the configured width; treat the whole thing as one shingle so two
-            // identical short chunks still match and two different ones still do not.
+            // Too short to shingle: the whole text is one shingle, so identical short texts still match.
             return Set.of(normalised);
         }
         Set<String> out = new LinkedHashSet<>();

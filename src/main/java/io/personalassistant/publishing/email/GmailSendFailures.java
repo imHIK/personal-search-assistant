@@ -8,13 +8,9 @@ import io.personalassistant.publishing.PublishException;
 import java.util.Locale;
 
 /**
- * Classifies what sending through Gmail threw into retry-or-park.
- *
- * <p>The one deliberate oddity: a <strong>rejected sign-in is transient</strong> here. By the time it
- * reaches this class {@code OAuthTokenService} has already marked the connection {@code ERROR}, and the
- * delivery worker stops claiming for a channel whose account is not {@code ACTIVE}. That gate is the
- * right place for it — reconnecting the account releases the queue on its own. Parking the channel as
- * well would leave it {@code ERROR} after the reconnect, waiting for a test nobody knows to run.
+ * A rejected sign-in counts as transient: OAuthTokenService has already marked the connection ERROR, and the
+ * delivery worker holds the channel's queue until a reconnect releases it. Parking the channel as well would
+ * leave it in ERROR after the reconnect.
  */
 final class GmailSendFailures {
 
@@ -36,7 +32,7 @@ final class GmailSendFailures {
             return classify(google);
         }
         if (failure instanceof IllegalArgumentException) {
-            // No usable tokens on the connection, or the send scope was never granted.
+            // No usable tokens, or the send scope was never granted.
             return PublishException.permanent(message(failure), failure);
         }
         return PublishException.transientFailure(message(failure), failure);
@@ -55,10 +51,10 @@ final class GmailSendFailures {
                     + "account and approve sending", e);
         }
         if (status == 400 || status == 404) {
-            // A malformed message or an address Gmail will not accept: identical on every retry.
+            // A malformed message or an address Gmail refuses: identical on every retry.
             return PublishException.permanent(message, e);
         }
-        // 401 (an access token revoked mid-flight — the next attempt refreshes), 429, 5xx, transport.
+        // 401 (a token revoked mid-flight; the next attempt refreshes), 429, 5xx, transport.
         return PublishException.transientFailure(message, e);
     }
 

@@ -4,10 +4,7 @@ import io.personalassistant.domain.model.search.SearchHit;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.List;
 
-/**
- * Default reranker: pass-through that just trims to topK. Swap in a cross-encoder
- * implementation later for real precision gains, without touching callers.
- */
+/** A pass-through that trims to topK; a real reranker replaces this bean. */
 @ApplicationScoped
 public class NoopReranker implements Reranker {
 

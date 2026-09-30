@@ -9,7 +9,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** {@link GmailSendApi} over the Gmail REST API v1 and Google's OAuth tokeninfo endpoint. */
 @ApplicationScoped
 public class HttpGmailSendApi implements GmailSendApi {
 
@@ -32,7 +31,7 @@ public class HttpGmailSendApi implements GmailSendApi {
 
     @Override
     public JsonNode send(GoogleAuth auth, String rawBase64Url) {
-        // base64url's alphabet needs no JSON escaping, so the body is assembled rather than serialised.
+        // base64url needs no JSON escaping, so the body is assembled rather than serialised.
         return http.postJson(baseUrl.replaceAll("/+$", "") + "/users/me/messages/send",
                 "{\"raw\":\"" + rawBase64Url + "\"}", auth, timeoutSeconds);
     }

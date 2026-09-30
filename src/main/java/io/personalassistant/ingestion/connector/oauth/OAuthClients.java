@@ -7,14 +7,9 @@ import java.util.Map;
 import org.eclipse.microprofile.config.Config;
 
 /**
- * Resolves which registered OAuth application a connection runs as: the connection's own
- * {@code config.clientId} / {@code config.clientSecret} when it carries them, otherwise the app-level
- * {@code app.oauth.<providerId>.client-id} / {@code .client-secret}.
- *
- * <p>Keyed by provider id and read through {@link Config} programmatically rather than as injected
- * {@code @ConfigProperty} fields, precisely so a new provider needs no code here — it adds two
- * properties and is done. The per-connection override stays because two accounts on the same provider
- * can legitimately belong to different registered apps.
+ * The connection's own {@code config.clientId}/{@code clientSecret} when it carries them, else
+ * {@code app.oauth.<providerId>.client-id/secret}, read programmatically so a new provider needs only
+ * properties.
  */
 @ApplicationScoped
 public class OAuthClients {
@@ -27,9 +22,8 @@ public class OAuthClients {
     }
 
     /**
-     * @return the client to run {@code providerId}'s flow as for this connection; {@code connection}
-     *         may be null during a first-time connect, where only the app-level client can apply
-     * @throws IllegalArgumentException if neither source supplies a complete id + secret pair
+     * @param connection null on a first connect, when only the app-level client applies
+     * @throws IllegalArgumentException if neither supplies a complete id and secret
      */
     public OAuthClient forProvider(String providerId, Connection connection) {
         Map<String, Object> connectionConfig = connection == null ? null : connection.config();
@@ -63,7 +57,6 @@ public class OAuthClients {
         return second == null || second.isBlank() ? null : second;
     }
 
-    /** Whether an app-level client exists for this provider, i.e. whether the flow can even be offered. */
     public boolean hasAppClient(String providerId) {
         return property(providerId, "client-id") != null && property(providerId, "client-secret") != null;
     }

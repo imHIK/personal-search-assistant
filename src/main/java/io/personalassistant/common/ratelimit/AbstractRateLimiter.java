@@ -8,18 +8,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * The half of admission control that does not care where the counters live: how long a caller may
- * block, what fail-fast means, and how far a server's {@code Retry-After} is trusted. A store supplies
- * only {@link #reserve} and {@link #storePenalty}.
- *
- * <p>Split out when the Redis store arrived, so the two stores cannot drift on the behaviour callers
- * depend on. {@code IngestionRunner} and {@code IndexingRunner} persist the {@code retryAt} this loop
- * computes as the instant deferred work reopens; a store that waited or clamped differently would move
- * that instant. {@code SlidingWindowRateLimiterTest} drives this loop directly, which is what covers the
- * Redis store's behaviour apart from its script.
- *
- * <p>Sleeping happens outside any store lock and the ceilings are re-checked afterwards, because between
- * waking and re-reserving another caller may have taken the slot that was waited for.
+ * Waiting, fail-fast and the penalty clamp, shared by both stores. Sleeping happens outside any store lock
+ * and the ceilings are re-checked afterwards, since another caller may have taken the slot.
  */
 abstract class AbstractRateLimiter implements RateLimiter {
 
@@ -31,34 +21,24 @@ abstract class AbstractRateLimiter implements RateLimiter {
     @ConfigProperty(name = "app.ratelimit.max-penalty-seconds", defaultValue = "21600")
     long maxPenaltySeconds;
 
-    /** Package-private seams so tests drive time deterministically instead of sleeping. */
     Clock clock = Clock.systemUTC();
 
     Waiter waiter = duration -> Thread.sleep(Math.max(1L, duration.toMillis()));
 
-    /** How a caller is made to wait; separated only so tests can advance a fake clock instead. */
     @FunctionalInterface
     interface Waiter {
         void await(Duration duration) throws InterruptedException;
     }
 
     /**
-     * Either records one admission in every window of {@code limit} and returns {@link Duration#ZERO},
-     * or records nothing and returns how long the caller must wait — including any penalty on the key.
+     * Records one admission in every window, or none and returns the wait, penalty included. All-or-nothing,
+     * so a call that cannot pay the daily ceiling spends nothing from the per-second one.
      *
-     * <p><strong>Acquisition must be all-or-nothing across rules.</strong> A call that could pay the
-     * per-second ceiling but not the daily one spends nothing, so it cannot deplete the short window
-     * while stalled on the long one. An unlimited policy still respects a penalty: the server's own
-     * answer about its capacity outranks our absent guess about it.
-     *
-     * @param now the caller's clock; a store with its own authoritative clock may ignore it
+     * @param now a store with its own clock may ignore it
      */
     abstract Duration reserve(RateLimit limit, Instant now);
 
-    /**
-     * Pause {@code key} until {@code until}, already clamped. Must keep the furthest-out instant: two
-     * concurrent 429s must not shorten each other's backoff.
-     */
+    /** Must keep the furthest-out instant: two concurrent 429s must not shorten each other's backoff. */
     abstract void storePenalty(RateLimitKey key, Instant until);
 
     @Override
@@ -80,8 +60,8 @@ abstract class AbstractRateLimiter implements RateLimiter {
             }
             Duration remaining = budget.minus(waited);
             if (waitFor.compareTo(remaining) > 0) {
-                // Longer than a scheduler thread should be held. Hand the caller the reopening instant
-                // so it can defer the work durably rather than sleeping through a daily quota.
+                // Too long to hold a scheduler thread: the caller defers the work durably to the reopening
+                // instant.
                 LOG.log(Level.FINE, () -> "Deferring " + limit.key() + " until " + retryAt
                         + " (wait " + waitFor + " exceeds " + budget + ")");
                 throw new RateLimitedException(limit.key(), retryAt);
@@ -98,12 +78,8 @@ abstract class AbstractRateLimiter implements RateLimiter {
     }
 
     /**
-     * <p>The value is clamped to {@code app.ratelimit.max-penalty-seconds}. {@code Retry-After} is
-     * remote input — delta-seconds and HTTP-dates are confused for each other in the wild, and this
-     * instant is load-bearing now that a rate-limited cursor is held until it passes. The clamp lives
-     * here rather than in a caller or a store so one bound covers the in-process pause, cursors and
-     * entities; if the server really did mean longer, the next call simply earns another 429 and another
-     * pause.
+     * Clamped to {@code app.ratelimit.max-penalty-seconds}: Retry-After is remote input, and one bound here
+     * covers the pause, cursors and entities.
      */
     @Override
     public void penalize(RateLimitKey key, Instant until) {

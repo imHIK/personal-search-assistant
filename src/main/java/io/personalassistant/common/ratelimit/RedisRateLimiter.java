@@ -11,33 +11,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * {@link RateLimiter} whose rolling windows and {@code Retry-After} pauses live in Redis, so they outlive
- * the JVM. The shipped store ({@code app.ratelimit.store=redis}).
- *
- * <p><strong>Why it exists.</strong> The in-memory store starts every window empty on a restart, and on
- * every {@code quarkusDev} live reload. For a short window that is one extra burst; for
- * {@code app.ratelimit.embedding.rules=6/1m,60/1d} it is a whole fresh day of allowance the provider
- * never granted, so the calls after a restart are 429s the limiter believed it had avoided.
- *
- * <p><strong>Same semantics as {@link SlidingWindowRateLimiter}</strong>, which documents why the window is
- * rolling rather than a refilling bucket. Each (key, rule) is a sorted set of admission instants in epoch
- * millis; eviction is {@code ZREMRANGEBYSCORE}, the wait is the oldest member ageing out. Everything
- * outside the counting — waiting, fail-fast, deferral, the penalty clamp — is {@link AbstractRateLimiter}
- * and shared.
- *
- * <p><strong>One script per reservation</strong>, so "check every rule, then record in all or none" is
- * atomic across callers and processes, preserving the all-or-nothing rule without a lock. The script reads
- * {@code TIME} from Redis rather than taking the JVM clock, so two processes with skewed clocks still agree
- * on which admissions have aged out; the {@code now} argument is ignored.
- *
- * <p>Idle windows need no sweeper: every write sets {@code PEXPIRE} to the window length, so a key nobody
- * charges disappears once its newest admission could no longer count.
- *
- * <p><strong>No fallback when Redis is down.</strong> The exception propagates like a Mongo outage would.
- * Quietly counting in memory instead would reintroduce the fresh-allowance bug with nothing to show it.
- *
- * <p>No unit test: tests here run without external services. The script is exercised by hand — see
- * {@code docs/limitations.md} L9.
+ * Rolling windows and Retry-After pauses in Redis, so they survive restarts: an in-memory day-long window
+ * restarts empty while the provider's count carries on. Each reservation is one script, atomic across
+ * processes, reading Redis TIME so skewed clocks agree. No fallback when Redis is down: counting in memory
+ * would bring the fresh-allowance bug back unseen.
  */
 @ApplicationScoped
 @ProviderImpl
@@ -47,17 +24,10 @@ public class RedisRateLimiter extends AbstractRateLimiter {
     static final String PENALTY_PREFIX = "rl:p:";
 
     /**
-     * {@code KEYS[1]} the key's penalty, {@code KEYS[2..]} one window per rule. {@code ARGV} holds a
-     * {@code permits, windowMillis} pair per rule, in the same order, then a unique member for this
-     * admission — unique because two admissions in the same millisecond must not collapse into one entry.
-     * Returns the milliseconds to wait, or 0 once every window has recorded the admission.
-     *
-     * <p>The wait runs to the admission whose expiry brings the count back under <em>this</em> call's
-     * ceiling, which is the oldest only when the count is exactly at it. Two ceilings share one window
-     * (a background call stops short of a search's; see {@code RateLimitPolicies}), so the count can sit
-     * above the lower one, and waiting on the oldest would hand a deferred entity a {@code retryAt} at
-     * which the window is still full — one deferral per surplus admission, toward
-     * {@code app.ratelimit.max-deferrals} and a dead letter.
+     * KEYS[1] is the penalty, KEYS[2..] one window per rule; ARGV holds a permits, windowMillis pair per
+     * rule, then a member unique to this admission. Returns the millis to wait, or 0 once every window
+     * recorded it. The wait runs to the admission that brings the count under this call's ceiling, not the
+     * oldest: two ceilings can share one window.
      */
     private static final String RESERVE = """
             local t = redis.call('TIME')
@@ -87,8 +57,8 @@ public class RedisRateLimiter extends AbstractRateLimiter {
             """;
 
     /**
-     * {@code KEYS[1]} the penalty, {@code ARGV[1]} its length in millis, {@code ARGV[2]} the resume instant
-     * (stored only so {@code redis-cli GET} is readable). Never shortens a pause already in place.
+     * KEYS[1] is the penalty, ARGV[1] its length in millis, ARGV[2] the resume instant. Never shortens a
+     * pause already in place.
      */
     private static final String PENALIZE = """
             local ttl = tonumber(ARGV[1])
@@ -130,7 +100,6 @@ public class RedisRateLimiter extends AbstractRateLimiter {
         redis.execute("EVAL", PENALIZE, "1", penaltyKey(key), String.valueOf(ttlMillis), until.toString());
     }
 
-    /** Same shape as the in-memory map key, so a window is recognisable in {@code redis-cli}. */
     static String windowKey(RateLimitKey key, RateLimitRule rule) {
         return WINDOW_PREFIX + key.value() + "#" + rule.windowSeconds();
     }

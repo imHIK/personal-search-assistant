@@ -10,57 +10,30 @@ import java.util.Map;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Turns ranked chunks into ranked results: one hit per entity, carrying that entity's other matching
- * chunks.
- *
- * <p>Retrieval has to work on chunks — a vector for a whole document is a centroid near nothing — but a
- * user is looking for items. Ranking chunks directly let one matching item fill every slot with its own
- * siblings: every chunk of a job posting carries the posting's title and embeds with the same prefix, so
- * a title match lifts all ~7 of them together, and a topK of 10 came back as two postings shown five
- * times each. That is a property of any multi-chunk entity, not of job postings, which is why this runs
- * for every search rather than behind a per-source flag.
- *
- * <p>It does not cost the case a per-entity cap used to harm, where the answer <em>is</em> many chunks of
- * one document: those chunks are still here as {@code moreMatches}, and the answer is grounded in all of
- * them ({@link SearchHit#groundingText()}).
- *
- * <h2>Scoring</h2>
- * An entity scores as its best chunk plus a small share of its further matches (MaxP with a breadth
- * bonus). Best-chunk-only would ignore that an item matching in its requirements <em>and</em> its
- * responsibilities is a better match than one matching in a single passage; a plain sum would let a long
- * document outrank a short one on length alone. The bonus is bounded by the per-entity cap, so it can
- * lift an entity past a near-tie but not past a clearly better single match.
+ * One result per entity, carrying its other matching chunks: ranking chunks let one item fill every slot with
+ * its siblings. An entity scores as its best chunk plus a small share of its further matches, bounded by the
+ * per-entity cap.
  */
 @ApplicationScoped
 public class EntityGrouper {
 
-    /**
-     * How many chunks one result may carry, its best chunk included; 0 = every matching chunk in the pool.
-     * A caller overrides it per request through {@code SearchQuery.maxChunksPerEntity} — a digest sends 1
-     * because it reports items, not passages.
-     */
+    /** 0 means every matching chunk in the pool. A request may override it; a digest sends 1. */
     @ConfigProperty(name = "app.search.max-chunks-per-entity", defaultValue = "3")
     int maxChunksPerEntity;
 
-    /** Share of each further match's score added to its entity's best. 0 ranks on the best chunk alone. */
+    /** 0 ranks on the best chunk alone. */
     @ConfigProperty(name = "app.search.grouping.extra-match-weight", defaultValue = "0.1")
     double extraMatchWeight;
 
     public EntityGrouper() {
     }
 
-    /** Test-friendly constructor; CDI uses the no-arg one and injects the fields. */
     public EntityGrouper(int maxChunksPerEntity, double extraMatchWeight) {
         this.maxChunksPerEntity = maxChunksPerEntity;
         this.extraMatchWeight = extraMatchWeight;
     }
 
-    /**
-     * Group {@code chunks} by entity, best result first.
-     *
-     * @param chunks   retrieved chunks, in any order
-     * @param override per-request cap on chunks per result, or null to use the configured one
-     */
+    /** @param override per-request cap, or null for the configured one */
     public List<SearchHit> group(List<SearchHit> chunks, Integer override) {
         if (chunks == null || chunks.isEmpty()) {
             return List.of();
@@ -69,15 +42,14 @@ public class EntityGrouper {
 
         Map<String, List<SearchHit>> byEntity = new LinkedHashMap<>();
         for (SearchHit chunk : chunks) {
-            // A hit with no entity cannot be attributed to anything, so it stands alone rather than
-            // pooling every such hit into one pseudo-entity.
+            // A hit with no entity stands alone rather than pooling every such hit into one.
             String key = chunk.entityId() != null ? "entity:" + chunk.entityId() : "chunk:" + chunk.chunkId();
             byEntity.computeIfAbsent(key, k -> new ArrayList<>()).add(chunk);
         }
 
         List<SearchHit> results = new ArrayList<>(byEntity.size());
         for (List<SearchHit> members : byEntity.values()) {
-            // Stable, so equal scores keep the order retrieval returned them in.
+            // Stable, so equal scores keep retrieval's order.
             members.sort(Comparator.comparingDouble(SearchHit::score).reversed());
             SearchHit best = members.get(0);
             int kept = cap <= 0 ? members.size() : Math.min(cap, members.size());

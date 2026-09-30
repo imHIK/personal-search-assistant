@@ -15,19 +15,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Greenhouse job-board connector. One iterable per board token (the {@code <token>} in
- * {@code boards.greenhouse.io/<token>}); {@code jobs?content=true} returns the whole board with
- * descriptions in a single call, which is what makes the snapshot shape work — see
- * {@link SnapshotBoardConnector}.
- */
 @ApplicationScoped
 public class GreenhousePlatform implements BoardPlatform {
 
-    /**
-     * Preference order when the same role is found on several sources. A direct ATS board is the
-     * canonical listing and carries the real apply URL, so it outranks any aggregator.
-     */
+    /** A direct board outranks any aggregator. */
     private static final int SOURCE_RANK = 100;
 
     private final GreenhouseApi api;
@@ -58,8 +49,7 @@ public class GreenhousePlatform implements BoardPlatform {
 
     @Override
     public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
-        // Hint ignored: one request returns the whole board either way, so filtering
-        // early would save nothing. The connector filters what comes back.
+        // Hint ignored: one request returns the whole board either way.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
@@ -81,8 +71,8 @@ public class GreenhousePlatform implements BoardPlatform {
         String location = job.path("location").path("name").asText(null);
         String applyUrl = job.path("absolute_url").asText(null);
         String company = companyOf(job, label, boardId);
-        // content is HTML-escaped in Greenhouse's payload; the HTML parser at index time unescapes
-        // and strips it, so the entity keeps the source form rather than a lossy pre-flattened one.
+        // content is HTML-escaped; the HTML parser unescapes it at index time, so the entity keeps the source
+        // form.
         String content = job.path("content").asText("");
         String descriptionText = AtsNormalization.plainText(content);
 
@@ -112,10 +102,8 @@ public class GreenhousePlatform implements BoardPlatform {
                 "text/html",
                 title,
                 applyUrl,
-                // NOT updated_at. It moves in bulk — 178 of GitLab's 227 postings share it to the
-                // second — so trusting it re-embedded three quarters of a board for a change that
-                // never touched the text. The stamp covers what is actually indexed instead; see
-                // AtsNormalization.changeStamp.
+                // Not updated_at: it moves in bulk (178 of GitLab's 227 postings share it), so the stamp
+                // covers what is indexed instead.
                 AtsNormalization.withCompany(
                         "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
                         company, companyOf(job, null, boardId)),
@@ -124,16 +112,14 @@ public class GreenhousePlatform implements BoardPlatform {
                 content,
                 null,
                 metadata,
-                // Greenhouse states no close date, so entity-level expiry is always absent here and
-                // the knowledge-level retention window governs.
+                // No close date is published, so the retention window governs.
                 null,
                 false);
     }
 
     /**
-     * The board's own {@code company_name} first: unlike a token, it is the employer's real name, so
-     * it outranks even the user's label. The label only replaces the token it would otherwise fall
-     * back to ({@code digitalocean98}).
+     * The board's own company_name first: a real name, it outranks even the label, which only replaces the
+     * token.
      */
     private static String companyOf(JsonNode job, String label, String boardId) {
         String name = job.path("company_name").asText(null);

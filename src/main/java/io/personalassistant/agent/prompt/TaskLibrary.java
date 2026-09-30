@@ -13,30 +13,12 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 
 /**
- * Resolves a task id to something runnable, from either half of the library: the bundled catalogue in
- * {@code config/prompts.json}, or a user-written {@link Task} in Mongo.
- *
- * <p><strong>Why the two halves are layered rather than merged.</strong> {@link PromptCatalog} is
- * eager and fail-fast — a malformed built-in prompt stops the application, because answering with no
- * instructions is a failure that looks like success. User tasks cannot work that way: they are created
- * long after boot, so a bad one has to cost its own run and nothing else. Keeping them in separate
- * stores with separate validation timing is what lets both be true at once.
- *
- * <p>Routing is by id shape, not by lookup order. A user task's id always carries
- * {@link Ids#TASK_PREFIX}, and the bundled ids are slugs, so a user can never shadow {@code answer} and
- * a missing user task can never silently fall through to a built-in that happens to share its name.
+ * Resolves a task id from the bundled catalogue or a user-written Task. Routing is by id shape: user task ids
+ * carry Ids.TASK_PREFIX, so a user task can never shadow a built-in.
  */
 @ApplicationScoped
 public class TaskLibrary {
 
-    /**
-     * A task ready to run: what to ask for, which prompt renders it, and the values that prompt needs
-     * beyond the framework's own.
-     *
-     * @param variables values for the prompt's declared variables — empty for a bundled task, and for a
-     *                  user-written one the instruction and reply contract that the shipped wrapper
-     *                  renders around
-     */
     public record ResolvedTask(TaskSpec spec, PromptTemplate prompt, Map<String, String> variables) {
 
         public ResolvedTask {
@@ -53,12 +35,7 @@ public class TaskLibrary {
         this.tasks = tasks;
     }
 
-    /**
-     * @throws NoSuchElementException if no task is filed under {@code id} in either half. A caller
-     *                                asking for a task that does not exist is a wiring bug for a
-     *                                built-in and a dangling reference for a user task; neither has a
-     *                                sensible degraded mode
-     */
+    /** @throws NoSuchElementException if no task is filed under {@code id} in either half */
     public ResolvedTask resolve(String id) {
         if (id != null && id.startsWith(Ids.TASK_PREFIX)) {
             Task task = tasks.findById(id)
@@ -69,7 +46,6 @@ public class TaskLibrary {
         return new ResolvedTask(spec, catalog.prompt(spec.promptId()), Map.of());
     }
 
-    /** The runnable form of a user task, without a round trip — used by preview and by validation. */
     public ResolvedTask resolve(Task task) {
         TaskSpec spec = new TaskSpec(
                 task.id(),
@@ -84,9 +60,6 @@ public class TaskLibrary {
                 task.perItem() ? Task.ITEMS_ARRAY : null);
 
         if (task.mode() == Task.Mode.RAW) {
-            // Its own text, verbatim. Declaring no variables is correct rather than lax: the boot-time
-            // declared-vs-used check exists to catch typos in a hand-edited file, and a user task is
-            // instead checked when it is saved, where the author is present to read the error.
             return new ResolvedTask(spec,
                     new PromptTemplate(task.id(), task.description(), task.system(), task.user(),
                             List.of()),
@@ -101,7 +74,6 @@ public class TaskLibrary {
         return new ResolvedTask(spec, catalog.prompt(task.promptId()), variables);
     }
 
-    /** Every task in the library, bundled first, then the user's own newest-first. */
     public List<Entry> list() {
         List<Entry> out = new java.util.ArrayList<>();
         for (TaskSpec spec : catalog.tasks()) {
@@ -118,20 +90,10 @@ public class TaskLibrary {
         return id == null || !id.startsWith(Ids.TASK_PREFIX) ? Optional.empty() : tasks.findById(id);
     }
 
-    /** Whether this id names a bundled task, which cannot be edited or deleted. */
     public boolean isBuiltIn(String id) {
         return id != null && !id.startsWith(Ids.TASK_PREFIX) && catalog.taskIds().contains(id);
     }
 
-    /**
-     * One row of the library as the API presents it.
-     *
-     * @param builtIn        bundled tasks are read-only: {@code answer} runs on every search answer, so
-     *                       an edit to it would degrade search silently. The console offers Duplicate
-     *                       instead
-     * @param usableInDigest whether a digest may be pointed at it
-     * @param task           the editable record, for a user task; null for a bundled one
-     */
     public record Entry(String id, String name, String description, boolean builtIn,
                         boolean usableInDigest, Task task) {
 

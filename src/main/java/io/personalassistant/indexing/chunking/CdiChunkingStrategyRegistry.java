@@ -11,10 +11,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Discovers all {@link ChunkingStrategy} beans via CDI and indexes them by {@link ChunkingStrategy#name()}.
- * The default is {@code app.chunking.strategy} (falling back to {@code recursive} if that name isn't
- * registered), so a fresh install and any knowledge that hasn't customised chunking both get the
- * recommended recursive splitter.
+ * The default is {@code app.chunking.strategy}, falling back to {@code recursive} when that name is not
+ * registered.
  */
 @ApplicationScoped
 public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
@@ -25,10 +23,6 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
     private final List<ChunkingStrategy> all;
     private final String defaultName;
 
-    /**
-     * Whether a strategy may be chosen by content type when the knowledge did not ask for a specific
-     * one. Off restores name-only selection.
-     */
     @ConfigProperty(name = "app.chunking.mime-aware", defaultValue = "true")
     boolean mimeAware;
 
@@ -40,7 +34,6 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
         this(strategies.stream().toList(), configuredDefault);
     }
 
-    /** Package-private for unit tests: build directly from a list of strategies. */
     CdiChunkingStrategyRegistry(List<ChunkingStrategy> strategies, String configuredDefault) {
         Map<String, ChunkingStrategy> map = new HashMap<>();
         for (ChunkingStrategy strategy : strategies) {
@@ -74,12 +67,8 @@ public class CdiChunkingStrategyRegistry implements ChunkingStrategyRegistry {
     }
 
     /**
-     * The strategy for {@code name}, letting content type break the tie when {@code name} is only the
-     * global default — i.e. when no knowledge-level setting asked for anything in particular.
-     *
-     * <p>The distinction matters: selection used to be keyed purely on a per-knowledge string, so a
-     * spreadsheet sitting in a knowledge of mostly prose was chunked as prose. An explicit per-knowledge
-     * choice still wins, so this can never override a deliberate decision — only an inherited default.
+     * Content type breaks the tie only when {@code name} is the inherited global default; an explicit
+     * per-knowledge choice always wins.
      */
     @Override
     public ChunkingStrategy get(String name, String contentType) {

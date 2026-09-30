@@ -25,11 +25,6 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
-/**
- * Manage connected knowledge sources. {@code POST /api/knowledge} validates the connector,
- * discovers iterables, creates cursors and activates the knowledge; the ingestion/indexing jobs
- * then keep it in sync.
- */
 @Path("/api/knowledge")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
@@ -51,9 +46,8 @@ public class KnowledgeResource {
     }
 
     /**
-     * Create and activate a knowledge. An activation failure is still a {@code 200} with
-     * {@code status: "ERROR"}; only a request the service rejects before persisting anything (an
-     * unparseable cron) is a {@code 400}.
+     * A failed activation is still a 200, with {@code status: "ERROR"}; only a request rejected before
+     * anything is persisted (an unparseable cron) is a 400.
      */
     @POST
     public Knowledge create(KnowledgeDto dto) {
@@ -64,16 +58,10 @@ public class KnowledgeResource {
         }
     }
 
-    /**
-     * Partially edit a knowledge. Only present fields change (patch semantics); the service routes
-     * config vs. provisioning edits internally. Attempting to change the immutable {@code type} is a
-     * {@code 400}; editing a {@code DELETED} knowledge is a {@code 409}; an unknown id is a {@code 404}.
-     */
+    /** Changing the immutable {@code type} is a 400; editing a DELETED knowledge is a 409. */
     @PATCH
     @Path("/{id}")
     public Knowledge update(@PathParam("id") String id, JsonNode body) {
-        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
-        // this endpoint's contract, and binding loses it. KnowledgePatchDto explains why.
         if (body == null || !body.isObject()) {
             throw ApiErrors.badRequest("a patch body is required");
         }
@@ -81,26 +69,17 @@ public class KnowledgeResource {
             return knowledgeService.update(id, new KnowledgePatchDto(body).toPatch());
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalArgumentException e) {          // immutable type change / unknown type value
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
-        } catch (IllegalStateException e) {             // knowledge is DELETED
+        } catch (IllegalStateException e) {
             throw ApiErrors.conflict(e.getMessage());
         }
     }
 
     /**
-     * Page this knowledge's entities, newest-first.
-     *
-     * <p>{@code status} filters by {@code EntityStatus} name and accepts a comma-separated list
-     * ({@code ?status=INGESTED,INDEXING}) — the console's filter chips map to sets, not single
-     * states, and {@code INDEXING} was unreachable while this took one name. Blank/absent means
-     * every status except {@code DELETED} (see {@link EntityQuery}). {@code q} is a case-insensitive
-     * substring of the title or the external id. {@code iterableId} narrows to groups (a company, a
-     * folder) and is <em>repeated</em> for several ({@code ?iterableId=a&iterableId=b}) rather than
-     * comma-separated: a local folder's id is a path, and a path may contain a comma. {@code limit} is
-     * clamped to {@code 1..200} by the
-     * service. An unknown status name or a negative offset is a {@code 400}; an unknown id is a
-     * {@code 404}.
+     * {@code status} takes a comma-separated list; absent means every status but DELETED. {@code iterableId}
+     * repeats rather than taking a comma list, because a folder path may contain a comma. {@code limit} is
+     * clamped to 1..200.
      */
     @GET
     @Path("/{id}/entities")
@@ -119,12 +98,11 @@ public class KnowledgeResource {
             return EntityPageDto.from(knowledgeService.listEntities(id, query, limit, offset));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalArgumentException e) {          // unknown status name / negative offset
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
-    /** Comma-separated {@code EntityStatus} names; blank/absent means "no status filter". */
     private static Set<EntityStatus> parseStatuses(String status) {
         if (status == null || status.isBlank()) {
             return Set.of();
@@ -139,7 +117,6 @@ public class KnowledgeResource {
         return parsed;
     }
 
-    /** This knowledge's ingestion cursors — the real sync-progress view. {@code 404} on unknown id. */
     @GET
     @Path("/{id}/cursors")
     public List<CursorDto> cursors(@PathParam("id") String id) {

@@ -7,20 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Wire shape for a digest, both inbound (create) and outbound (read). Kept separate from the domain
- * record so the two can evolve independently, and so schedule is expressed as the flat
- * {@code cron}/{@code interval} pair the knowledge API already uses rather than a nested object.
- *
- * @param window   look-back window, e.g. {@code "1d"}; null for no time bound
- * @param interval how often it runs, e.g. {@code "1d"}; cron wins if both are set
- * @param taskId   a prompt-catalogue task to run over the results, or null for results only
- * @param useLlm   false skips the task without forgetting it. Defaults true
- * @param onlyNew  drop results an earlier run already reported. Defaults true — that is what makes a
- *                 digest a digest rather than a repeated search
- * @param channelIds publishing channels each run that finds something or fails is sent to; null or
- *                 empty sends nowhere
- * @param historyResetAt when the already-seen set was last cleared, or null. Read-only; set by
- *                 {@code POST /api/digests/{id}/reset-history}
+ * @param window null means no time bound
+ * @param interval cron wins when both are set
+ * @param useLlm false skips the task without forgetting it; defaults true
+ * @param onlyNew defaults true
  */
 public record DigestDto(
         String id,
@@ -69,10 +59,7 @@ public record DigestDto(
                 channelIds == null ? List.of() : channelIds);
     }
 
-    /**
-     * @throws IllegalArgumentException if an interval is given but unparseable. Falling back to
-     *                                  {@code NONE} would create a digest that never runs and say 200
-     */
+    /** @throws IllegalArgumentException if an interval is given but unparseable */
     private SyncSchedule schedule() {
         if (cron != null && !cron.isBlank()) {
             return SyncSchedule.ofCron(cron);

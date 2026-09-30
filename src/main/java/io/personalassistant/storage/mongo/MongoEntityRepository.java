@@ -38,11 +38,6 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * MongoDB adapter for {@link EntityRepository} over the {@code entities} collection. Upserts are
- * keyed on {@code (knowledgeId, externalId)} so a replay overwrites rather than duplicates; the
- * claim methods are atomic so the indexing stage is concurrency- and crash-safe.
- */
 @ApplicationScoped
 public class MongoEntityRepository implements EntityRepository {
 
@@ -65,47 +60,41 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public Entity upsert(Entity entity) {
-        // One atomic findOneAndUpdate on the natural key rather than find-then-replaceOne. Two
-        // reasons: the unique (knowledgeId, externalId) index makes the old read-then-write racy
-        // (two walkers that both miss produce a duplicate-key error on the second write), and a
-        // whole-document replace clobbers indexer-owned fields — see the lease unset in upsertUpdate.
+        // One atomic findOneAndUpdate on the natural key: find-then-replace races on the unique index, and a
+        // whole-document replace clobbers indexer-owned fields.
         Bson filter = and(eq("knowledgeId", entity.knowledgeId()), eq("externalId", entity.externalId()));
         Document stored = collection().findOneAndUpdate(filter, upsertUpdate(entity),
                 new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
         return fromDoc(stored);
     }
 
-    // Package-private so the emitted BSON can be asserted without a live MongoDB.
     Bson upsertUpdate(Entity entity) {
         Entity.Content c = entity.content() == null ? new Entity.Content(null, null) : entity.content();
         return Updates.combine(
                 Updates.setOnInsert("_id", entity.id()),
                 Updates.setOnInsert("createdAt", BsonSupport.date(entity.createdAt())),
-                // --- ingestion-owned: the item's content and change-detection state ---
+                // Ingestion-owned: content and change-detection state.
                 Updates.set("iterableId", entity.iterableId()),
                 Updates.set("entityType", BsonSupport.enumName(entity.entityType())),
                 Updates.set("raw", BsonSupport.toBsonMap(entity.raw())),
                 Updates.set("content", new Document("text", c.text()).append("fileRef", c.fileRef())),
                 Updates.set("metadata", BsonSupport.toBsonMap(entity.metadata())),
                 Updates.set("checksum", entity.checksum()),
-                // Ingestion-owned like the rest of this block: only the source knows when an item
-                // stops being valid, and a re-walk that no longer reports one must clear a stale value.
+                // Only the source knows when an item stops being valid, and a re-walk that reports none must
+                // clear a stale value.
                 Updates.set("expiresAt", BsonSupport.date(entity.expiresAt())),
                 Updates.set("lastSeenGeneration", entity.lastSeenGeneration()),
                 Updates.set("updatedAt", BsonSupport.date(entity.updatedAt())),
-                // --- new content invalidates whatever was in flight: reset the work queue ---
+                // New content resets the work queue.
                 Updates.set("status", EntityStatus.INGESTED.name()),
                 Updates.set("needsReindex", false),
-                // The content above is freshly materialized, so whatever made us distrust the stored
-                // copy is now spent. Clearing it here and nowhere else is what keeps the flag from
-                // forcing a re-fetch on every subsequent walk.
+                // The content was just materialized, so the distrust is spent; clearing it only here keeps
+                // the flag from forcing a re-fetch on every walk.
                 Updates.set("needsRefetch", false),
                 Updates.set("retry", zeroRetry()),
                 Updates.set("index.error", null),
-                // --- and fence out a worker still chewing on the OLD text ---
-                // Its markIndexed is lease-fenced, so dropping the lease here makes that write a
-                // no-op. Without this the indexer finishes on stale content, marks the entity
-                // INDEXED with needsReindex=false, and the new content never reaches OpenSearch.
+                // Dropping the lease fences out a worker still on the old text: its markIndexed becomes a
+                // no-op instead of marking stale content INDEXED.
                 Updates.unset("lease"));
     }
 
@@ -146,17 +135,13 @@ public class MongoEntityRepository implements EntityRepository {
         return ids;
     }
 
-    /** Entities awaiting (re)indexing: INGESTED, needsReindex, or stale INDEXING — backoff-aware. */
     private Bson indexingFilter(Instant now) {
-        // Honour retry backoff: an entity awaiting retry is only claimable once its nextAttemptAt passes.
+        // An entity awaiting retry is claimable only once its nextAttemptAt passes.
         Bson backoffReady = or(eq("retry.nextAttemptAt", null), lte("retry.nextAttemptAt", BsonSupport.date(now)));
         return and(backoffReady, or(
                 eq("status", EntityStatus.INGESTED.name()),
-                // FAILED is excluded even with needsReindex set: it is the dead-letter state, and a
-                // dead-lettered entity has a null nextAttemptAt that reads as "backoff elapsed", so
-                // it would otherwise be re-claimed every tick with no retry budget left to spend.
-                // markFailed also clears the flag; this clause is what protects rows already written
-                // by an older build. flagNeedsReindex is the sanctioned way back in.
+                // FAILED is excluded even with needsReindex set: its null nextAttemptAt reads as backoff
+                // elapsed, so it would be re-claimed every tick. flagNeedsReindex is the sanctioned way back.
                 and(eq("needsReindex", true),
                         nin("status", EntityStatus.DELETED.name(), EntityStatus.INDEXING.name(),
                                 EntityStatus.FAILED.name())),
@@ -201,7 +186,6 @@ public class MongoEntityRepository implements EntityRepository {
         return result.getMatchedCount() > 0;
     }
 
-    // Package-private so the emitted BSON can be asserted without a live MongoDB.
     Bson indexedUpdate(int chunkCount, String embeddingModel, Instant indexedAt) {
         return Updates.combine(
                 Updates.set("status", EntityStatus.INDEXED.name()),
@@ -210,9 +194,7 @@ public class MongoEntityRepository implements EntityRepository {
                         .append("embeddingModel", embeddingModel)
                         .append("indexedAt", BsonSupport.date(indexedAt))
                         .append("error", null)),
-                // Success ends the streak: retry.count is CONSECUTIVE failures, not lifetime ones.
-                // Without this an entity that fails once a month is dead-lettered after five months
-                // of otherwise-successful indexing.
+                // Success ends the streak: retry.count is consecutive failures.
                 Updates.set("retry", zeroRetry()),
                 Updates.unset("lease"),
                 Updates.set("updatedAt", BsonSupport.date(Instant.now())));
@@ -238,7 +220,6 @@ public class MongoEntityRepository implements EntityRepository {
         return result.getMatchedCount() > 0;
     }
 
-    // Package-private so the emitted BSON can be asserted without a live MongoDB.
     Bson failUpdate(EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt) {
         List<Bson> updates = new ArrayList<>(List.of(
                 Updates.set("status", restingStatus.name()),
@@ -248,9 +229,8 @@ public class MongoEntityRepository implements EntityRepository {
                 Updates.unset("lease"),
                 Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
         if (restingStatus == EntityStatus.FAILED) {
-            // Dead-letter: leave the indexing queue for good. Without this the entity still matches
-            // indexingFilter's needsReindex clause and — since a null nextAttemptAt reads as "backoff
-            // elapsed" — is re-claimed on every single tick, forever, burning the batch budget.
+            // A dead letter leaves the queue for good; otherwise needsReindex plus a null nextAttemptAt would
+            // re-claim it every tick.
             updates.add(Updates.set("needsReindex", false));
         }
         return Updates.combine(updates);
@@ -262,15 +242,12 @@ public class MongoEntityRepository implements EntityRepository {
         return result.getMatchedCount() > 0;
     }
 
-    // Package-private so the emitted BSON can be asserted without a live MongoDB.
     Bson contentMissingUpdate(String error) {
         return Updates.combine(
-                // Terminal on the first attempt, unlike failUpdate: the staged copy is gone and no
-                // amount of backoff brings it back, so the retry ladder would only delay the signal.
+                // Terminal at once: backoff cannot bring a purged staged copy back.
                 Updates.set("status", EntityStatus.FAILED.name()),
                 Updates.set("needsReindex", false),
-                // ... but the entity is recoverable, just not from here. This is what makes the next
-                // walk re-materialize it despite an unchanged checksum, so the dead letter heals.
+                // Recoverable, though: the next walk re-materializes it despite an unchanged checksum.
                 Updates.set("needsRefetch", true),
                 Updates.set("index.error", error),
                 Updates.set("retry", new Document("count", 0).append("nextAttemptAt", null)),
@@ -280,9 +257,7 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public int flagNeedsRefetchByKnowledge(String knowledgeId) {
-        // File-backed entities only: inline text lives in this document and needs no re-fetch, so
-        // flagging it would buy a download per item and change nothing. Served by the existing
-        // (knowledgeId, status) index; content.fileRef is the residual filter.
+        // File-backed only: inline text needs no re-fetch.
         Bson filter = and(
                 eq("knowledgeId", knowledgeId),
                 ne("status", EntityStatus.DELETED.name()),
@@ -295,16 +270,14 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public void flagNeedsReindex(String id) {
-        // Revive a dead-lettered entity first: FAILED is excluded from indexingFilter, so flagging it
-        // without this would strand the entity instead of re-queueing it. Scoped to FAILED so a
-        // healthy entity's status is untouched.
+        // Revive a FAILED entity first: FAILED is excluded from indexingFilter, so flagging alone would
+        // strand it.
         collection().updateOne(and(eq("_id", id), eq("status", EntityStatus.FAILED.name())),
                 Updates.combine(
                         Updates.set("status", EntityStatus.INGESTED.name()),
                         Updates.set("index.error", null)));
-        // Fresh retry budget — a manual reindex of a dead-lettered entity that kept its exhausted
-        // counter would fail again on the first hiccup. Deliberately does NOT touch the lease: an
-        // entity mid-run stays out of the queue (indexingFilter excludes INDEXING) until it lapses.
+        // A fresh retry budget. The lease is left alone: an entity mid-run stays out of the queue until it
+        // lapses.
         collection().updateOne(eq("_id", id), Updates.combine(
                 Updates.set("needsReindex", true),
                 Updates.set("retry", zeroRetry()),
@@ -313,8 +286,7 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public void stampLastSeen(String id, long generation) {
-        // Cheap single-field touch on the change-detection skip path — deliberately does NOT bump
-        // updatedAt (this is walk bookkeeping, not a content change).
+        // Leaves updatedAt alone: walk bookkeeping, not a content change.
         collection().updateOne(eq("_id", id), Updates.set("lastSeenGeneration", generation));
     }
 
@@ -327,8 +299,7 @@ public class MongoEntityRepository implements EntityRepository {
                         Updates.set("retry", zeroRetry()),
                         Updates.set("index.error", null),
                         Updates.set("updatedAt", BsonSupport.date(Instant.now()))));
-        // needsReindex is deliberately left alone: INGESTED already matches indexingFilter's first
-        // clause, so setting it would be redundant state with nothing to clear it.
+        // needsReindex is left alone: INGESTED already matches indexingFilter.
         return (int) result.getModifiedCount();
     }
 
@@ -343,8 +314,8 @@ public class MongoEntityRepository implements EntityRepository {
     @Override
     public int flagNeedsReindexByKnowledge(String knowledgeId) {
         Instant now = Instant.now();
-        // A live lease means a worker is mid-run; flagging it would race its terminal write. Those
-        // entities are simply left, and a second call after the lease lapses picks them up.
+        // A live lease means a worker is mid-run, and flagging it would race its terminal write; a later call
+        // picks those up.
         Bson filter = and(
                 eq("knowledgeId", knowledgeId),
                 ne("status", EntityStatus.DELETED.name()),
@@ -368,9 +339,8 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit) {
-        // Only entities without their own expiry: an explicit expiresAt is the source's own
-        // statement about validity and findExpired already owns that case, so applying the
-        // knowledge window here too would age out an item the source said is still good.
+        // Only entities without their own expiresAt: findExpired owns those, and the window would age out an
+        // item the source says is still good.
         Bson filter = and(
                 eq("knowledgeId", knowledgeId),
                 eq("expiresAt", null),
@@ -393,12 +363,8 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     /**
-     * The filter behind both the listing and its count, so the two can never disagree.
-     *
-     * <p>The text clause is an unanchored case-insensitive regex, which cannot use an index — but it
-     * only ever scans within one knowledge, since {@code knowledgeId} leads the compound index the
-     * sort is served by. {@code Pattern.quote} is what keeps a user typing {@code C++} or {@code (}
-     * from either erroring or matching as a pattern.
+     * Shared by the listing and its count, so they cannot disagree. The regex cannot use an index but only
+     * scans one knowledge; {@code Pattern.quote} keeps C++ or ( from erroring or matching as a pattern.
      */
     private static Bson listingFilter(String knowledgeId, EntityQuery query) {
         List<Bson> clauses = new ArrayList<>();
@@ -422,13 +388,12 @@ public class MongoEntityRepository implements EntityRepository {
     public List<EntitySummary> findByKnowledge(String knowledgeId, EntityQuery query, int limit, int offset) {
         List<EntitySummary> out = new ArrayList<>();
         collection().find(listingFilter(knowledgeId, query))
-                // Project away raw + content: they are the bulk of the document and a listing never
-                // reads them. _id comes back implicitly.
+                // raw and content are the bulk of a document, and a listing never reads them.
                 .projection(Projections.include("knowledgeId", "iterableId", "externalId", "entityType",
                         "status", "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
                         "needsReindex", "createdAt", "updatedAt"))
-                // _id is the tiebreak so two entities touched in the same millisecond can't swap
-                // places between pages. Served by the (knowledgeId, updatedAt, _id) compound index.
+                // _id is the tiebreak, so entities touched in the same millisecond cannot swap places between
+                // pages.
                 .sort(orderBy(descending("updatedAt"), ascending("_id")))
                 .skip(offset)
                 .limit(limit)
@@ -475,22 +440,16 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     /**
-     * Lease fence, mirroring {@code MongoCursorRepository.ownedBy}: matches the entity only if
-     * {@code owner} still holds a live (non-expired) lease. A worker whose lease lapsed — and whose
-     * entity was re-claimed by someone else — matches nothing, so its late writes are no-ops rather
-     * than marking a half-written entity INDEXED and unsetting the new owner's lease mid-run.
+     * Only while {@code owner} holds a live lease: a lapsed worker's late write is a no-op rather than
+     * marking a half-written entity INDEXED.
      */
-    // Package-private so the emitted BSON can be asserted without a live MongoDB.
     static Bson ownedBy(String id, String owner) {
         return and(eq("_id", id), eq("lease.owner", owner),
                 gt("lease.expiresAt", BsonSupport.date(Instant.now())));
     }
 
-    // ---- mapping -----------------------------------------------------------------------------
-
-    // There is deliberately no toDoc(): every write is a field-level update so that ingestion and the
-    // indexer can own disjoint field sets on the same document (see upsert). A whole-document mapper
-    // would be a standing invitation to reintroduce the clobber it was removed to fix.
+    // No toDoc(), deliberately: every write is field-level, so ingestion and the indexer own disjoint fields.
+    // A whole-document mapper would invite back the clobber it was removed to fix.
 
     private Entity fromDoc(Document d) {
         Document content = BsonSupport.sub(d, "content");
@@ -524,11 +483,6 @@ public class MongoEntityRepository implements EntityRepository {
                 longValue(d.get("lastSeenGeneration")));
     }
 
-    /**
-     * Map a projected listing document. Reads {@code title}/{@code uri} out of the projected
-     * {@code metadata} sub-document rather than via {@link Entity#title()} — the projection carries
-     * only those two keys, so there is no full entity to ask.
-     */
     private EntitySummary toSummary(Document d) {
         Document metadata = BsonSupport.sub(d, "metadata");
         Document idx = BsonSupport.sub(d, "index");

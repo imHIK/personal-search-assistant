@@ -5,31 +5,10 @@ import io.personalassistant.domain.model.enums.EntityType;
 import java.time.Instant;
 
 /**
- * Read-model projection of an {@link Entity} for listing views (the console's entity browser).
+ * Not an Entity: raw and content.text are the bulk of one, and a listing needs neither.
  *
- * <p>Deliberately not an {@code Entity}: {@link Entity#raw} is the complete source payload and
- * {@code content.text} is the whole extracted body — together they are the bulk of an entity
- * document, and a listing never needs either. Paging fifty full entities would move megabytes to
- * render a table, so the storage adapter projects only the fields below.
- *
- * @param id           internal id, e.g. {@code "ent_..."}
- * @param knowledgeId  owning knowledge
- * @param iterableId   the group (folder, label, company) it was walked from — how the console says
- *                     where an item came from, by joining with that knowledge's cursors
- * @param externalId   natural key within the source (path, message id…)
- * @param entityType   coarse classification (FILE / MESSAGE / …)
- * @param status       indexing lifecycle state
- * @param title        display title lifted from {@code metadata.title}, or null
- * @param uri          citation locator lifted from {@code metadata.uri}, or null
- * @param checksum     content hash for change detection
- * @param index        rollup of what was last indexed (chunk count, model, timestamp, error)
- * @param retryCount   indexing retry attempts so far
- * @param needsReindex set when content changed or config bumped; forces re-indexing
- * @param createdAt    when this entity was first ingested; never moves, so it is the only honest
- *                     answer to "when did this arrive"
- * @param updatedAt    last write to the row from either stage — the listing sort key. Mostly indexing
- *                     bookkeeping (a claim, a retry, a terminal write), so it is not a content date and
- *                     must not be presented as one
+ * @param createdAt never moves: the honest answer to when this arrived
+ * @param updatedAt last write from either stage; not a content date
  */
 public record EntitySummary(
         String id,

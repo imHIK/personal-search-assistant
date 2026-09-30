@@ -35,21 +35,13 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * Runs saved searches and records what they found.
- *
- * <p>A run is three steps: bound the search to the digest's look-back window, drop anything an earlier
- * run already reported, and optionally hand the survivors to a prompt-catalogue task.
- */
 @ApplicationScoped
 public class DefaultDigestService implements DigestService {
 
     private static final Logger LOG = Logger.getLogger(DefaultDigestService.class.getName());
 
-    /** The chunk field a look-back window filters on. Written on every chunk at index time. */
     static final String INDEXED_AT = "indexedAt";
 
-    /** The field a per-source reply names its source in. Owned by the framework, never by a task. */
     static final String SOURCE_FIELD = "source";
 
     private final DigestRepository digests;
@@ -59,15 +51,9 @@ public class DefaultDigestService implements DigestService {
     private final ChannelRepository channels;
     private final PublishingService publishing;
 
-    /**
-     * How many extra candidates a run asks for when it is going to discard already-seen ones. Without
-     * over-fetching, a digest whose top results are all familiar reports nothing at all — the new items
-     * were there, just below the cut.
-     */
     @ConfigProperty(name = "app.digest.new-item-multiplier", defaultValue = "4")
     int newItemMultiplier;
 
-    /** Where the console is served — only to build the link a published run carries back to its digest. */
     @ConfigProperty(name = "app.console.url", defaultValue = "http://localhost:8080")
     String consoleUrl;
 
@@ -95,8 +81,7 @@ public class DefaultDigestService implements DigestService {
                 digest.topK(),
                 digest.collapseDuplicates(), digest.maxChunksPerEntity(), digest.onlyNew(),
                 digest.enabled(),
-                // Left null so the first run happens on the next tick rather than one whole interval
-                // from now — a digest you just created and cannot see the output of looks broken.
+                // A null nextRunAt runs on the next tick rather than a whole interval from now.
                 null, now, now, null, digest.channelIds());
         return digests.save(stored);
     }
@@ -121,7 +106,6 @@ public class DefaultDigestService implements DigestService {
     public Digest update(String id, DigestPatch patch) {
         Digest existing = require(id);
         Digest merged = patch.applyTo(existing).withTouched(Instant.now());
-        // The same rules creation enforces; an edit is just as capable of breaking them.
         if (merged.query() == null || merged.query().isBlank()) {
             throw new IllegalArgumentException("query must not be blank");
         }
@@ -131,28 +115,21 @@ public class DefaultDigestService implements DigestService {
         if (patch.channelIds().present()) {
             requireChannels(merged.channelIds());
         }
-        // Like channels, only a schedule the edit sends: a cron stored before validation existed must not
-        // block the edit that replaces it.
+        // Only a schedule this edit sends is checked: a cron stored before validation existed must not block
+        // the edit that replaces it.
         if (patch.schedule().present()) {
             requireValidSchedule(merged.schedule());
         }
         return digests.save(merged);
     }
 
-    /** A cron the scheduler cannot parse is a 400 now, rather than a warning on every tick later. */
     private static void requireValidSchedule(SyncSchedule schedule) {
         if (schedule != null) {
             ScheduleResolver.requireValidCron(schedule.cron());
         }
     }
 
-    /**
-     * Forget what this digest has already reported, without deleting the record of it.
-     *
-     * <p>The two are separable on purpose. The history is both the audit trail and the already-seen
-     * set; deleting runs to replay a backlog would take the trail with it, and a user widening a query
-     * wants the backlog, not amnesia about what was sent last week.
-     */
+    /** The runs are both the audit trail and the already-seen set; this clears only the latter. */
     @Override
     public Digest resetHistory(String id) {
         return digests.save(require(id).withHistoryResetAt(Instant.now()));
@@ -190,8 +167,7 @@ public class DefaultDigestService implements DigestService {
             return record(digest, now, items, taskOutput, candidates, suppressed,
                     outsideWindow(digest, candidates), null, taskError);
         } catch (RuntimeException e) {
-            // A scheduled job that throws leaves no trace a user will ever see. Recording the failure
-            // as a run is what makes "this digest has been broken for a week" visible in the console.
+            // Recorded as a run: a scheduled job that throws leaves no trace anyone sees.
             LOG.log(Level.WARNING, "Digest " + id + " failed", e);
             return record(digest, now, List.of(), null, 0, 0, 0,
                     e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), null);
@@ -214,13 +190,9 @@ public class DefaultDigestService implements DigestService {
     }
 
     /**
-     * The digest's search, with its look-back window applied as a range filter on {@code indexedAt}.
-     *
-     * <p>Over-fetches when {@code onlyNew} is set, because the filtering happens after retrieval: a
-     * digest asking for 10 results whose top 10 are all familiar would otherwise report nothing while
-     * new items sat just below the cut.
+     * Over-fetches when onlyNew is set: already-reported hits are dropped after retrieval, and new ones must
+     * not be left just below the cut.
      */
-    // Package-private for tests.
     SearchQuery queryFor(Digest digest, Instant now) {
         SearchQuery base = digest.toQuery();
         Duration window = digest.windowDuration();
@@ -228,8 +200,8 @@ public class DefaultDigestService implements DigestService {
             return digest.onlyNew() ? widen(base, digest) : base;
         }
         Map<String, Object> filters = new LinkedHashMap<>(base.filters());
-        // Note this is "indexed since", not "created since": an item re-indexed inside the window
-        // reappears here. The already-reported check below is what stops that reaching the user.
+        // Indexed since, not created since: an item re-indexed inside the window reappears here, and the
+        // already-reported check is what stops it reaching the user.
         filters.put(INDEXED_AT, Map.of("gte", now.minus(window).toString()));
         SearchQuery windowed = new SearchQuery(base.text(), base.knowledgeIds(), Map.copyOf(filters),
                 base.topK(), base.mode(), false, base.maxChunksPerEntity(), base.collapseDuplicates());
@@ -237,18 +209,8 @@ public class DefaultDigestService implements DigestService {
     }
 
     /**
-     * How much the look-back window cost this run, counted only when the run came back empty-handed.
-     *
-     * <p>The window is a range filter on {@code indexedAt} — <em>indexed</em> since, not <em>written</em>
-     * since. For a feed that is re-walked constantly, which is the case digests were built for, those are
-     * close enough. For a corpus that was ingested once and then left alone they are not: a week later
-     * every chunk sits outside a one-day window, and the digest is empty on every run, forever, while
-     * reporting the same "nothing matched" as a query with a typo in it. Nothing in {@code candidates}
-     * or {@code suppressed} can tell those apart, because both are zero either way.
-     *
-     * <p>So on the empty path only — where there is no result to slow down and one more search is
-     * affordable — the same query runs again without the window, and the count goes on the run. A
-     * failure here costs the hint and nothing else: the run itself already succeeded.
+     * Only on an empty run: recounts without the window, so a corpus indexed once and left alone reads as
+     * "widen the look-back" rather than "nothing matched". A failure here costs only the hint.
      */
     private int outsideWindow(Digest digest, int candidates) {
         if (candidates > 0 || digest.windowDuration() == null) {
@@ -268,13 +230,7 @@ public class DefaultDigestService implements DigestService {
                 query.mode(), false, query.maxChunksPerEntity(), query.collapseDuplicates());
     }
 
-    /**
-     * Drop hits whose entity a previous run already reported, then trim back to the digest's topK.
-     *
-     * <p>Keyed on the <em>entity</em>, not the chunk: a chunk id changes whenever a document is
-     * re-chunked or re-indexed, so a chunk-keyed check would re-report documents the user has seen every
-     * time retention aged one out and the next walk re-created it.
-     */
+    /** Keyed on the entity, not the chunk: chunk ids change when a document is re-chunked or re-indexed. */
     private List<SearchHit> withoutAlreadyReported(Digest digest, List<SearchHit> hits) {
         if (!digest.onlyNew()) {
             return hits.size() <= digest.topK() ? hits : hits.subList(0, digest.topK());
@@ -303,19 +259,9 @@ public class DefaultDigestService implements DigestService {
     }
 
     /**
-     * Attach what the task said about each item, for a task whose reply describes its sources one by
-     * one.
-     *
-     * <p>The join is positional and the ordering is a contract the prompt builder already keeps:
-     * sources are numbered from 1 in the order they were rendered, so element {@code n} of the reply
-     * describes {@code result.sources().get(n - 1)}. That list has to come back from the agent rather
-     * than being assumed to equal {@code hits}, because a whole-entity task collapses several chunks of
-     * one document into a single source before numbering them.
-     *
-     * <p>Everything here degrades to "no annotations" rather than failing. A model that ignored the
-     * requested shape, wrapped its object in prose, or numbered a source that was cut for budget should
-     * cost the annotation and nothing else: the items are real search results and worth showing, and
-     * {@code taskOutput} still holds the reply verbatim for whoever wants to see why.
+     * The join is positional: element n of the reply describes {@code result.sources().get(n - 1)}, which
+     * differs from the items when a whole-entity task collapsed them. Anything malformed costs only the
+     * annotation; taskOutput keeps the reply verbatim.
      */
     private List<DigestRun.Item> annotate(Digest digest, List<DigestRun.Item> items,
                                           SearchAgent.TaskResult result) {
@@ -330,8 +276,6 @@ public class DefaultDigestService implements DigestService {
             return items;
         }
 
-        // Where each source sits in the run's item list, so a reply's source number reaches the right
-        // item even when the task collapsed the hits before numbering them.
         Map<String, Integer> indexByEntity = new LinkedHashMap<>();
         for (int i = 0; i < items.size(); i++) {
             indexByEntity.putIfAbsent(items.get(i).entityId(), i);
@@ -357,8 +301,7 @@ public class DefaultDigestService implements DigestService {
             }
             Map<String, Object> values = new LinkedHashMap<>();
             entry.fields().forEachRemaining(field -> {
-                // A null is the task's way of saying "nothing to report here"; storing it would make
-                // the console render an empty row for a field the model deliberately left out.
+                // A null means the model had nothing to say; storing it would render an empty row.
                 if (!SOURCE_FIELD.equals(field.getKey()) && !field.getValue().isNull()) {
                     values.put(field.getKey(), plain(field.getValue()));
                 }
@@ -370,7 +313,6 @@ public class DefaultDigestService implements DigestService {
         return annotated;
     }
 
-    /** Jackson node to a plain value the storage layer and the API can both carry. */
     private static Object plain(JsonNode value) {
         if (value.isNumber()) {
             return value.isIntegralNumber() ? (Object) value.asLong() : (Object) value.asDouble();
@@ -391,14 +333,8 @@ public class DefaultDigestService implements DigestService {
     }
 
     /**
-     * Queue a recorded run for the digest's channels, when it is worth a message — see
-     * {@link DigestMessages#worthSending}. Both scheduled runs and "run now" come through here, so pressing
-     * the button is also how the email is tried out.
-     *
-     * <p>Only delivery rows are written; the publishing worker sends them, so a slow or broken channel
-     * cannot slow or fail the run. The dedupe key means a replayed run queues nothing twice. Anything that
-     * goes wrong here is logged and swallowed: the run already happened and is recorded, and losing its
-     * message is better than reporting the run itself as failed.
+     * Only queues delivery rows, so a broken channel cannot fail the run, and the dedupe key stops a replayed
+     * run queuing twice. Failures are logged and swallowed: the run is already recorded.
      */
     private void publish(Digest digest, DigestRun run) {
         if (digest.channelIds().isEmpty() || !DigestMessages.worthSending(run)) {
@@ -422,7 +358,6 @@ public class DefaultDigestService implements DigestService {
         }
     }
 
-    /** An unknown channel is refused when it is set, rather than discovered when the first run is lost. */
     private void requireChannels(List<String> channelIds) {
         for (String channelId : channelIds) {
             if (channels.findById(channelId).isEmpty()) {

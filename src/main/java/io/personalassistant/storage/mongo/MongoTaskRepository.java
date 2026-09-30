@@ -16,12 +16,7 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * MongoDB adapter for {@link TaskRepository} over the {@code tasks} collection.
- *
- * <p>No index is declared in {@code MongoIndexInitializer}: every access is by {@code _id} or a full
- * list of what is a hand-written, human-sized collection, and both are already served.
- */
+/** No index: every access is by _id or a full list of a human-sized collection. */
 @ApplicationScoped
 public class MongoTaskRepository implements TaskRepository {
 
@@ -64,8 +59,6 @@ public class MongoTaskRepository implements TaskRepository {
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Task t) {
         List<Document> fields = new ArrayList<>();

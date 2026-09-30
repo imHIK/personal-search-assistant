@@ -21,14 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.NoSuchElementException;
 import java.util.logging.Logger;
 
-/**
- * The browser half of connecting an account: send the user to a provider's consent screen, then catch
- * them on the way back and store the credentials.
- *
- * <p>{@code {provider}} is resolved through the provider registry, so these two endpoints exist for
- * every installed {@code OAuthProvider} the moment its bean does — adding Slack or Notion adds no
- * route here.
- */
 @Path("/api/connections/oauth/{provider}")
 public class OAuthResource {
 
@@ -38,8 +30,8 @@ public class OAuthResource {
     OAuthConnectService oauth;
 
     /**
-     * Begin a consent flow. The {@code Origin} header decides which console the user is sent back to
-     * (:8080 or the :5173 dev server); the service validates it against the configured allow-list.
+     * The {@code Origin} header picks the console the user returns to (:8080 or the :5173 dev server); the
+     * service checks it against the configured allow-list.
      */
     @POST
     @Path("/start")
@@ -52,15 +44,13 @@ public class OAuthResource {
             return new OAuthStartResponseDto(oauth.start(dto.toRequest(provider, origin)));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalArgumentException e) { // unknown provider/type, or no OAuth client configured
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
     /**
-     * Where the provider sends the browser back to. Always answers with a redirect to the console —
-     * a person is looking at this, not a program, so both success and failure have to land on a page
-     * that can explain itself rather than on a JSON body.
+     * Always redirects back to the console, success or failure: a person is looking at this, not a program.
      */
     @GET
     @Path("/callback")
@@ -69,15 +59,12 @@ public class OAuthResource {
                              @QueryParam("state") String state,
                              @QueryParam("error") String error) {
         if (error != null && !error.isBlank()) {
-            // The user declined, or the provider refused before we were ever involved.
             return back(oauth.returnOriginFor(state), "error", error, null);
         }
         try {
             OAuthConnectService.Completed completed = oauth.complete(provider, state, code);
             return back(completed.returnTo(), "ok", null, completed.connection().id());
         } catch (RuntimeException e) {
-            // Includes a rejected code and a failed re-verification. There is no useful status code to
-            // return to a browser mid-redirect, so the reason travels in the query string instead.
             LOG.warning("OAuth callback for " + provider + " failed: " + e.getMessage());
             return back(oauth.returnOriginFor(state), "error", e.getMessage(), null);
         }

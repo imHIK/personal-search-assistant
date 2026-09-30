@@ -11,11 +11,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** HTTP adapter for {@link AshbyApi} against the public posting API (no auth). */
 @ApplicationScoped
 public class HttpAshbyApi implements AshbyApi {
 
-    /** These boards are public, so the platform — not an account — is the quota's owner. */
+    /** Public boards: the platform, not an account, owns the quota. */
     private static final String PLATFORM = "ashby";
 
     @ConfigProperty(name = "app.ingestion.ashby.base-url",

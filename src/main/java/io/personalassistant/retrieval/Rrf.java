@@ -7,29 +7,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reciprocal Rank Fusion over any number of ranked lists.
- *
- * <p>RRF scores a document by {@code weight / (k + rank)} summed across the lists that returned it, so
- * agreement between lists beats a strong showing in one. That property is why it is used twice here for
- * different reasons: fusing the lexical and vector legs of one query, where the two score scales (BM25
- * and cosine) cannot be compared directly; and fusing the results of several queries derived from one
- * document, where the scales <em>are</em> comparable but a posting matching three facets should still
- * outrank one that matches a single facet very well.
- *
- * <p>Extracted so there is one implementation. Two copies would drift, and the constant {@code k} has to
- * mean the same thing in both for the tuning advice in {@code application.properties} to hold.
+ * Scores a hit by the sum of {@code weight / (k + rank)} over the lists that returned it, so agreement beats
+ * a single strong showing.
  */
 final class Rrf {
 
     private Rrf() {
     }
 
-    /**
-     * Fuse {@code lists} into one ranking of at most {@code limit} hits.
-     *
-     * @param weights per-list multiplier; a shorter list than {@code lists} defaults the remainder to 1.0
-     * @param rrfK    rank-smoothing constant — larger flattens the curve so agreement matters more
-     */
+    /** @param weights a list shorter than {@code lists} defaults the rest to 1.0 */
     static List<SearchHit> fuse(List<List<SearchHit>> lists, List<Double> weights, int rrfK, int limit) {
         Map<String, SearchHit> byId = new LinkedHashMap<>();
         Map<String, Double> scores = new HashMap<>();

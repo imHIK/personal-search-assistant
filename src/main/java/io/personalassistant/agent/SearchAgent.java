@@ -4,7 +4,6 @@ import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import java.util.List;
 
-/** LLM output grounded in retrieved hits: the search answer, or any task from the task library. */
 public interface SearchAgent {
 
     /**

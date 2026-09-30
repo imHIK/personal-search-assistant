@@ -9,12 +9,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.NoSuchElementException;
 
-/**
- * Default {@link ConnectionResolver} over the {@link ConnectionRepository}: an explicit
- * {@code connectionId} wins; otherwise the type's default connection is used. Both misses throw a
- * clear {@link NoSuchElementException} so knowledge activation lands in {@code ERROR} with an
- * actionable reason ("no default GMAIL connection — create one") rather than a null-pointer later.
- */
 @ApplicationScoped
 public class DefaultConnectionResolver implements ConnectionResolver {
 

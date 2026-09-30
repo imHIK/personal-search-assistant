@@ -16,29 +16,8 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Named lists of metadata field names, optionally scoped per connector, loaded from
- * {@code config/field-sets.json}.
- *
- * <p><strong>Why named sets rather than constants or a flat property.</strong> "Which metadata fields
- * matter here" comes up in more than one place — what gets prefixed before embedding, what locates a
- * source in a prompt — and the right answer differs per place <em>and</em> per connector: a Gmail chunk
- * is best identified by sender, a Drive document by its heading path. A hardcoded list can express
- * neither, and a single flat property can express only one of the two.
- *
- * <p>That is not hypothetical. The prompt's locator list was a Java constant reading
- * {@code ("sheet", "page", "headingPath")} — and {@code sheet} and {@code page} are produced by nothing
- * in the pipeline, while {@code rowRange}, the one structural locator that <em>is</em> produced, was
- * missing and so never reached a prompt. A constant nobody had reason to look at hid that for as long as
- * it existed. Naming the set and giving it a file with a description is what makes such a mismatch
- * reviewable.
- *
- * <p>Resolution is whole-value tier selection, mirroring {@code ScheduleResolver}: the per-connector list
- * wins entire if present, otherwise the default. Lists are not merged — a connector that overrides is
- * stating the whole answer, which is easier to reason about than a union.
- *
- * <p>Unknown set names warn and return empty rather than throwing, following
- * {@code CdiChunkingStrategyRegistry}: a missing field set degrades retrieval slightly, and taking
- * indexing offline over it would be the worse outcome.
+ * Named metadata field lists from {@code config/field-sets.json}. A per-connector list wins entire over the
+ * default; lists are never merged. An unknown set name warns and resolves empty.
  */
 @ApplicationScoped
 public class FieldSets {
@@ -47,25 +26,20 @@ public class FieldSets {
 
     static final String RESOURCE = "config/field-sets.json";
 
-    /** Metadata prefixed to chunk text before embedding. Changing its contents needs a re-index. */
+    /** Changing its contents needs a re-index. */
     public static final String EMBED_CONTEXT = "embedContext";
 
-    /** Metadata shown in a grounded prompt's source header so an answer can cite a location. */
     public static final String PROMPT_LOCATOR = "promptLocator";
 
-    /** Metadata holding a result's date, for the search-time freshness boost. Default list only. */
     public static final String RECENCY = "recency";
 
-    /** Optional filesystem path replacing the bundled file wholesale; blank counts as absent. */
     @ConfigProperty(name = "app.field-sets.path")
     Optional<String> overridePath;
 
     private Map<String, Scoped> sets = Map.of();
 
-    /** One named set: a default list plus optional whole-list overrides per connector. */
     private record Scoped(List<String> byDefault, Map<SourceType, List<String>> bySourceType) {}
 
-    /** The bundled file with no override, loaded eagerly. For tests and tooling without CDI. */
     public static FieldSets bundled() {
         FieldSets fieldSets = new FieldSets();
         fieldSets.overridePath = Optional.empty();
@@ -90,10 +64,8 @@ public class FieldSets {
     }
 
     /**
-     * The field list for {@code setName} under {@code sourceType}.
-     *
-     * @param sourceType the connector the chunk came from; null falls back to the default list
-     * @return the resolved list, never null; empty when the set is unknown or defines nothing
+     * @param sourceType null falls back to the default list
+     * @return never null; empty when the set is unknown
      */
     public List<String> resolve(String setName, SourceType sourceType) {
         Scoped scoped = sets.get(setName);
@@ -111,7 +83,6 @@ public class FieldSets {
         return scoped.byDefault();
     }
 
-    /** The unscoped list for {@code setName}. */
     public List<String> resolve(String setName) {
         return resolve(setName, null);
     }
@@ -136,9 +107,8 @@ public class FieldSets {
     }
 
     /**
-     * An unrecognised connector name is a warning, not a failure: it is almost always a set written for a
-     * connector that has not shipped yet, and failing startup over it would block adding config ahead of
-     * code. A typo degrades to the default list, which the warning names.
+     * An unknown connector name warns rather than failing startup: it is usually a set written ahead of the
+     * connector.
      */
     private static SourceType parseSourceType(String raw, String setName) {
         try {

@@ -6,32 +6,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * One result: an entity, represented by its best-matching chunk, with its relevance score and citation info.
+ * One result: an entity shown through its best-matching chunk.
  *
- * <p>{@code text} and {@code snippet} are deliberately separate. {@code text} is the chunk exactly as
- * indexed and is what grounding must be built from; {@code snippet} is a display excerpt, short enough
- * for a result card. Collapsing the two loses data irreversibly at the adapter boundary: the agent was
- * previously handed snippets and so answered from ~28% of each chunk, truncating lists mid-item and then
- * reporting the missing rows as absent from the source.
- *
- * <p>Retrieval legs produce hits with no {@code moreMatches}; {@code EntityGrouper} folds an entity's
- * other matching chunks into its best one. A result is an entity rather than a chunk because the user is
- * looking for documents, postings and mails — ranking chunks let one matching item fill every slot with
- * its own siblings.
- *
- * @param chunkId     the best-matching chunk
- * @param entityId    owning entity (for grouping / dedup)
- * @param knowledgeId owning knowledge
- * @param ordinal     position of this chunk within its entity — orders multiple hits from one document,
- *                    and is what a future expansion tool needs to ask for neighbouring chunks
- * @param title       entity title for display
- * @param text        the full chunk text as indexed; with {@code moreMatches}, the grounding set for answering
- * @param snippet     short display excerpt (highlight fragment when available, else the head of the text)
- * @param uri         locator so the user can open the original
- * @param score       relevance score (post-grouping, post-rerank if reranking is on)
- * @param metadata    facets carried through for display/filtering
- * @param moreMatches the entity's other matching chunks, best first; empty for a single-chunk match
- * @param ranking     how the result reached {@code score}, stage by stage; never null
+ * @param text the chunk as indexed; with moreMatches, what an answer is grounded in
+ * @param snippet a display excerpt only
+ * @param moreMatches the entity's other matching chunks, best first
+ * @param ranking never null
  */
 public record SearchHit(
         String chunkId,
@@ -47,7 +27,7 @@ public record SearchHit(
         List<Match> moreMatches,
         Ranking ranking) {
 
-    /** Separates non-adjacent passages in {@link #groundingText()}, so a model does not read them as contiguous. */
+    /** So a model does not read non-adjacent passages as contiguous. */
     static final String PASSAGE_SEPARATOR = "\n\n[…]\n\n";
 
     public SearchHit {
@@ -55,36 +35,28 @@ public record SearchHit(
         ranking = ranking == null ? Ranking.of(score) : ranking;
     }
 
-    /** A single-chunk hit — the shape every retrieval leg produces, before grouping. */
     public SearchHit(String chunkId, String entityId, String knowledgeId, int ordinal, String title,
                      String text, String snippet, String uri, double score, Map<String, Object> metadata) {
         this(chunkId, entityId, knowledgeId, ordinal, title, text, snippet, uri, score, metadata, List.of(), null);
     }
 
-    /** Returns a copy of this hit with a new score; the ranking breakdown is kept as it was. */
+    /** The ranking breakdown is kept as it was. */
     public SearchHit withScore(double newScore) {
         return new SearchHit(chunkId, entityId, knowledgeId, ordinal, title, text, snippet, uri,
                 newScore, metadata, moreMatches, ranking);
     }
 
-    /** Returns a copy carrying an entity's further matching chunks, rescored for them. */
     public SearchHit withMoreMatches(double newScore, List<Match> matches) {
         return new SearchHit(chunkId, entityId, knowledgeId, ordinal, title, text, snippet, uri,
                 newScore, metadata, matches, ranking);
     }
 
-    /** Returns a copy with a new ranking breakdown. */
     public SearchHit withRanking(Ranking newRanking) {
         return new SearchHit(chunkId, entityId, knowledgeId, ordinal, title, text, snippet, uri,
                 score, metadata, moreMatches, newRanking);
     }
 
-    /**
-     * The text an answer should be grounded in: this chunk and every further match, in document order.
-     *
-     * <p>Document order, not score order, because the passages are pieces of one item and read wrongly
-     * shuffled — a "requirements" list would appear above the heading that introduces it.
-     */
+    /** Document order, not score order: the passages are pieces of one item. */
     public String groundingText() {
         if (moreMatches.isEmpty()) {
             return text;
@@ -100,34 +72,19 @@ public record SearchHit(
         return String.join(PASSAGE_SEPARATOR, texts);
     }
 
-    /**
-     * Another chunk of the same entity that matched the query.
-     *
-     * @param chunkId the matching chunk
-     * @param ordinal its position within the entity
-     * @param text    the full chunk text, for grounding; never sent to the console
-     * @param snippet display excerpt
-     * @param score   the chunk's own retrieval score
-     */
+    /** @param text the full chunk, for grounding; never sent to the console */
     public record Match(String chunkId, int ordinal, String text, String snippet, double score) {}
 
     /**
-     * How a result reached its score. Diagnostic only — nothing ranks on it — and the reason it exists is
-     * tuning: when the wrong item comes first, this says whether word matching, meaning, the further-matches
-     * bonus or freshness put it there, so the one setting that matters is the one that gets changed.
+     * Diagnostic only: nothing ranks on it.
      *
-     * @param lexicalRank    1-based rank of the best chunk in the word-match leg; null when that leg did not
-     *                       return it or did not run
-     * @param vectorRank     the same for the meaning leg
-     * @param retrievalScore the best chunk's score out of retrieval — the fused RRF score, or the single leg's
-     *                       own score in LEXICAL / SEMANTIC mode
-     * @param groupedScore   after the further-matches bonus; equal to {@code retrievalScore} when there is none
-     * @param recencyFactor  the freshness multiplier applied on top; 1 when the result carries no date
+     * @param lexicalRank null when that leg did not return it or did not run
+     * @param retrievalScore the fused RRF score, or the single leg's in LEXICAL or SEMANTIC mode
+     * @param recencyFactor 1 when the result carries no date
      */
     public record Ranking(Integer lexicalRank, Integer vectorRank, double retrievalScore,
                           double groupedScore, double recencyFactor) {
 
-        /** A breakdown that says only "retrieval scored it this". */
         public static Ranking of(double score) {
             return new Ranking(null, null, score, score, 1.0);
         }

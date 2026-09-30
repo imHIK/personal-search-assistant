@@ -10,12 +10,7 @@ import java.util.List;
 import java.util.Map;
 import org.bson.Document;
 
-/**
- * Small, explicit helpers for mapping between the immutable domain records and BSON
- * {@link Document}s. Mapping is done by hand (rather than the POJO/record codec) so the shape
- * stored in Mongo is unambiguous and review-able, and so {@code Instant}/enum/free-form-map
- * conversions are handled consistently in one place.
- */
+/** Mapped by hand rather than by codec, so the stored shape is explicit. */
 final class BsonSupport {
 
     private BsonSupport() {
@@ -50,12 +45,8 @@ final class BsonSupport {
     }
 
     /**
-     * A rate-limit policy as {@code { rules: [ { permits, windowSeconds } ] }}, or null when unset.
-     *
-     * <p>Stored expanded rather than as the compact {@code "500/1m"} string the config properties use:
-     * this one is written by the console, and a structured document is queryable and needs no parser on
-     * the read path. An <em>empty</em> rules array is preserved and is not the same as absent — it is how
-     * a user says "I removed the limit I had set".
+     * Stored expanded rather than as the compact string, since the console writes it. An empty rules array
+     * stays distinct from absent: it is how a user removes a limit.
      */
     static Document rateLimit(RateLimitPolicy policy) {
         if (policy == null) {
@@ -90,17 +81,12 @@ final class BsonSupport {
         return new RateLimitPolicy(rules);
     }
 
-    /** Read a nested sub-document, or null if absent. */
     static Document sub(Document parent, String key) {
         Object v = parent == null ? null : parent.get(key);
         return v instanceof Document d ? d : null;
     }
 
-    /**
-     * Convert an arbitrary free-form value (used for {@code raw}/{@code inputs}/{@code metadata})
-     * into a BSON-friendly form. Maps/Lists are passed through (the driver encodes them); domain
-     * temporal types are normalized to {@link Date}.
-     */
+    /** Maps and lists pass through; temporal values become Date. */
     static Object toBson(Object value) {
         if (value instanceof Instant i) {
             return Date.from(i);
@@ -130,7 +116,6 @@ final class BsonSupport {
         return (Map<String, Object>) toBson(map);
     }
 
-    /** Recursively convert a stored BSON map back into a plain {@link Map} of JSON-friendly values. */
     static Map<String, Object> toPlainMap(Object value) {
         if (!(value instanceof Map<?, ?> m)) {
             return new LinkedHashMap<>();

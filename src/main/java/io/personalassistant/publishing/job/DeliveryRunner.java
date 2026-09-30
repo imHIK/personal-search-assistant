@@ -24,13 +24,9 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Drains the outbox: claim a delivery, hand it to its channel's publisher, record the outcome.
- *
- * <p>Only deliveries for <em>ready</em> channels are claimed: enabled, {@code ACTIVE}, and — for a
- * publisher that sends through an account — with that account resolvable and itself {@code ACTIVE}.
- * Anything else keeps its queue intact and spends no attempts. The account half mirrors
- * {@code IngestionJob.connectionUnusable()} and is derived, not stored: a reconnected account releases
- * its channels' queues on the next tick with nobody touching the channel.
+ * Claims deliveries only for ready channels (enabled, ACTIVE, and with a resolvable ACTIVE account when the
+ * publisher needs one), so a blocked queue spends no attempts. Derived, not stored: a reconnected account
+ * releases its channels' queues on the next tick.
  */
 @ApplicationScoped
 public class DeliveryRunner {
@@ -68,15 +64,9 @@ public class DeliveryRunner {
         this.resolver = resolver;
     }
 
-    /** Everything one send needs, resolved together so a delivery is only claimed when it can go out. */
     private record Ready(Channel channel, Publisher publisher, Connection connection) {
     }
 
-    /**
-     * Send up to {@code batch} deliveries, one claim at a time.
-     *
-     * @return how many were sent
-     */
     public int runOnce() {
         Set<String> ready = new HashSet<>();
         for (Channel channel : channels.findUsable()) {
@@ -92,8 +82,8 @@ public class DeliveryRunner {
                 break;
             }
             Delivery delivery = claimed.get();
-            // Re-resolved rather than trusting the set: an earlier delivery in this tick may have parked
-            // the channel or broken its account, or a person may have paused it since.
+            // Re-resolved per delivery: an earlier send this tick may have parked the channel or broken its
+            // account.
             Ready target = ready(channels.findById(delivery.channelId()).orElse(null));
             if (target == null) {
                 ready.remove(delivery.channelId());
@@ -108,9 +98,8 @@ public class DeliveryRunner {
     }
 
     /**
-     * @return what sending to this channel needs, or null when it cannot send now. A channel whose account
-     *         is missing or of the wrong type is parked, because that needs a person; one whose account is
-     *         merely broken is skipped, because reconnecting the account is the fix and should be enough
+     * @return null when it cannot send now. A missing or wrong-type account parks the channel, since that
+     *         needs a person; a merely broken one is skipped, since reconnecting it is the fix
      */
     private Ready ready(Channel channel) {
         if (channel == null || !channel.usable()) {
@@ -133,17 +122,15 @@ public class DeliveryRunner {
                     .publish(channel, target.connection(), delivery.message(), delivery.id());
             if (!deliveries.markSent(delivery.id(), worker,
                     receipt == null ? null : receipt.providerMessageId(), Instant.now())) {
-                // The message has gone out, but a new owner holds the row and will send it again.
-                // Nothing to undo; this is the at-least-once window (L13).
+                // Sent, but a new owner holds the row and will send it again: the at-least-once window.
                 LOG.warning("Lost the lease on delivery " + delivery.id() + " before markSent; "
                         + "it may be delivered twice");
             }
             return true;
         } catch (PublishException e) {
             if (e.permanent()) {
-                // The fault is the channel's (a refused recipient, a missing permission), not this
-                // message's. Park the channel so its other deliveries stop spending attempts; a successful
-                // test brings it back.
+                // The channel's fault, not this message's: park the channel so its other deliveries stop
+                // spending attempts; a successful test brings it back.
                 LOG.warning("Channel " + channel.id() + " refused delivery " + delivery.id()
                         + " permanently; parking the channel: " + e.getMessage());
                 park(channel, e.getMessage());
@@ -164,10 +151,7 @@ public class DeliveryRunner {
         channels.updateStatus(channel.id(), ChannelStatus.ERROR, reason, Instant.now());
     }
 
-    /**
-     * Consecutive, not cumulative (invariant 9): {@code markSent} zeroes the count, so the limit means
-     * "this many failures in a row".
-     */
+    /** Consecutive: markSent zeroes the count, so the limit means failures in a row. */
     private void recordFailure(Delivery delivery, String error) {
         int attempts = delivery.attempts() + 1;
         boolean written = attempts >= retryLimit
@@ -180,8 +164,7 @@ public class DeliveryRunner {
         }
     }
 
-    /** Doubling from {@code backoff-seconds}, capped — a platform that is down for an hour is common. */
-    // Package-private for tests.
+    /** Doubling from backoff-seconds, capped: a platform down for an hour is common. */
     Duration backoff(int attempts) {
         long seconds = Math.max(backoffSeconds, 1);
         for (int i = 1; i < attempts && seconds < maxBackoffSeconds; i++) {

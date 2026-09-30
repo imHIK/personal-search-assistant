@@ -15,13 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Ashby job-board connector. One iterable per board name (the {@code <name>} in
- * {@code jobs.ashbyhq.com/<name>}); the posting API returns the whole board in one call.
- *
- * <p>Ashby states {@code isRemote} structurally rather than leaving it to prose, which is preferred over
- * the value inferred by {@code AtsNormalization} whenever present — a stated fact always beats a guess.
- */
 @ApplicationScoped
 public class AshbyPlatform implements BoardPlatform {
 
@@ -55,8 +48,7 @@ public class AshbyPlatform implements BoardPlatform {
 
     @Override
     public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
-        // Hint ignored: one request returns the whole board either way, so filtering
-        // early would save nothing. The connector filters what comes back.
+        // Hint ignored: one request returns the whole board either way.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
@@ -80,8 +72,7 @@ public class AshbyPlatform implements BoardPlatform {
         String plain = job.path("descriptionPlain").asText("");
         String body = html.isBlank() ? plain : html;
         String descriptionText = html.isBlank() ? plain : AtsNormalization.plainText(html);
-        // publishedAt is the only timestamp Ashby publishes — there is no updatedAt on this API, and
-        // reading the absent one used to yield a constant that made every posting look unchanged.
+        // publishedAt is the only timestamp this API has; there is no updatedAt.
         String publishedAt = job.path("publishedAt").asText(null);
         String company = AtsNormalization.company(label, boardId);
 
@@ -94,7 +85,7 @@ public class AshbyPlatform implements BoardPlatform {
         metadata.put("board", boardId);
         metadata.put("platform", id());
         metadata.put("sourceRank", SOURCE_RANK);
-        // Stated beats inferred: Ashby publishes isRemote as a real field.
+        // Stated beats inferred.
         metadata.put("remote", job.has("isRemote")
                 ? job.path("isRemote").asBoolean(false)
                 : AtsNormalization.isRemote(location, descriptionText));
@@ -123,8 +114,7 @@ public class AshbyPlatform implements BoardPlatform {
                 body,
                 null,
                 metadata,
-                // Ashby is the one board of the three that can state a close date. When it does, this
-                // beats the knowledge-level window entirely (see RetentionSweeper).
+                // Ashby can state a close date, which beats the retention window.
                 AtsNormalization.instantOrNull(job.path("closedAt").asText(null)),
                 false);
     }

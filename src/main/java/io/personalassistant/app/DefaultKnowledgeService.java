@@ -43,12 +43,6 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Default knowledge lifecycle orchestration. On {@link #add} it verifies the connector, sets the
- * anchor to "now" (the boundary between backward backfill and forward incremental), discovers the
- * source's iterables, and creates one backward (if backfill is enabled) and one forward cursor per
- * iterable — then flips the knowledge to {@code ACTIVE} so the ingestion loop picks the cursors up.
- */
 @ApplicationScoped
 public class DefaultKnowledgeService implements KnowledgeService {
 
@@ -79,16 +73,10 @@ public class DefaultKnowledgeService implements KnowledgeService {
         this.refetchPolicy = refetchPolicy;
     }
 
-    /**
-     * For connectors that authenticate through a {@link Connection}, resolve the bound (or default)
-     * connection and verify its credentials before touching the source. Throws (→ knowledge parked in
-     * {@code ERROR}) when no connection resolves or the credentials are rejected. A no-op for no-auth
-     * connectors like {@code LOCAL_FS}.
-     */
     private void verifyConnectionIfRequired(SourceConnector connector, Knowledge kn) {
         if (connector.requiresConnection()) {
-            Connection connection = connections.resolve(kn); // missing/unknown connection → throws
-            connector.verifyConnection(connection);          // bad credentials → throws
+            Connection connection = connections.resolve(kn);
+            connector.verifyConnection(connection);
         }
     }
 
@@ -96,9 +84,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
     public Knowledge add(NewKnowledge request) {
         Instant now = Instant.now();
         Knowledge.Config config = request.config() != null ? request.config() : Knowledge.Config.defaults();
-        // Checked before the DRAFT is persisted, unlike the activation failures below: a cron the
-        // scheduler cannot run is a bad request, not a source that failed to connect, and parking it in
-        // ERROR would leave a record the user can only fix by deleting it.
+        // Checked before the DRAFT is persisted: a bad cron is a 400, not a source parked in ERROR.
         if (config.scheduleSettings() != null) {
             ScheduleResolver.requireValidCron(config.scheduleSettings().cron());
         }
@@ -110,23 +96,21 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 request.inputs() == null ? java.util.Map.of() : request.inputs(),
                 config,
                 now,
-                null, // nextSyncDueAt: due now — the scheduler sets the first real due time on its next tick
+                null, // nextSyncDueAt: null is due now
                 KnowledgeStatus.DRAFT,
                 null,
                 Knowledge.Stats.zero(),
                 now,
                 now,
-                0L); // syncGeneration starts at 0; bumped on each membership-affecting edit
-        knowledge.save(draft); // persist as DRAFT first, so any activation failure is recorded against a real record
+                0L); // syncGeneration
+        knowledge.save(draft); // a DRAFT first, so any activation failure is recorded against a real record
 
-        // Verify + discover + create cursors can all fail (bad credentials, unreachable source,
-        // discovery error). Any failure parks the knowledge in ERROR with the reason captured, rather
-        // than throwing it away — the user can see why it failed and retry.
+        // Any failure below parks the knowledge in ERROR with the reason rather than throwing it away.
         try {
             SourceConnector connector = connectors.get(request.type());
-            verifyConnectionIfRequired(connector, draft);            // resolve + verify the connection
-            connector.verify(draft);                                  // throws on bad inputs
-            List<SourceIterable> iterables = discover(draft, DiscoveryTrigger.ACTIVATION); // throws if not enumerable
+            verifyConnectionIfRequired(connector, draft);
+            connector.verify(draft);
+            List<SourceIterable> iterables = discover(draft, DiscoveryTrigger.ACTIVATION);
             DirCounts created = createCursors(draft, iterables);
             recordDiscovery(draft, DiscoveryTrigger.ACTIVATION, iterables.size(),
                     created, DirCounts.zero(), DirCounts.zero());
@@ -141,18 +125,14 @@ public class DefaultKnowledgeService implements KnowledgeService {
     }
 
     /**
-     * Edit an existing knowledge. Loads the stored record, diffs the patch against it, and routes by
-     * <em>what actually changed</em> — because the two kinds of edit have completely different blast
-     * radius. Config-class fields (name / schedule / webhook / backfill-off) are a single in-place
-     * write; provisioning-class fields (auth / inputs / backfill-on) re-verify, re-discover, and
-     * reconcile. See {@code knowledge-edit-design.md}.
+     * Routes by what changed: config fields are one in-place write; auth, inputs and backfill-on re-verify,
+     * re-discover and reconcile.
      */
     @Override
     public Knowledge update(String id, KnowledgePatch patch) {
         Knowledge current = knowledge.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("No knowledge with id " + id));
 
-        // Two hard rules, independent of what changed.
         if (current.status() == KnowledgeStatus.DELETED) {
             throw new IllegalStateException("A DELETED knowledge cannot be edited");
         }
@@ -160,13 +140,12 @@ public class DefaultKnowledgeService implements KnowledgeService {
             throw new IllegalArgumentException(
                     "connectorDetails.type is immutable; delete and recreate to change connector");
         }
-        // Only a cron this edit sends is checked. Validating the merged record would also reject a cron
-        // stored before this check existed, and so block the unrelated edits (or the new cron) that fix it.
+        // Only a cron this edit sends is checked: a cron stored before validation existed must not block the
+        // edit that fixes it.
         if (patch.schedule().cron().present()) {
             ScheduleResolver.requireValidCron(patch.schedule().cron().value());
         }
 
-        // Classify the edit by diffing the patch against the stored record.
         boolean authChanged = patch.auth().present() && patch.auth().value() != null
                 && !patch.auth().value().equals(current.connectorDetails().auth());
         boolean inputsChanged = patch.inputs().present() && patch.inputs().value() != null
@@ -176,8 +155,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
 
         Knowledge updated = applyPatch(current, patch, Instant.now());
 
-        // auth / inputs / backfill-off→on can change WHAT is fetched and WHICH items belong, so they
-        // run the re-provision pipeline. Everything else is an in-place config write.
         boolean provisioning = authChanged || inputsChanged || backfillTurnedOn;
         if (!provisioning) {
             return applyConfigEdit(current, updated);
@@ -187,21 +164,17 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return reprovision(current, updated, membershipChanged);
     }
 
-    /** Build the edited record by overlaying only the patch's present fields onto {@code current}. */
     private Knowledge applyPatch(Knowledge current, KnowledgePatch patch, Instant now) {
-        // auth and inputs have no null state — a cleared one would be a source with no credentials
-        // and no scope, which is not an edit anyone means. The DTO rejects it; this keeps a direct
-        // caller from writing one by accident.
         Map<String, Object> auth = orCurrent(patch.auth(), current.connectorDetails().auth());
         Knowledge.ConnectorDetails cd = new Knowledge.ConnectorDetails(
                 current.connectorDetails().type(),
-                current.connectorDetails().connectionId(), // connection binding is stable across edits
+                current.connectorDetails().connectionId(), // the connection binding is not editable
                 auth);
 
         Knowledge.Config cur = current.config();
         Knowledge.ScheduleSettings schedule = new Knowledge.ScheduleSettings(
-                // A null cron here is a real instruction: it is how the console moves a source off a
-                // custom schedule and back onto a preset interval.
+                // A null cron is a real instruction: it moves a source off a custom schedule back onto an
+                // interval.
                 patch.schedule().cron().orElse(cur.scheduleSettings().cron()),
                 patch.schedule().interval().orElse(cur.scheduleSettings().interval()),
                 flag(patch.schedule().enabled(), cur.scheduleSettings().enabled()));
@@ -211,8 +184,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         Knowledge.Backfill backfill = new Knowledge.Backfill(
                 flag(patch.backfillEnabled(), cur.backfill().enabled()));
 
-        // Chunking is a config-class edit: overlay only the provided leaves onto the current settings.
-        // No membership impact and no re-chunk — new chunks use it, existing chunks are left as-is.
+        // No re-chunk: only new chunks use the settings.
         Knowledge.ChunkingSettings curChunk = cur.chunking();
         Knowledge.ChunkingSettings chunking = new Knowledge.ChunkingSettings(
                 patch.chunking().strategy().orElse(curChunk.strategy()),
@@ -220,8 +192,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 patch.chunking().overlap().orElse(curChunk.overlap()),
                 patch.chunking().separators().orElse(curChunk.separators()));
 
-        // Retention is a config-class edit like chunking: it changes only what a later sweep removes,
-        // never what is ingested. Absent from the patch means keep the current window (not "clear it").
         Knowledge.Retention retention = new Knowledge.Retention(
                 patch.retentionPeriod().orElse(cur.retention().period()));
 
@@ -231,22 +201,16 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 orCurrent(patch.inputs(), current.inputs()), config, now);
     }
 
-    /**
-     * A patched flag, where clearing it is meaningless: the settings records hold primitives, and an
-     * unboxing NPE is not an answer to "the caller sent null".
-     */
     private static boolean flag(Patched<Boolean> patched, boolean current) {
         Boolean value = patched.orElse(current);
         return value == null ? current : value;
     }
 
-    /** A patched value for a field that cannot be empty: a cleared one keeps what is stored. */
     private static <T> T orCurrent(Patched<T> patched, T current) {
         T value = patched.orElse(current);
         return value == null ? current : value;
     }
 
-    /** True when the resolved cadence (custom cron/interval) changed and must be re-resolved. */
     private static boolean cadenceChanged(Knowledge a, Knowledge b) {
         Knowledge.ScheduleSettings sa = a.config().scheduleSettings();
         Knowledge.ScheduleSettings sb = b.config().scheduleSettings();
@@ -260,21 +224,15 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 connector.membershipSignature(updated.inputs()));
     }
 
-    /**
-     * Config-class edit: a single in-place write, plus at most a small scheduling side-effect. None
-     * of these change what is fetched or how an item is identified, so no source calls and no cursor
-     * disruption.
-     */
     private Knowledge applyConfigEdit(Knowledge current, Knowledge updated) {
         Knowledge toSave = updated;
-        // A cadence change clears nextSyncDueAt (→ null = "due now") so ForwardCursorScheduler
-        // re-resolves the cadence on its next tick instead of waiting out the old due time.
+        // Clearing nextSyncDueAt (null is due now) makes ForwardCursorScheduler re-resolve the cadence on its
+        // next tick.
         if (cadenceChanged(current, updated)) {
             toSave = toSave.withNextSyncDueAt(null);
         }
         knowledge.save(toSave);
 
-        // scheduleEnabled false→true: re-arm forward cursors so sync resumes promptly.
         if (!current.config().scheduleSettings().enabled()
                 && updated.config().scheduleSettings().enabled()) {
             triggerSync(current.id());
@@ -283,45 +241,38 @@ public class DefaultKnowledgeService implements KnowledgeService {
     }
 
     /**
-     * Provisioning-class edit: pause → re-verify → re-discover → reconcile → restore status. Reuses
-     * the existing add/reconcile machinery. The anchor stays fixed across the edit, so forward still
-     * means {@code >= anchor} and backward {@code < anchor} — no gap or overlap is introduced.
+     * The anchor never moves here: forward stays >= anchor and backward < anchor, so the edit opens no gap or
+     * overlap.
      */
     private Knowledge reprovision(Knowledge current, Knowledge updated, boolean membershipChanged) {
         String id = current.id();
         KnowledgeStatus original = current.status();
 
-        // 1. Pause: park claimable cursors and hold the knowledge non-ACTIVE so nothing is leased
-        //    mid-change. Persist the edited config now (mirrors add: the record reflects the attempt;
-        //    a verify failure below then lands it in ERROR without discarding what the user submitted).
+        // Pause first so nothing is leased mid-change. The edited config is persisted now, so a failed verify
+        // below lands in ERROR without losing what was submitted.
         cursors.suspendByKnowledge(id);
         Knowledge held = updated.withStatus(KnowledgeStatus.PAUSED);
         knowledge.save(held);
 
         try {
             SourceConnector connector = connectors.get(held.connectorDetails().type());
-            verifyConnectionIfRequired(connector, held);             // resolve + verify the connection
-            connector.verify(held);                                  // bad inputs → throw → ERROR
+            verifyConnectionIfRequired(connector, held);
+            connector.verify(held);
             List<SourceIterable> iterables = discover(held, DiscoveryTrigger.RECONCILE);
 
-            // 3.1 Iterable-level reconcile — but PARK, don't purge, on shrink (design §3.1).
             DirCounts created = createCursors(held, iterables);
             DirCounts revived = reviveReappearedIterables(held, iterables);
             DirCounts parked = parkDisappearedIterables(held, iterables);
             refreshIterableNames(held, iterables);
 
-            // 3.2 Within-iterable membership re-walk when the signature moved (design §3.2). Bump the
-            //     generation and persist it BEFORE resetting cursors, so the async re-walk stamps
-            //     freshly-seen entities at the new value and narrowed-out ones are left behind.
+            // Bump the generation and persist it before resetting cursors, so the re-walk stamps freshly-seen
+            // entities with the new value and narrowed-out ones are left behind.
             Knowledge effective = held;
             if (membershipChanged) {
                 effective = held.bumpGeneration().withStatus(KnowledgeStatus.PAUSED);
                 knowledge.save(effective);
-                // A re-walk is the one moment the whole corpus passes back through ingestion, so for a
-                // connector that stages a copy of its content it is also the cheapest chance to
-                // refresh those copies. Flagged before the rewind for the same reason the generation
-                // is persisted before it: a cursor that starts walking first would skip these items on
-                // an unchanged checksum and leave them pointing at a file that may be gone.
+                // Flag stale staged copies before the rewind: a cursor that walks first would skip them on an
+                // unchanged checksum.
                 if (refetchPolicy.refetches(effective)) {
                     int flagged = entities.flagNeedsRefetchByKnowledge(id);
                     if (flagged > 0) {
@@ -335,9 +286,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
             recordDiscovery(effective, DiscoveryTrigger.RECONCILE, iterables.size(),
                     created, revived, parked);
 
-            // 5. Restore status. A knowledge that was PAUSED stays parked — its freshly created/
-            //    revived/re-walked cursors are parked too so the ingestion loop won't pick them up.
-            //    Anything else ends ACTIVE with its cursors re-armed.
+            // A PAUSED knowledge stays parked, new cursors included; anything else ends ACTIVE with its
+            // cursors re-armed.
             if (original == KnowledgeStatus.PAUSED) {
                 cursors.suspendByKnowledge(id);
             } else {
@@ -355,12 +305,9 @@ public class DefaultKnowledgeService implements KnowledgeService {
     }
 
     /**
-     * Park (retire) the cursors of iterables that {@code discover} no longer returns — but, unlike
-     * the dynamic-discovery reconcile, WITHOUT purging their chunks/entities. On an edit the framework
-     * can't tell an intentional narrowing from an accidental scope/account drop, so the data is kept
-     * and stays searchable; the deferred Phase 2 purge removes it deliberately. Using {@code RETIRED}
-     * (not {@code SUSPENDED}) keeps them out of the end-of-flow resume and lets the existing revive
-     * path bring them back automatically if the iterable returns.
+     * Unlike the discovery reconcile, parks without purging: an edit cannot tell an intentional narrowing
+     * from an accidental scope drop. RETIRED rather than SUSPENDED keeps them out of the end-of-flow resume
+     * and lets revive bring them back.
      */
     private DirCounts parkDisappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
         Set<String> liveIds = new HashSet<>();
@@ -382,15 +329,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
     }
 
     /**
-     * Re-walk every live iterable after a membership-signature change: rewind both its cursors to the
-     * start so the async ingestion loop re-covers the full range under the new rule — backward
-     * re-covers {@code < anchor}, forward re-covers {@code [anchor, now]}. Change-detection makes this
-     * cheap: every unchanged, already-{@code INDEXED} item is skipped (no re-embed) and only its
-     * generation mark is touched.
-     *
-     * <p>Backfill caveat (design §3.2): reaching historical adds below the anchor needs a backward
-     * cursor. When backfill is off there is none, so this is a forward-only re-walk that still catches
-     * adds in {@code [anchor, now]}; temporarily creating a backward cursor for the walk is deferred.
+     * Rewinds both cursors of every live iterable; unchanged items are skipped and only re-stamped. With
+     * backfill off there is no backward cursor, so items below the anchor are not re-covered.
      */
     private void rewalkForMembershipChange(Knowledge kn, List<SourceIterable> iterables) {
         Set<String> liveIds = new HashSet<>();
@@ -417,7 +357,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return knowledge.findAll().stream().map(this::withFreshStats).toList();
     }
 
-    /** Page size applied when the caller asks for none, and the ceiling any request is clamped to. */
     private static final int DEFAULT_PAGE = 50;
     private static final int MAX_PAGE = 200;
 
@@ -428,8 +367,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
             throw new IllegalArgumentException("offset must not be negative: " + offset);
         }
         int size = limit <= 0 ? DEFAULT_PAGE : Math.min(limit, MAX_PAGE);
-        // Count through the same query the page is fetched with: a total that ignored a filter would
-        // leave the console paging into empty pages.
         EntityQuery effective = query == null ? EntityQuery.all() : query;
         long total = entities.countByKnowledge(id, effective);
         return new EntityPage(entities.findByKnowledge(id, effective, size, offset), total, size, offset);
@@ -438,8 +375,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
     @Override
     public List<Cursor> listCursors(String id) {
         requireExists(id);
-        // Sorted here rather than in the repository: findByKnowledge is on the reconcile/retire path,
-        // and a read-only console view shouldn't add an ordering guarantee to that contract.
         return cursors.findByKnowledge(id).stream()
                 .sorted(Comparator.comparing(Cursor::iterableId, Comparator.nullsLast(Comparator.naturalOrder()))
                         .thenComparing(Cursor::direction, Comparator.nullsLast(Comparator.naturalOrder())))
@@ -452,12 +387,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         }
     }
 
-    /**
-     * Overlay freshly-computed rollup counters onto a knowledge. Stats are derived and
-     * reporting-only, so rather than maintain them on the (hot) ingestion/indexing write path — which
-     * would mean recomputing on every entity — we compute them here, on the comparatively rare read.
-     * The counts are three indexed {@code entities} queries; always accurate, never stale.
-     */
+    /** Computed on read rather than maintained on the hot ingestion and indexing path. */
     private Knowledge withFreshStats(Knowledge kn) {
         long total = entities.countByKnowledge(kn.id());
         long indexed = entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.INDEXED);
@@ -468,23 +398,23 @@ public class DefaultKnowledgeService implements KnowledgeService {
     @Override
     public void pause(String id) {
         knowledge.updateStatus(id, KnowledgeStatus.PAUSED);
-        cursors.suspendByKnowledge(id); // park claimable cursors so they can't starve active knowledge
+        cursors.suspendByKnowledge(id);
     }
 
     @Override
     public void resume(String id) {
         knowledge.updateStatus(id, KnowledgeStatus.ACTIVE);
-        cursors.resumeByKnowledge(id); // re-arm cursors parked while paused
+        cursors.resumeByKnowledge(id);
     }
 
     @Override
     public void delete(String id) {
-        knowledge.updateStatus(id, KnowledgeStatus.DELETED); // stop scheduling immediately
-        index.deleteByKnowledge(id);                          // remove derived chunks
-        entities.deleteByKnowledge(id);                       // remove canonical entities
-        cursors.deleteByKnowledge(id);                        // remove cursors
-        discoveryStatus.deleteByKnowledge(id);                // remove discovery-status record(s)
-        knowledge.delete(id);                                 // finally drop the knowledge record
+        knowledge.updateStatus(id, KnowledgeStatus.DELETED); // first, so nothing is scheduled mid-cascade
+        index.deleteByKnowledge(id);
+        entities.deleteByKnowledge(id);
+        cursors.deleteByKnowledge(id);
+        discoveryStatus.deleteByKnowledge(id);
+        knowledge.delete(id);
     }
 
     @Override
@@ -499,7 +429,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
             return 0;
         }
         Knowledge kn = known.get();
-        // One discover serves all three reconciliation steps below (records its outcome/failure).
         List<SourceIterable> iterables = discover(kn, DiscoveryTrigger.RECONCILE);
 
         DirCounts created = createCursors(kn, iterables);
@@ -516,12 +445,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return created.total();
     }
 
-    /**
-     * Re-snapshot the display name of every live iterable onto its cursors. Names are cosmetic, so
-     * this is a plain unfenced write on any status — losing a race with a worker costs nothing, and
-     * the next pass corrects it anyway. It exists for two cases: a source-side rename (a Drive folder
-     * or Gmail label), and cursors written before names were stored at all, which it backfills.
-     */
+    /** Names are cosmetic, so this write is unfenced: losing a race to a worker costs nothing. */
     private void refreshIterableNames(Knowledge kn, List<SourceIterable> iterables) {
         Map<String, String> names = new HashMap<>();
         iterables.forEach(it -> names.put(it.iterableId(), it.displayName()));
@@ -533,7 +457,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
         }
     }
 
-    /** Revive cursors retired for an iterable that has since reappeared, refreshing their attributes. */
     private DirCounts reviveReappearedIterables(Knowledge kn, List<SourceIterable> iterables) {
         Map<String, Map<String, Object>> live = new HashMap<>();
         iterables.forEach(it -> live.put(it.iterableId(), it.attributes()));
@@ -552,17 +475,12 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return new DirCounts(backward, forward);
     }
 
-    /**
-     * Retire cursors whose iterable no longer exists at the source, and purge that iterable's
-     * indexed data (chunks) and canonical entities first. Idempotent: already-retired or
-     * currently-running cursors are skipped and caught on a later pass.
-     */
+    /** Idempotent: retired and running cursors are skipped and caught on a later pass. */
     private DirCounts retireDeletedIterables(Knowledge kn, List<SourceIterable> iterables) {
         Set<String> liveIds = new HashSet<>();
         iterables.forEach(it -> liveIds.add(it.iterableId()));
         List<Cursor> all = cursors.findByKnowledge(kn.id());
 
-        // Distinct iterables that are gone but still have a retire-able (non-RETIRED, non-running) cursor.
         Set<String> goneIterables = new LinkedHashSet<>();
         for (Cursor c : all) {
             if (!liveIds.contains(c.iterableId())
@@ -570,7 +488,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 goneIterables.add(c.iterableId());
             }
         }
-        // Purge derived chunks then canonical entities (same order as the knowledge-delete cascade).
         for (String iterableId : goneIterables) {
             index.deleteByIterable(kn.id(), iterableId);
             entities.deleteByKnowledgeAndIterable(kn.id(), iterableId);
@@ -589,12 +506,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return new DirCounts(backward, forward);
     }
 
-    /**
-     * Run {@code connector.discover}, recording a {@code FAILED} discovery status for each of the
-     * knowledge's active grabber directions before rethrowing — so a failed enumeration is always
-     * inspectable from the {@code discovery} collection (not just the log). On success the caller
-     * records the {@code OK} runs once it knows the per-direction cursor counts.
-     */
     private List<SourceIterable> discover(Knowledge kn, DiscoveryTrigger trigger) {
         SourceConnector connector = connectors.get(kn.connectorDetails().type());
         try {
@@ -608,7 +519,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
         }
     }
 
-    /** Record one discovery status per active grabber direction, attributing each its own counts. */
     private void recordDiscovery(Knowledge kn, DiscoveryTrigger trigger, int iterablesFound,
                                  DirCounts created, DirCounts revived, DirCounts retired) {
         for (CursorDirection direction : activeGrabberDirections(kn)) {
@@ -618,12 +528,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         }
     }
 
-    /**
-     * The grabber directions this knowledge actually runs — and therefore the discovery records it
-     * has: a forward grabber whenever the source supports it, and a backward grabber only when the
-     * source supports it <em>and</em> backfill is enabled. Mirrors exactly which cursors
-     * {@link #createCursors} makes, so a record exists per real grabber and no phantom one.
-     */
+    /** Must mirror the cursors {@link #createCursors} makes. */
     private List<CursorDirection> activeGrabberDirections(Knowledge kn) {
         var supported = connectors.get(kn.connectorDetails().type()).supportedDirections();
         boolean backfill = kn.config().backfill() != null && kn.config().backfill().enabled();
@@ -638,9 +543,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
     }
 
     /**
-     * Create cursors for every (iterable × supported direction) the source exposes. Idempotent:
-     * deterministic cursor ids + {@code insertIfAbsent} mean re-running only adds cursors for
-     * iterables that appeared since last time. Returns the newly-created cursors split by direction.
+     * Idempotent: deterministic cursor ids and insertIfAbsent only add cursors for iterables that are new.
      */
     private DirCounts createCursors(Knowledge kn, List<SourceIterable> iterables) {
         var supported = connectors.get(kn.connectorDetails().type()).supportedDirections();
@@ -648,12 +551,10 @@ public class DefaultKnowledgeService implements KnowledgeService {
         int backward = 0;
         int forward = 0;
         for (SourceIterable iterable : iterables) {
-            // Backward (history) only if the source supports it AND backfill is enabled.
             if (backfill && supported.contains(CursorDirection.BACKWARD)
                     && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.BACKWARD))) {
                 backward++;
             }
-            // Forward (incremental) whenever the source supports it.
             if (supported.contains(CursorDirection.FORWARD)
                     && cursors.insertIfAbsent(newCursor(kn, iterable, CursorDirection.FORWARD))) {
                 forward++;
@@ -662,7 +563,6 @@ public class DefaultKnowledgeService implements KnowledgeService {
         return new DirCounts(backward, forward);
     }
 
-    /** Per-direction tallies for the grabber-scoped discovery records. */
     private record DirCounts(int backward, int forward) {
         static DirCounts zero() {
             return new DirCounts(0, 0);
@@ -682,8 +582,8 @@ public class DefaultKnowledgeService implements KnowledgeService {
                 Ids.cursorFor(kn.id(), iterable.iterableId(), direction.name()),
                 kn.id(),
                 iterable.iterableId(),
-                iterable.displayName(), // what the console shows in place of the id
-                iterable.attributes(), // snapshot the grab() inputs so the runner needn't re-discover
+                iterable.displayName(),
+                iterable.attributes(),
                 direction,
                 CursorPosition.start(),
                 CursorStatus.AVAILABLE,

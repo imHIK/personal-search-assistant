@@ -14,9 +14,8 @@ import org.bson.BsonType;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Ensures the Mongo indexes the ingestion/indexing pipeline depends on exist at startup. Index
- * creation is idempotent, so this is safe to run on every boot. The unique
- * {@code (knowledgeId, externalId)} index on {@code entities} is what makes upserts dedupe.
+ * Idempotent, so it runs on every boot. The unique (knowledgeId, externalId) index on entities is what makes
+ * upserts dedupe.
  */
 @Singleton
 public class MongoIndexInitializer {
@@ -69,24 +68,20 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.ascending("retry.nextAttemptAt"));
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId", "status"));
-        // Sorted listing for the console's entity browser. The mixed asc/desc key order needs
-        // compoundIndex; _id is the paging tiebreak. The (knowledgeId, status) index above is a
-        // prefix of the second one and therefore redundant, but there is no drop path here and no
-        // migration framework, so it stays — see docs/mongodb-schema.md.
+        // The console's sorted entity listing; _id is the paging tiebreak. The (knowledgeId, status) index is
+        // now a redundant prefix, but there is no drop path.
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "status"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
-        // The same listing narrowed to one group (a company, a folder): without it, picking one company
-        // on a large job-board source walks every entity of the knowledge to find its rows.
+        // The listing narrowed to one group, which otherwise walks every entity of a large source.
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "iterableId"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
 
-        // Retention sweeps: source-declared expiry is a global scan, so it needs its own index;
-        // the window pass is always scoped to one knowledge.
+        // Source-declared expiry is a global scan; the window pass is always scoped to one knowledge.
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("expiresAt"));
         db.getCollection(MongoEntityRepository.COLLECTION)
@@ -102,9 +97,8 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("digestId"),
                         Indexes.descending("ranAt")));
 
-        // Publishing: the worker's claim query, a channel's delivery history newest-first, and the
-        // global history. dedupeKey is unique only where it is set — manual sends carry none and must
-        // never collide — which is what makes enqueueing idempotent for producers that do.
+        // The worker's claim query and the histories. dedupeKey is unique only where set, so manual sends
+        // never collide.
         db.getCollection(MongoChannelRepository.COLLECTION)
                 .createIndex(Indexes.ascending("enabled", "status"));
         // Deleting a connection is refused while a channel sends through it.

@@ -8,10 +8,6 @@ import java.util.EnumMap;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Discovers all {@link Publisher} beans via CDI and indexes them by type. Adding a platform = adding a
- * bean; no edits here.
- */
 @ApplicationScoped
 public class CdiPublisherRegistry implements PublisherRegistry {
 

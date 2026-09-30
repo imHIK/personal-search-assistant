@@ -11,17 +11,9 @@ import org.commonmark.parser.Parser;
 import org.commonmark.renderer.html.HtmlRenderer;
 
 /**
- * Renders a {@link PublishMessage} as an email: an inline-styled HTML body and a plain-text twin.
- *
- * <p>Hand-built rather than templated. The layout is one fixed shape — header, optional summary, a list
- * of results, a button back to the console — and a template engine would be a dependency for it. The
- * markup is deliberately old-fashioned: nested presentation tables and inline styles, because Gmail strips
- * {@code <style>} blocks and Outlook ignores most of modern CSS layout. Anything cleverer renders
- * differently in every inbox.
- *
- * <p>Everything in a message ultimately comes from indexed content or a model's reply, so every string is
- * escaped and only {@code http(s)} links are emitted. A {@code javascript:} or {@code file:} URI from a
- * crawled page is dropped rather than made clickable.
+ * Hand-built with nested tables and inline styles, because Gmail strips style blocks and Outlook ignores
+ * modern CSS layout. Everything is escaped and only http(s) links are emitted: the content is indexed text or
+ * model output.
  */
 @ApplicationScoped
 public class EmailRenderer {
@@ -31,10 +23,9 @@ public class EmailRenderer {
     private static final String BRAND = "Personal Search Assistant";
     private static final String FALLBACK_SUBJECT = "Update from " + BRAND;
 
-    /** Result titles shown in the inbox preview line, before it becomes a list nobody reads. */
+    /** Result titles in the inbox preview line. */
     private static final int PREHEADER_TITLES = 3;
 
-    // Palette, in one place so the whole message can be re-toned together.
     private static final String PAGE = "#f3f4f6";
     private static final String CARD = "#ffffff";
     private static final String BORDER = "#e5e7eb";
@@ -52,12 +43,8 @@ public class EmailRenderer {
     private static final Parser MARKDOWN = Parser.builder().build();
 
     /**
-     * {@code escapeHtml} keeps raw HTML in a model's reply as visible text rather than markup, and
-     * {@code sanitizeUrls} drops {@code javascript:} and other non-web link targets — the summary is model
-     * output over indexed content, and gets no more trust than the rest of the message. The attribute
-     * provider inlines a style on each element, since a mail client will not apply a stylesheet: a model
-     * that answers with {@code ## Heading} would otherwise get a browser-default 24px heading inside a
-     * 14px panel.
+     * escapeHtml keeps raw HTML in a model's reply as text, and sanitizeUrls drops non-web links: the summary
+     * gets no more trust than the rest. Styles are inlined because mail clients ignore stylesheets.
      */
     private static final HtmlRenderer MARKDOWN_HTML = HtmlRenderer.builder()
             .escapeHtml(true)
@@ -70,9 +57,7 @@ public class EmailRenderer {
             })
             .build();
 
-    /**
-     * @param subjectPrefix prepended to the subject, e.g. {@code "[digest]"}; null for none
-     */
+    /** @param subjectPrefix null for none */
     public RenderedEmail render(PublishMessage message, String subjectPrefix) {
         return new RenderedEmail(subject(message, subjectPrefix), html(message), text(message));
     }
@@ -80,17 +65,15 @@ public class EmailRenderer {
     private static String subject(PublishMessage message, String prefix) {
         String title = blank(message.title()) ? FALLBACK_SUBJECT : message.title();
         String subject = blank(prefix) ? title : prefix.trim() + " " + title;
-        // A newline in a header value is header injection; a subject is one line by definition.
+        // A newline in a header value is header injection.
         return subject.replaceAll("[\\r\\n]+", " ").trim();
     }
-
-    // ---- HTML ------------------------------------------------------------------------------------------
 
     private static String html(PublishMessage message) {
         StringBuilder out = new StringBuilder();
         String preheader = preheader(message);
         if (preheader != null) {
-            // The inbox list shows the first text in the body. Without this that is the brand line.
+            // The inbox list shows the first text in the body; without this, that is the brand line.
             out.append("<div style=\"display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;"
                     + "mso-hide:all\">").append(escape(preheader)).append("</div>");
         }
@@ -178,7 +161,7 @@ public class EmailRenderer {
                     .append(escape(host)).append("</div>");
         }
         if (!item.fields().isEmpty()) {
-            // Before the excerpt, as the console orders them: what the task concluded leads the row.
+            // What the task concluded leads the row, as in the console.
             out.append("<div style=\"margin-top:8px;\">");
             for (Map.Entry<String, Object> field : item.fields().entrySet()) {
                 out.append("<span style=\"display:inline-block;margin:0 6px 6px 0;padding:2px 9px;border-radius:999px;"
@@ -212,7 +195,6 @@ public class EmailRenderer {
         return "<tr><td style=\"font-family:" + FONT + ";" + style + "\">";
     }
 
-    /** Inline styles for the elements a Markdown summary produces; null leaves an element as rendered. */
     private static String markdownStyle(String tagName) {
         return switch (tagName) {
             case "h1", "h2", "h3", "h4", "h5", "h6" ->
@@ -228,8 +210,6 @@ public class EmailRenderer {
         };
     }
 
-    // ---- plain text ------------------------------------------------------------------------------------
-
     private static String text(PublishMessage message) {
         StringBuilder out = new StringBuilder();
         if (!blank(message.title())) {
@@ -241,7 +221,7 @@ public class EmailRenderer {
             out.append(intro).append("\n\n");
         }
         if (message.summary() != null) {
-            // Markdown is written to be read as it stands, which is what a plain-text part is for.
+            // Markdown reads as it stands, which suits a plain-text part.
             out.append("SUMMARY\n").append(message.summary().strip()).append("\n\n");
         }
         if (!message.items().isEmpty()) {
@@ -273,20 +253,12 @@ public class EmailRenderer {
         return out.toString().stripTrailing() + "\n";
     }
 
-    // ---- helpers ---------------------------------------------------------------------------------------
-
     /**
-     * An excerpt tidied for reading, or null when nothing readable is left.
-     *
-     * <p>Excerpts are raw extracted text, and extraction keeps whatever the source had: a Google Doc exports
-     * every empty paragraph as a {@code \r\n}, so a title followed by spacing paragraphs arrives as dozens
-     * of blank lines — rendered faithfully, that pushed the rest of a digest a screen further down and looked
-     * like the email had ended. So: line endings are normalised; control and invisible format characters
-     * (a byte-order mark, zero-width spaces) are dropped, except the zero-width joiners that emoji sequences
-     * and Indic scripts need; trailing spaces go; and any run of blank lines becomes one. Single line breaks
-     * are kept — a list or a table of dates still reads line by line.
+     * Extraction keeps the source's spacing (a Google Doc exports every empty paragraph as a line break),
+     * which pushed digests down a screen. Line endings are normalised, invisible characters dropped except
+     * the zero-width joiners emoji and Indic scripts need, and runs of blank lines collapsed; single line
+     * breaks stay.
      */
-    // Package-private for tests.
     static String clean(String text) {
         if (text == null) {
             return null;
@@ -312,7 +284,6 @@ public class EmailRenderer {
         return tidy.isEmpty() ? null : tidy;
     }
 
-    /** The inbox preview line: the intro if there is one, else the first few result titles. */
     private static String preheader(PublishMessage message) {
         String intro = clean(message.intro());
         if (intro != null) {
@@ -331,7 +302,6 @@ public class EmailRenderer {
         return titles.isEmpty() ? null : String.join(" · ", titles);
     }
 
-    /** A link's host without {@code www.}, so a reader can see where a result lives before opening it. */
     private static String host(String safeUri) {
         if (safeUri == null) {
             return null;
@@ -348,8 +318,7 @@ public class EmailRenderer {
         return value == null ? null : value.replaceAll("\\s*\\n\\s*", " ").strip();
     }
 
-    /** The URI if it is an absolute http(s) link, else null. */
-    // Package-private for tests.
+    /** The URI when it is an absolute http(s) link, else null. */
     static String safeUri(String uri) {
         if (blank(uri)) {
             return null;

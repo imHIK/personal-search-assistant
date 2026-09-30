@@ -26,7 +26,6 @@ import java.util.Set;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link DigestRepository} over the {@code digests} and {@code digestRuns} collections. */
 @ApplicationScoped
 public class MongoDigestRepository implements DigestRepository {
 
@@ -79,8 +78,7 @@ public class MongoDigestRepository implements DigestRepository {
 
     @Override
     public List<Digest> findDue(Instant now, int limit) {
-        // A null nextRunAt means "never run, due now" — a freshly created digest must not wait a whole
-        // interval before its first run.
+        // A null nextRunAt is due now: a new digest must not wait a whole interval.
         var filter = and(eq("enabled", true),
                 or(eq("nextRunAt", null), lte("nextRunAt", BsonSupport.date(now))));
         List<Digest> out = new ArrayList<>();
@@ -133,11 +131,9 @@ public class MongoDigestRepository implements DigestRepository {
 
     @Override
     public Set<String> reportedEntityIds(String digestId, Instant since) {
-        // Projected to the ids alone: a run document also carries titles and snippets, and the whole
-        // history is read on every run, so paging the full documents back would grow with the digest's
-        // age for data this query does not use.
+        // Ids only: this runs on every digest run, over the whole history.
         Set<String> out = new LinkedHashSet<>();
-        // The (digestId, ranAt) index already covers the bounded form, so a reset costs nothing.
+        // Served by the (digestId, ranAt) index.
         var filter = since == null ? eq("digestId", digestId)
                 : and(eq("digestId", digestId), gte("ranAt", BsonSupport.date(since)));
         runs().find(filter)
@@ -162,8 +158,6 @@ public class MongoDigestRepository implements DigestRepository {
     public void deleteRuns(String digestId) {
         runs().deleteMany(eq("digestId", digestId));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Digest d) {
         return new Document("_id", d.id())
@@ -215,7 +209,7 @@ public class MongoDigestRepository implements DigestRepository {
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
                 BsonSupport.instant(d.get("historyResetAt")),
-                // Absent on digests written before they could publish: those send nowhere.
+                // Absent on digests written before channels existed: they send nowhere.
                 d.get("channelIds") == null ? List.of() : stringList(d.get("channelIds")));
     }
 
@@ -268,7 +262,7 @@ public class MongoDigestRepository implements DigestRepository {
                 // Runs recorded before the counters existed report what they can: the items they kept.
                 d.get("candidates") instanceof Number n ? n.intValue() : items.size(),
                 d.get("suppressed") instanceof Number n ? n.intValue() : 0,
-                // Absent on every run written before the window diagnostic existed.
+                // Absent on runs written before the window diagnostic existed.
                 d.get("outsideWindow") instanceof Number n ? n.intValue() : 0,
                 d.getString("error"),
                 d.getString("taskError"));

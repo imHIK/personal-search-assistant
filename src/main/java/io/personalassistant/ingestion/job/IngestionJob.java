@@ -23,23 +23,10 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Stage 1 driver. On each tick it pulls a batch of claimable cursors and, for each, tries to
- * acquire a scoped concurrency permit, atomically lease the cursor, and hand it to the
- * {@link IngestionRunner}. Direction is irrelevant here — backward and forward cursors are
- * treated identically; the runner decides the resting status.
- *
- * <p>The poll loop is intentionally simple: anything it can't start this tick (no permit, lost
- * the lease race) is simply retried next tick. Job mechanism is Mongo polling for now; the stage
- * boundary keeps a later swap to a broker from touching connectors.
- *
- * <p><b>Eligibility is decided before the query, not after it.</b> A cursor this loop skips is not
- * written, so its {@code lastRunAt} never advances and it stays at the head of the least-recently-run
- * ordering. Filtered only in {@link #tryRun}, twenty skipped cursors — an orphan left by a delete that
- * raced activation, a knowledge in {@code ERROR}, a source whose token expired — would fill every
- * batch and silently stop all ingestion (it did, for a week). So the batch is drawn only from
- * {@code ACTIVE} knowledges whose connection is usable, plus {@code PAUSED} ones: those still need to
- * reach the backstop in {@code tryRun}, which parks them and so takes them out of the batch itself.
- * The checks in {@code tryRun} stay, for a knowledge that changes between the listing and the claim.
+ * Anything it cannot start this tick (no permit, lost the lease race) is retried next tick. Eligibility is
+ * decided in the query, not after it: a skipped cursor is never written, so it stays at the head of the
+ * least-recently-run order, and enough of them would fill every batch and stop all ingestion. The batch comes
+ * from ACTIVE knowledges with a usable connection, plus PAUSED ones, which tryRun parks.
  */
 @ApplicationScoped
 public class IngestionJob {
@@ -66,8 +53,7 @@ public class IngestionJob {
     @ConfigProperty(name = "app.ingestion.permits.knowledge", defaultValue = "2")
     int knowledgeMax;
 
-    // Sized to the cursor lease: the permit is renewed per page alongside the lease, so it must
-    // outlive a single page just as the lease does (keep >= app.ingestion.lease-seconds).
+    // The permit is renewed per page with the lease, so its TTL must be at least app.ingestion.lease-seconds.
     @ConfigProperty(name = "app.ingestion.permits.ttl-seconds", defaultValue = "14400")
     long permitTtlSeconds;
 
@@ -95,7 +81,6 @@ public class IngestionJob {
         }
     }
 
-    /** Knowledges whose cursors may enter the claim batch — see the class javadoc for why PAUSED is in. */
     private List<String> eligibleKnowledgeIds() {
         List<String> ids = new ArrayList<>();
         for (Knowledge kn : knowledge.findByStatus(KnowledgeStatus.ACTIVE)) {
@@ -110,14 +95,8 @@ public class IngestionJob {
     }
 
     /**
-     * Whether this knowledge's credentials are known to be bad, so running it would only burn a lease
-     * and a permit to fail. {@code ConnectionHealthScheduler} is what marks a connection {@code ERROR};
-     * an expired Google refresh token otherwise fails on every single tick, forever.
-     *
-     * <p>Deliberately derived rather than stored: nothing is paused and no knowledge state is written,
-     * so a connection that starts working again resumes sync by itself — and a user's own pause is
-     * never fought over. Any doubt (missing connection, unknown type, lookup failure) runs the
-     * knowledge as before: this is an optimisation, and it must never be the reason a sync stops.
+     * Derived, not stored: nothing is paused, so a connection that works again resumes by itself. Any doubt
+     * runs the knowledge; this is an optimisation and must never be the reason a sync stops.
      */
     private boolean connectionUnusable(Knowledge kn) {
         try {
@@ -134,19 +113,18 @@ public class IngestionJob {
     private void tryRun(Cursor candidate) {
         Optional<Knowledge> kn = knowledge.findById(candidate.knowledgeId());
         if (kn.isEmpty()) {
-            return; // orphan cursor — the delete path owns its removal
+            return; // orphan cursor: the delete path owns its removal
         }
         if (kn.get().status() != KnowledgeStatus.ACTIVE) {
-            // Backstop: pause() parks a knowledge's cursors, but one that was IN_PROGRESS at pause
-            // time rests AVAILABLE when its lease ends and would otherwise re-pollute the batch.
-            // Park the whole knowledge's claimable cursors here too; resume() re-arms them.
+            // Backstop: a cursor IN_PROGRESS at pause time rests AVAILABLE when its lease ends, so park the
+            // knowledge's claimable cursors here too; resume() re-arms them.
             if (kn.get().status() == KnowledgeStatus.PAUSED) {
                 cursors.suspendByKnowledge(candidate.knowledgeId());
             }
-            return; // not active — don't run
+            return;
         }
         if (connectionUnusable(kn.get())) {
-            return; // credentials are known-bad; every page would fail
+            return;
         }
 
         List<ScopeLimit> limits = List.of(
@@ -156,7 +134,7 @@ public class IngestionJob {
 
         Optional<Permit> permit = permits.tryAcquire(limits, worker, Duration.ofSeconds(permitTtlSeconds));
         if (permit.isEmpty()) {
-            return; // at capacity for one of the scopes — try again next tick
+            return; // at capacity for a scope: next tick
         }
         try {
             Optional<Cursor> leased = cursors.claim(candidate.id(), worker, runner.leaseDuration());

@@ -1,14 +1,8 @@
 package io.personalassistant.publishing;
 
 /**
- * A send that did not happen, classified by whether trying again could help.
- *
- * <p>The split mirrors {@code CredentialsRejectedException} versus {@code OAuthTransportException} on
- * the connector side, for the same reason. A <em>transient</em> failure (timeout, a 4xx SMTP reply, a
- * refused connection) is retried with backoff and is nobody's fault. A <em>permanent</em> one (rejected
- * credentials, a recipient the server refuses) will fail identically on every attempt, so it parks the
- * channel in {@code ERROR} — which stops every other message queued for it from burning its attempts on
- * the same refusal — and waits for a person.
+ * Classified by whether retrying could help: a transient failure is retried with backoff; a permanent one
+ * parks the channel in ERROR, so its other deliveries stop spending attempts on the same refusal.
  */
 public class PublishException extends RuntimeException {
 

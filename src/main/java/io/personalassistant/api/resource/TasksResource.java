@@ -18,13 +18,6 @@ import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-/**
- * The task library: what a digest can be told to do with its results.
- *
- * <p>Two kinds of row come back. Bundled tasks ship in {@code config/prompts.json} and are read-only —
- * {@code answer} runs on every search answer, so an edit to it would degrade search with nothing to show
- * for it. Everything else is a user task, created here and stored in Mongo.
- */
 @Path("/api/tasks")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
@@ -48,11 +41,7 @@ public class TasksResource {
         }
     }
 
-    /**
-     * Create a task, or with {@code ?duplicateOf=} return an editable copy of an existing one
-     * <em>without</em> saving it — the console shows it in the editor and the user saves it, so an
-     * abandoned duplicate leaves nothing behind.
-     */
+    /** With {@code ?duplicateOf=}, returns an unsaved, editable copy of that task instead. */
     @POST
     public TaskDto create(@QueryParam("duplicateOf") String duplicateOf, TaskDto dto) {
         try {
@@ -62,7 +51,7 @@ public class TasksResource {
             return TaskDto.from(tasks.create(dto.toDomain()));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalArgumentException e) {          // invalid task, or a bad enum name
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
@@ -70,8 +59,6 @@ public class TasksResource {
     @PATCH
     @Path("/{id}")
     public TaskDto update(@PathParam("id") String id, JsonNode body) {
-        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
-        // this endpoint's contract, and binding loses it. TaskDto.patchOnto explains why.
         if (body == null || !body.isObject()) {
             throw ApiErrors.badRequest("a patch body is required");
         }
@@ -81,19 +68,13 @@ public class TasksResource {
             return TaskDto.from(tasks.get(id));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalStateException e) {             // built in, so read-only
+        } catch (IllegalStateException e) {
             throw ApiErrors.conflict(e.getMessage());
         } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
-    /**
-     * The stored task a patch is to be overlaid onto.
-     *
-     * <p>A bundled task has no stored row, so there is nothing to patch — the same {@code 409} the
-     * service raises, raised before reading the body rather than after.
-     */
     private Task requireEditable(String id) {
         TaskService.LibraryEntry entry = tasks.get(id);
         if (entry.builtIn() || entry.task() == null) {

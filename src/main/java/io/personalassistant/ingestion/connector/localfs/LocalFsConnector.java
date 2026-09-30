@@ -29,38 +29,11 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /**
- * Local filesystem connector. The {@code rootPath} input is partitioned into iterables — one per
- * immediate sub-directory (walked recursively) plus a {@code root} iterable for the files directly
- * under the root — so large trees page independently with no overlap.
- *
- * <p>Unlike the cloud connectors it does <em>not</em> extend {@code TokenWindowGrabber}: a filesystem has
- * no continuation token and no server-side time filter, so it implements {@link SourceConnector} directly and reads the walk's sense
- * (forward vs. backfill) from the seed {@link TimeWindow}'s shape.
- *
- * <h2>Why pagination is direction-specific</h2>
- * A filesystem exposes no index, so the only way to enumerate it is to walk it — and a walk visits
- * files in <em>path/tree</em> order, never in modified-time order. That mismatch drives the design:
- *
- * <ul>
- *   <li><b>Forward (incremental, {@code mtime >= anchor}).</b> Catching files changed since the
- *       anchor is inherently modified-time driven, so this direction is ordered by
- *       {@code (lastModified, path)} ascending. Because that key is <em>not</em> the walk order, the
- *       cursor cannot tell the walk where to resume — every page must visit the subtree. We keep
- *       that O(n) walk but make each page cheap: a single streaming pass feeds a bounded max-heap of
- *       size {@code maxItems}, so we select the next page in O(n·log&nbsp;cap) time and
- *       O(cap) memory — no full sort, no full materialisation.</li>
- *   <li><b>Backward (backfill, {@code mtime < anchor}).</b> History is a one-time complete sweep, so
- *       its order is free to choose. We order it by <em>path</em> (component-wise), which makes the
- *       cursor a path and lets the walk do real work: it skips every subtree already consumed and
- *       stops as soon as the page is full — O(cap) time and memory per page, no re-walk, no sort.
- *       The {@code mtime < anchor} predicate is still applied per file so files created after
- *       activation are left to the forward direction.</li>
- * </ul>
- *
- * <p>The pagination state is a two-field {@link CursorPosition} —
- * {@code {"lastModifiedMillis": <long>, "path": <string>}}. Forward reads both fields; backward
- * reads only {@code path}. File bytes are never loaded into the entity — each item carries a
- * {@code fileRef} the indexing stage reads.
+ * One iterable per immediate sub-directory (walked recursively), plus a root iterable for the files directly
+ * under the root. A filesystem has no index, so the direction decides the order. Forward ({@code mtime >=
+ * anchor}) needs mtime order, which is not walk order, so each page walks the subtree once into a bounded
+ * max-heap: O(n log cap) time, O(cap) memory. Backward ({@code mtime < anchor}) is a one-time sweep in path
+ * order, so its cursor is a path: the walk skips what it consumed and stops once the page is full.
  */
 @ApplicationScoped
 public class LocalFsConnector implements SourceConnector {
@@ -69,11 +42,10 @@ public class LocalFsConnector implements SourceConnector {
     private static final String PATH_KEY = "path";
     private static final String RECURSIVE_KEY = "recursive";
     private static final int DEFAULT_CAP = 100;
-    // CursorPosition field names this connector owns:
     private static final String POS_MILLIS = "lastModifiedMillis";
     private static final String POS_PATH = "path";
 
-    /** Total order used by the forward direction: oldest first, path as a stable tie-break. */
+    /** Oldest first, path as a stable tie-break. */
     private static final Comparator<FileKey> ASCENDING =
             Comparator.comparingLong(FileKey::millis).thenComparing(FileKey::path);
 
@@ -84,15 +56,12 @@ public class LocalFsConnector implements SourceConnector {
 
     @Override
     public boolean hasDynamicIterables() {
-        return true; // new sub-directories can appear under the root after activation
+        return true;
     }
 
     @Override
     public SyncSchedule defaultSchedule() {
-        // A filesystem has no push/change-feed, so incremental sync means re-walking the tree
-        // (see the forward-pagination notes above). That is relatively expensive, so the
-        // connector-level default is a gentle once-a-day re-arm; users wanting fresher sync can set
-        // a custom schedule on the knowledge, and webhooks/manual sync still trigger immediately.
+        // No change-feed: incremental sync re-walks the tree, so the default is a gentle daily re-arm.
         return SyncSchedule.ofInterval(Duration.ofDays(1));
     }
 
@@ -134,22 +103,16 @@ public class LocalFsConnector implements SourceConnector {
         if (!Files.isDirectory(dir)) {
             return GrabResult.end(position);
         }
-        // The window's shape is the sense of the walk: a lower-bounded window is the forward
-        // (mtime >= anchor) walk, an upper-bounded one the backfill (mtime < anchor). The bound itself
-        // is the anchor, so we never branch on a direction enum.
+        // The window's shape is the walk's sense; its bound is the anchor.
         TimeWindow window = ctx.seedWindow();
         return window.hasLo()
                 ? grabForward(dir, recursive, window.lo(), position, cap)
                 : grabBackward(dir, recursive, window.hi(), position, cap);
     }
 
-    // ---- forward: mtime order, single streaming pass + bounded heap --------------------------
-
     /**
-     * Selects the next {@code cap} files with {@code mtime >= anchor} that sort after the cursor,
-     * in ascending {@code (mtime, path)} order. One pass over the subtree feeds a bounded max-heap
-     * (the largest of the {@code cap} smallest sits on top and is evicted when a smaller key
-     * arrives), so we never sort or hold the whole subtree.
+     * One pass feeds a bounded max-heap whose top, the largest of the cap smallest, is evicted when a smaller
+     * key arrives.
      */
     private GrabResult grabForward(Path dir, boolean recursive, Instant anchor,
                                    CursorPosition position, int cap) {
@@ -189,7 +152,6 @@ public class LocalFsConnector implements SourceConnector {
                     long millis = Files.getLastModifiedTime(p).toMillis();
                     sink.accept(new FileKey(millis, p.toAbsolutePath().normalize().toString()));
                 } catch (IOException ignored) {
-                    // skip unreadable file
                 }
             });
         } catch (IOException e) {
@@ -197,13 +159,9 @@ public class LocalFsConnector implements SourceConnector {
         }
     }
 
-    // ---- backward: path order, cursor-skipping DFS with early stop ---------------------------
-
     /**
-     * Pages history in path order. The cursor is the last returned file's path; the DFS uses it to
-     * skip every entry already consumed (siblings sorted before the cursor, and the whole spine the
-     * cursor descended) and stops as soon as {@code cap + 1} files are collected — so each page
-     * touches only the cursor's path plus the next {@code cap} files, never the whole subtree again.
+     * The DFS skips everything the cursor path already consumed and stops at cap + 1 files, so a page touches
+     * only the cursor's path plus the next cap files.
      */
     private GrabResult grabBackward(Path dir, boolean recursive, Instant anchor,
                                     CursorPosition position, int cap) {
@@ -222,7 +180,6 @@ public class LocalFsConnector implements SourceConnector {
         return new GrabResult(toItems(page), encode(page.get(page.size() - 1)), hasMore);
     }
 
-    /** Cursor path relative to {@code dir}, split into name components, or {@code null} to start. */
     private static String[] spineComponents(Path dir, String cursorPath) {
         if (cursorPath == null) {
             return null;
@@ -241,9 +198,8 @@ public class LocalFsConnector implements SourceConnector {
     }
 
     /**
-     * Depth-first walk that emits files in component-wise path order, resuming after a cursor and
-     * short-circuiting once {@code limit} files are collected. {@code found} holds at most
-     * {@code limit} keys (= {@code cap + 1}, so the caller can detect {@code hasMore}).
+     * Emits files in component-wise path order, resuming after a cursor. {@code found} holds at most limit
+     * (cap + 1) keys, so the caller can detect hasMore.
      */
     private static final class BackwardWalk {
         private final Instant anchor;
@@ -259,7 +215,6 @@ public class LocalFsConnector implements SourceConnector {
             this.recursive = recursive;
         }
 
-        /** @return true once {@code limit} files are collected (signals callers to stop). */
         boolean descend(Path dir, int depth, boolean onSpine) {
             List<Path> children;
             try (Stream<Path> s = Files.list(dir)) {
@@ -276,8 +231,8 @@ public class LocalFsConnector implements SourceConnector {
                     if (cmp < 0) {
                         continue; // sorted before the cursor — already consumed
                     } else if (cmp == 0) {
-                        // on the cursor's spine: recurse still-on-spine into the matching directory;
-                        // a matching file is the cursor itself (or a prefix) and is skipped.
+                        // On the cursor's spine: recurse into the matching directory; a matching file is the
+                        // cursor itself and is skipped.
                         if (isDir && recursive && descend(child, depth + 1, !isLast)) {
                             return true;
                         }
@@ -301,7 +256,7 @@ public class LocalFsConnector implements SourceConnector {
             try {
                 millis = Files.getLastModifiedTime(file).toMillis();
             } catch (IOException e) {
-                return false; // skip unreadable file
+                return false;
             }
             if (!Instant.ofEpochMilli(millis).isBefore(anchor)) {
                 return false; // backward window is mtime < anchor
@@ -310,8 +265,6 @@ public class LocalFsConnector implements SourceConnector {
             return found.size() >= limit;
         }
     }
-
-    // ---- pagination state (source-defined) ---------------------------------------------------
 
     private static CursorPosition encode(FileKey k) {
         return CursorPosition.builder()
@@ -325,10 +278,8 @@ public class LocalFsConnector implements SourceConnector {
     }
 
     /**
-     * Re-stat one known file. Nothing here is a copy — {@code externalId} and {@code fileRef} are both
-     * the absolute path of the user's own file — so this connector stays {@code REINDEX_ONLY} and
-     * this is only reached when the operator has forced fetching on globally. It is still worth
-     * having: it is the one path that notices a file deleted under us, since no walk emits tombstones.
+     * Only reached when fetching is forced globally, but still the one path that notices a file deleted under
+     * us, since no walk emits tombstones.
      */
     @Override
     public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
@@ -343,8 +294,6 @@ public class LocalFsConnector implements SourceConnector {
             throw new IllegalStateException("Failed to stat " + path, e);
         }
     }
-
-    // ---- mapping & helpers -------------------------------------------------------------------
 
     private List<RawItem> toItems(List<FileKey> keys) {
         List<RawItem> items = new ArrayList<>(keys.size());
@@ -379,10 +328,8 @@ public class LocalFsConnector implements SourceConnector {
     }
 
     /**
-     * Cheap change-detection token from {@code (size, lastModified)} — an O(1) stat, no byte reads.
-     * Any normal edit changes the modified time (and usually the size), so the checksum changes and
-     * the entity is re-indexed. This mirrors the quick-check used by rsync/most file-sync tools and
-     * aligns with the mtime-ordered grabber (a modified file is re-grabbed because its mtime moved).
+     * Size and mtime from one stat, no byte reads: any normal edit moves the mtime, as rsync's quick check
+     * assumes.
      */
     private static String checksum(long sizeBytes, long lastModifiedMillis) {
         return "size:" + sizeBytes + ";mtime:" + lastModifiedMillis;
@@ -405,16 +352,13 @@ public class LocalFsConnector implements SourceConnector {
     }
 
     /**
-     * The type stored here is what picks the parser at indexing time, so a wrong answer silently changes
-     * how a file is extracted. {@link ContentTypes} sniffs name <em>and</em> bytes, unlike
-     * {@code Files.probeContentType} alone, which returns null for {@code .xlsx} on macOS and left every
-     * spreadsheet typed as {@code application/octet-stream}.
+     * ContentTypes sniffs the name and the bytes; {@code Files.probeContentType} alone returns null for .xlsx
+     * on macOS.
      */
     private static String probeContentType(Path path) {
         return ContentTypes.detect(path);
     }
 
-    /** Ordering key: last-modified millis + absolute path (for deterministic, stable paging). */
     record FileKey(long millis, String path) {
     }
 }

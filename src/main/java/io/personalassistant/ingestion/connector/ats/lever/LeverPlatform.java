@@ -15,14 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Lever job-board connector. One iterable per company handle (the {@code <site>} in
- * {@code jobs.lever.co/<site>}); {@code ?mode=json} returns the full posting list in one call.
- *
- * <p>Lever differs from Greenhouse in two ways that matter: it states dates as epoch millis rather
- * than ISO strings, and it exposes no update timestamp at all — only {@code createdAt}. See
- * {@link #checksumOf} for what that forces.
- */
 @ApplicationScoped
 public class LeverPlatform implements BoardPlatform {
 
@@ -56,8 +48,7 @@ public class LeverPlatform implements BoardPlatform {
 
     @Override
     public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
-        // Hint ignored: one request returns the whole board either way, so filtering
-        // early would save nothing. The connector filters what comes back.
+        // Hint ignored: one request returns the whole board either way.
         JsonNode postings = api.listPostings(boardId);
         List<RawItem> items = new ArrayList<>();
         for (JsonNode posting : postings) {
@@ -123,10 +114,8 @@ public class LeverPlatform implements BoardPlatform {
     }
 
     /**
-     * Lever publishes no {@code updatedAt}, so {@code createdAt} alone would never change and an
-     * edited posting would be skipped forever by change detection — a direct invariant-3 violation.
-     * Hashing the body is the only signal available; it costs one hash per posting per poll, which is
-     * cheap next to a wrong "nothing changed".
+     * No updatedAt, only createdAt, which would never change and leave an edited posting skipped forever, so
+     * the body is hashed.
      */
     private static String checksumOf(String id, JsonNode posting, String body) {
         int bodyHash = body == null ? 0 : body.hashCode();
