@@ -34,13 +34,6 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]['id']
 
-/**
- * One digest, its history, and its settings.
- *
- * The list page previously fetched twenty runs and rendered one, so "what did this send me on
- * Tuesday" had no answer anywhere in the console. Structured like `SourceDetailPage` — tabs in the
- * query string, so a particular view survives a refresh and can be linked to.
- */
 export function DigestDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -67,8 +60,7 @@ export function DigestDetailPage() {
   if (!digest || !id) return null
 
   const hasMore = (runs?.length ?? 0) >= PAGE * (page + 1)
-  // How the task numbered the sources its summary cites. Null for a built-in task, whose spec the
-  // API redacts — see `citationRanks`.
+  // Null for a built-in task: the API redacts its spec.
   const taskSourceText =
     (tasks ?? []).find((candidate) => candidate.id === digest.taskId)?.sourceText ?? null
 
@@ -142,7 +134,6 @@ export function DigestDetailPage() {
                   key={group.runs[0].id}
                   run={group.runs[0]}
                   outcome={group.outcome}
-                  // The newest run is the one being looked for nine times out of ten.
                   defaultOpen={index === 0}
                   openedByLink={params.get('run') === group.runs[0].id}
                   onOpen={() => {
@@ -246,23 +237,12 @@ export function DigestDetailPage() {
   )
 }
 
-/** One line under the title: what this digest is, without ids or jargon. */
 function describe(digest: Digest): string {
   const what = `${labels.digests.searchesFor.toLowerCase()} “${digest.query ?? ''}”`
   const cadence = formatDigestInterval(digest.interval)
   return cadence ? `${what} · ${cadence.toLowerCase()}` : what
 }
 
-/**
- * What this digest does, in plain terms. Deliberately resolves ids to names — the sources' names, the
- * task's name — because the point of the strip is to be readable by someone who did not set the digest
- * up.
- *
- * A wrapped row of labelled facts rather than a grid of uppercase headings: the six-cell grid it
- * replaced gave a one-word value ("Every hour") the same weight as the page title, and pushed the
- * history — the thing people come here for — below the fold. What the digest searches for is not
- * repeated here; it is already the page subtitle.
- */
 function SummaryStrip({ digest }: { digest: Digest }) {
   const { data: sources } = useKnowledgeList()
   const { data: tasks } = useTasks()
@@ -308,7 +288,7 @@ function SummaryStrip({ digest }: { digest: Digest }) {
       label: labels.digests.nextRun,
       value: !digest.enabled
         ? labels.digests.paused
-        : // A null nextRunAt means "on the next tick", which reads as broken if shown as a blank.
+        : // null nextRunAt means the next tick
           (relativeTime(digest.nextRunAt) ?? labels.digests.dueNow),
     },
   ]
@@ -331,19 +311,11 @@ function SummaryStrip({ digest }: { digest: Digest }) {
   )
 }
 
-/**
- * Consecutive runs that came out the same way and have nothing to open.
- *
- * An hourly digest whose window is empty writes one of these every hour, and each used to be a
- * full-height expandable card saying "Nothing matched" — a page of identical boxes hiding the last
- * run that actually found something. Collapsing a streak into one line is the whole point.
- */
 interface RunGroup {
   runs: DigestRun[]
   outcome: RunOutcome
 }
 
-/** A run is worth its own row when there is something inside it to look at. */
 function hasBody(run: DigestRun): boolean {
   return run.items.length > 0 || Boolean(run.error) || Boolean(run.taskOutput)
 }

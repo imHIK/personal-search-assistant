@@ -1,10 +1,5 @@
 import type { TaskFieldType, TaskOutput, TaskSourceText } from '@/api/types'
 
-/**
- * Descriptors for the task editor. Like `connectors.ts`, the form renders from these — no component
- * branches on a mode or an output shape, and adding one is an entry here.
- */
-
 export const taskOutputs: { value: TaskOutput; label: string; hint: string }[] = [
   {
     value: 'SUMMARY',
@@ -37,12 +32,8 @@ export const taskSourceTexts: { value: TaskSourceText; label: string; hint: stri
 ]
 
 /**
- * The values `AnswerPromptBuilder` substitutes into a RAW task's prompt.
- *
- * `slot` is **presentation only**. The backend renders both messages from one map, so every one of
- * these resolves in either message; the slot is just where the editor offers it, because offering
- * `{{sources}}` while someone writes the system message is noise. Typing one into the other message
- * is allowed and works — the editor does not fight it.
+ * `slot` is presentation only: the backend renders both messages from one map, so any of these
+ * resolves in either.
  */
 export const taskPlaceholders: {
   name: string
@@ -74,13 +65,8 @@ export const taskPlaceholders: {
   },
 ]
 
-/** Every placeholder name, for telling a typo from a value that merely sits in the other message. */
 export const taskPlaceholderNames = taskPlaceholders.map((p) => p.name)
 
-/**
- * Plain names for the configured LLM profiles. Unknown profiles fall through to their own name, so a
- * deployment that adds one still gets a working picker.
- */
 const profileLabels: Record<string, string> = {
   lite: 'Fast and cheap',
   answer: 'Slower and more thorough',
@@ -91,7 +77,6 @@ export function llmProfileLabel(profile: string): string {
   return profileLabels[profile] ?? profile
 }
 
-/** Sensible starting fields for a "score each result" task — the shape `job-fit` proved out. */
 export const suggestedScoringFields = [
   { name: 'fit', type: 'NUMBER' as TaskFieldType, description: '0-10, where 10 means act on it today', optional: false },
   { name: 'reason', type: 'TEXT' as TaskFieldType, description: 'One sentence naming what decided the score', optional: false },

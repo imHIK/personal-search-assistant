@@ -2,12 +2,6 @@ import { cn } from '@/lib/utils'
 import type { Presented, Tone } from '@/config/presentation'
 import { useTechnicalDetails } from '@/components/TechnicalDetails'
 
-/**
- * The only status pill in the app. It takes an already-translated {@link Presented} rather than a
- * raw enum, so the translation stays in config/presentation.ts and every surface tells the user
- * the same story with the same four colours.
- */
-
 const toneStyles: Record<Tone, string> = {
   ok: 'bg-[var(--tone-ok-bg)] text-[var(--tone-ok)]',
   busy: 'bg-[var(--tone-busy-bg)] text-[var(--tone-busy)]',

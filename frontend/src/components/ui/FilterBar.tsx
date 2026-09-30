@@ -19,14 +19,6 @@ interface FilterBarProps {
   onClear: () => void
 }
 
-/**
- * Renders whatever a `ListFilterSpec[]` offers. Every control comes from a spec's `kind`, so a new
- * filter is a descriptor edit and this file never changes — the same contract `SearchFilters` has
- * on the search page.
- *
- * Typing is debounced here rather than at each call site: the entity list refetches on every value
- * change, and a request per keystroke would both flood the API and make the list flicker.
- */
 export function FilterBar({ specs, values, onChange, onClear }: FilterBarProps) {
   if (specs.length === 0) return null
 
@@ -80,8 +72,7 @@ function SearchFilter({
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
 
-  // Re-sync when the value changes from outside (Clear, or a back/forward navigation), without
-  // fighting the user mid-keystroke: this only runs when the incoming value actually differs.
+  // Re-syncs only when the incoming value differs, so it never fights the user mid-keystroke.
   useEffect(() => {
     setDraft((current) => (current === value ? current : value))
   }, [value])
@@ -109,11 +100,6 @@ function SearchFilter({
   )
 }
 
-/**
- * A single choice from a long list. Hidden while it has nothing to offer, and kept visible when the
- * current value is not among the options (a link to a group whose cursors have not loaded yet) so
- * an active filter is never invisible.
- */
 function SelectFilter({
   spec,
   value,
@@ -145,10 +131,6 @@ function SelectFilter({
   )
 }
 
-/**
- * Multi-select chips rather than one-of tabs. Nothing selected is the "All" the tabs used to have,
- * which is why there is no All chip to keep in sync with the others.
- */
 function ChipGroup({
   spec,
   values,

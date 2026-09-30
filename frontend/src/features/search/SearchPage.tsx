@@ -25,10 +25,6 @@ import { SearchFilters } from './SearchFilters'
 import { rememberSearch } from './lastSearch'
 import { useSearch } from './useSearch'
 
-/**
- * The landing screen. All state lives in the URL, so a search is shareable and the back button
- * works the way a user expects.
- */
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const { data: sources } = useKnowledgeList()
@@ -43,14 +39,9 @@ export function SearchPage() {
   const scope = params.get('scope') ?? ''
   // Opt-in: every answer is an LLM call.
   const wantsAnswer = params.get('answer') === '1'
-  // Opt-out: the same item reached by two routes (one role on two boards, a forwarded mail) is noise
-  // in nearly every search, so only an explicit `group=0` shows both.
   const groupDuplicates = params.get('group') !== '0'
 
   const activeSources = (sources ?? []).filter((source) => source.status !== 'DELETED')
-  // Source-specific filters are offered only once that source is picked. Across everything, a posting
-  // facet such as "Remote only" would quietly drop every mail and file from the results, which reads as
-  // a broken search rather than a narrowed one — so "All sources" offers only the universal specs.
   const scopedSource = activeSources.find((source) => source.id === scope)
   const filterSpecs = filtersFor(scopedSource?.connectorDetails.type ?? null)
   const filterValues = Object.fromEntries(
@@ -63,8 +54,7 @@ export function SearchPage() {
   const [filtersOpen, setFiltersOpen] = useState(false)
 
   const hasSearch = urlQuery.trim() !== ''
-  // A scoped search waits for the source list: its filters depend on the source's type, and running
-  // without them first would spend a request (and an answer) on the wrong query.
+  // A scoped search waits for the source list, since the source type decides its filters.
   const ready = !scope || sources !== undefined
 
   const filters = buildFilters(filterSpecs, filterValues)
@@ -149,8 +139,6 @@ export function SearchPage() {
 
           <Select
             value={scope}
-            // Changing source drops the previous source's filter values, so none linger in the URL
-            // unseen and come back into force when that source is picked again.
             onChange={(event) =>
               update({
                 scope: event.target.value || null,
@@ -215,8 +203,6 @@ export function SearchPage() {
             </Button>
           )}
 
-          {/* The two toggles sit together rather than one being pinned right: split across the
-              row they wrap onto separate lines at this container width. */}
           <div className="ml-auto flex items-center gap-4">
             <Toggle
               checked={groupDuplicates}

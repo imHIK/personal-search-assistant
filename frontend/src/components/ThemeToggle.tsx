@@ -2,11 +2,6 @@ import { Monitor, Moon, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 
-/**
- * Light / dark / follow-system, persisted. Applied by toggling `.dark` on <html>, which is what
- * every token in index.css keys off — no component ever branches on the theme.
- */
-
 type Theme = 'light' | 'dark' | 'system'
 
 const STORAGE_KEY = 'psa.theme'

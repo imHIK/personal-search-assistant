@@ -4,10 +4,8 @@ import { parseDuration, retentionUnits, type RetentionUnit } from '@/config/cons
 import { labels } from '@/config/labels'
 
 /**
- * `retentionPeriod` as an amount and a unit, written back as the backend's `Durations` shorthand
- * (`14d`). An empty amount sends null, which inherits the connector default, then the server's.
- *
- * The unit is kept locally so clearing the amount does not also forget the unit that was chosen.
+ * An empty amount sends null (inherit). The unit is kept locally, so clearing the amount keeps the
+ * chosen unit.
  */
 export function RetentionField({
   value,
@@ -16,7 +14,6 @@ export function RetentionField({
 }: {
   value: string
   onChange: (value: string) => void
-  /** The connector's own default, when it has one — shown so "empty" is not a guess. */
   inherited?: string
 }) {
   const parsed = parseDuration(value)

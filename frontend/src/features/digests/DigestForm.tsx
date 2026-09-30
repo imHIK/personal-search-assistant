@@ -18,7 +18,6 @@ import { useChannels, useKnowledgeList, useTasks } from '@/hooks/queries'
 import { SearchFilters } from '@/features/search/SearchFilters'
 
 interface Props {
-  /** Present when editing; absent when creating. */
   initial?: Digest
   onSubmit: (body: CreateDigestBody) => void
   onCancel: () => void
@@ -26,12 +25,6 @@ interface Props {
   submitLabel: string
 }
 
-/**
- * Create and edit share this form.
- *
- * Filters reuse the search page's own descriptors rather than defining a second set, so a filter added
- * to `searchFilters.ts` appears in both places and neither renders a control this file knows about.
- */
 export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }: Props) {
   const { data: sources } = useKnowledgeList()
   const { data: tasks } = useTasks()
@@ -41,10 +34,6 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
   const [query, setQuery] = useState(initial?.query ?? '')
   const [knowledgeIds, setKnowledgeIds] = useState<string[]>(initial?.knowledgeIds ?? [])
   const [channelIds, setChannelIds] = useState<string[]>(initial?.channelIds ?? [])
-  // No time limit by default. The window filters on when something was last indexed, so a source
-  // that is ingested once and then left alone falls out of a short window and stays out — a new
-  // digest defaulted to "Last day" over a settled source was empty on every run, with nothing on
-  // screen to say why. `onlyNew` is what keeps a digest from repeating itself.
   const [window, setWindow] = useState(initial?.window ?? '')
   const [interval, setInterval] = useState(digestIntervalValue(initial?.interval ?? null))
   const [taskId, setTaskId] = useState(initial?.taskId ?? '')
@@ -67,13 +56,9 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
   )
   const filterSpecs = filtersForSources(selectedTypes)
 
-  // Only tasks a digest may actually be pointed at: the answering machinery would run and produce
-  // nothing useful.
   const offerableTasks = (tasks ?? []).filter((task) => task.usableInDigest)
   const chosenTask = offerableTasks.find((task) => task.id === taskId)
 
-  // The backend rejects a digest without both; checking here keeps that a disabled button rather
-  // than a round trip that comes back 400.
   const valid = name.trim() !== '' && query.trim() !== ''
 
   const toggleSource = (id: string) =>
@@ -100,9 +85,6 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
     onSubmit({
       name: name.trim(),
       query: query.trim(),
-      // Empty means every source, which is the API's own default. Scoping matters here more than in
-      // a one-off search: a digest runs unattended, so an unscoped one quietly starts reporting
-      // whatever else happens to be indexed.
       knowledgeIds,
       filters: mergedFilters(initial, filterSpecs, filterValues),
       window: window || null,
@@ -259,9 +241,6 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
           </label>
         </div>
 
-        {/* Not behind the technical toggle. What "look back" counts from, and what turning newness
-            off actually does, are the two things people get wrong here — and both produce a digest
-            that looks broken rather than one that looks misconfigured. */}
         {window !== '' && (
           <p className="-mt-3 max-w-prose text-[11px] leading-relaxed text-[var(--text-subtle)]">
             {labels.digests.windowHint}
@@ -330,11 +309,8 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
 }
 
 /**
- * Filter control values back out of a stored digest, so editing shows what is actually set.
- *
- * Only the kinds that round-trip losslessly are read back. A `sinceDays` filter is stored as an
- * absolute timestamp, and turning that back into "within N days" would silently move the window
- * every time the digest was saved.
+ * Only kinds that round-trip losslessly: a `sinceDays` filter is stored as a timestamp, and reading
+ * it back as "within N days" would move the window on every save.
  */
 function initialFilterValues(digest: Digest | undefined): Record<string, string> {
   if (!digest) return {}
@@ -354,11 +330,8 @@ function initialFilterValues(digest: Digest | undefined): Record<string, string>
 }
 
 /**
- * What the form set, merged over anything stored that the form cannot represent.
- *
- * Without the merge, editing a digest whose filters were set through the API would quietly drop them:
- * the form would rebuild the map from its own controls alone and send a narrower digest than the one
- * the user opened.
+ * Merged over stored filters the form cannot represent, so an edit keeps filters set through the
+ * API.
  */
 function mergedFilters(
   initial: Digest | undefined,

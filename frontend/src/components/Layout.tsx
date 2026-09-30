@@ -19,7 +19,7 @@ const navItems = [
 ]
 
 function useNavItems() {
-  // Subscribes to navigation, so the Search link is rebuilt with the search last left behind.
+  // Re-renders on navigation, so the Search link picks up the last search.
   useLocation()
   return navItems.map((item) => (item.to === '/' ? { ...item, to: lastSearchPath() } : item))
 }
@@ -100,7 +100,6 @@ function TopBar() {
   )
 }
 
-/** The sidebar is hidden below `sm`, so the nav collapses into the top bar there. */
 function MobileNav() {
   const items = useNavItems()
   return (

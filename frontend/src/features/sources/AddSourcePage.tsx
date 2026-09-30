@@ -25,11 +25,6 @@ import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleFie
 
 const DEFAULT_SCHEDULE: ScheduleValue = { preset: '1h', cron: '' }
 
-/**
- * Add a source. Rendered entirely from the connector descriptors — there is no branch on
- * SourceType anywhere in this file, so a new connector appears here as soon as its descriptor
- * has `implemented: true`.
- */
 export function AddSourcePage() {
   const navigate = useNavigate()
   const create = useCreateKnowledge()
@@ -44,7 +39,6 @@ export function AddSourcePage() {
   const [chunking, setChunking] = useState<FormValues>({})
   const [retention, setRetention] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  /** Set when the server answers 200 but parks the source in ERROR. */
   const [activationError, setActivationError] = useState<string | null>(null)
 
   const descriptor = type ? connectorFor(type) : null
@@ -55,7 +49,6 @@ export function AddSourcePage() {
     [connections, type],
   )
 
-  // Preselect the default account so the common case is zero clicks.
   useEffect(() => {
     if (!descriptor?.requiresConnection) return
     if (connectionId) return
@@ -69,8 +62,8 @@ export function AddSourcePage() {
     setInputErrors({})
   }, [descriptor])
 
-  // Dirty means "differs from what picking the type gave you", not "was touched" — so undoing an
-  // edit un-dirties the form. The account is excluded: it is preselected, not entered.
+  // Dirty means "differs from the type's defaults", not "was touched"; the preselected account does
+  // not count.
   const dirty = useMemo(
     () =>
       descriptor !== null &&
@@ -176,9 +169,7 @@ export function AddSourcePage() {
 
     create.mutate(body, {
       onSuccess: (knowledge) => {
-        // The API answers 200 even when verify/discover failed — the failure shows up as
-        // status ERROR with a lastError. Treating 200 as success here would silently create a
-        // dead source, so stay on the form and surface the reason.
+        // 200 even when activation failed: the source comes back in ERROR with a lastError.
         if (knowledge.status === 'ERROR') {
           setActivationError(knowledge.lastError ?? 'The source could not be reached.')
           return
@@ -190,8 +181,6 @@ export function AddSourcePage() {
     })
   }
 
-  // Everything goes back to its default, not just the type — otherwise a schedule or account picked
-  // for the previous type leaks into the next one (and a stale connectionId skips the preselect).
   const changeType = () => {
     setType(null)
     setConnectionId('')

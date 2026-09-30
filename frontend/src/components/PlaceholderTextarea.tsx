@@ -4,35 +4,20 @@ import { labels } from '@/config/labels'
 import { taskPlaceholderNames, taskPlaceholders } from '@/config/tasks'
 import { cn } from '@/lib/utils'
 
-/**
- * A textarea for prompt text: known `{{placeholders}}` are tinted where they sit, typing `{{` offers
- * the ones that belong in this message, and anything the assistant will not fill in is called out
- * underneath.
- *
- * Written as a layer behind a transparent textarea rather than a `contenteditable` or an editor
- * dependency: the value stays a plain string, so undo, IME and the form's own state are untouched, and
- * the only cost is that the layer must carry the textarea's metrics exactly — hence `shared`.
- *
- * The layer paints backgrounds only, never text colour. Painting the text would mean hiding the
- * textarea's own, which takes the selection highlight with it.
- */
-
-/** A finished `{{name}}`, matched the way `PromptTemplate.PLACEHOLDER` matches it. */
+/** Must match `PromptTemplate.PLACEHOLDER`. */
 const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_]*)\s*\}\}/g
 
-/** An unfinished one: `{{` and a partial name running up to the caret. */
 const TYPING = /\{\{\s*([a-zA-Z0-9_]*)$/
 
-/** Whatever closes the placeholder the caret sits inside, so completing it doesn't leave a tail. */
 const CLOSING = /^[a-zA-Z0-9_]*\s*\}\}/
 
-/** Every metric that decides where a glyph lands. The layer and the textarea must agree on all of it. */
+/** The layer and the textarea must agree on every one of these. */
 const shared =
   'w-full rounded-lg border px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words'
 
 interface Props {
   id: string
-  /** Which message this is. Decides what the menu offers first — not what is accepted. */
+  /** Orders the menu; does not limit what is accepted. */
   slot: 'system' | 'user'
   value: string
   onChange: (value: string) => void
@@ -58,8 +43,7 @@ export function PlaceholderTextarea({ id, slot, value, onChange, rows = 10 }: Pr
       .filter((name) => !taskPlaceholderNames.includes(name)),
   )]
 
-  // Measured rather than computed: the layer already mirrors the textarea's metrics, so a marker
-  // rendered at the caret sits exactly where the caret does, wrapping and scrolling included.
+  // Measured from a marker in the mirrored layer, so wrapping and scrolling are accounted for.
   useLayoutEffect(() => {
     const marker = caretRef.current
     const input = inputRef.current
@@ -70,7 +54,6 @@ export function PlaceholderTextarea({ id, slot, value, onChange, rows = 10 }: Pr
     })
   }, [open, menu?.from, menu?.query, value])
 
-  /** Track where the caret is, and whether it is somewhere a suggestion would help. */
   const sync = (input: HTMLTextAreaElement) => {
     const position = input.selectionStart
     setCaret(position)
@@ -243,22 +226,12 @@ export function PlaceholderTextarea({ id, slot, value, onChange, rows = 10 }: Pr
   )
 }
 
-/**
- * What to offer for a partially typed name. This message's own come first and are normally all that
- * shows; the others are appended only when nothing here matches, so someone who deliberately types
- * `{{tod` in the user message still gets completed rather than stonewalled — the backend renders both
- * messages from one map, so that placeholder does work.
- */
 function matching(slot: 'system' | 'user', query: string) {
   const hit = (name: string) => name.toLowerCase().startsWith(query.toLowerCase())
   const own = taskPlaceholders.filter((p) => p.slot === slot && hit(p.name))
   return own.length > 0 ? own : taskPlaceholders.filter((p) => p.slot !== slot && hit(p.name))
 }
 
-/**
- * The text, with each `{{name}}` wrapped so it can be tinted, and a zero-width marker dropped at the
- * caret when the menu needs somewhere to hang from.
- */
 function paint(value: string, caret: number | null, marker: React.RefObject<HTMLSpanElement | null>) {
   const nodes: ReactNode[] = []
   let cursor = 0

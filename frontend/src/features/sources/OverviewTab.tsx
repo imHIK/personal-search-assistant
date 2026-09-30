@@ -138,7 +138,6 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-/** Turn the schedule settings into a sentence rather than exposing cron/interval strings. */
 function describeSchedule(knowledge: Knowledge): string {
   const { cron, interval, enabled } = knowledge.config.scheduleSettings
   if (!enabled) return labels.schedule.manual
@@ -153,7 +152,6 @@ function describeSchedule(knowledge: Knowledge): string {
   return readable[interval] ?? `Every ${interval}`
 }
 
-/** Summarise `inputs` using the connector's own field labels, not raw keys. */
 function describeInputs(knowledge: Knowledge): string {
   const descriptor = connectorFor(knowledge.connectorDetails.type)
   const parts: string[] = []

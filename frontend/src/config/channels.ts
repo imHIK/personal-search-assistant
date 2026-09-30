@@ -5,31 +5,15 @@ import type { AccountDescriptor } from './accounts'
 import { googleAuthFields, googleConfigFields } from './connectors'
 import type { FieldSpec } from './fields'
 
-/**
- * One descriptor per publishing channel type — the same idea as `connectors.ts`, for the write side.
- * The backend discovers a `Publisher` bean per type; here a type is one object, and the channel
- * form renders its `targetFields` through `<SchemaForm>`. No component branches on a ChannelType.
- *
- * To add a platform once the backend has a publisher for it: fill in `targetFields` and flip
- * `implemented` to true.
- */
 export interface ChannelDescriptor {
   id: ChannelType
-  /** What the user picks. */
   label: string
-  /** One sentence answering "where will this send?". */
   description: string
   icon: LucideIcon
   /** False for ChannelType constants with no publisher behind them yet. */
   implemented: boolean
-  /** Written into `Channel.target`. */
   targetFields: FieldSpec[]
-  /**
-   * The kind of account this channel sends through, for a platform that sends as a user. It is offered
-   * on the Accounts screen like a source's account, and as the "Send from" choice on the channel form.
-   */
   account?: AccountDescriptor
-  /** One line naming the destination in the channel list, so no component reads target keys. */
   summary?: (target: Blob) => string | undefined
 }
 
@@ -116,7 +100,7 @@ const unknownChannel = (type: string): ChannelDescriptor => ({
   targetFields: [],
 })
 
-/** Safe for a type the backend added before this file learned about it. */
+/** Safe for a channel type this file does not know. */
 export function channelFor(type: ChannelType | string): ChannelDescriptor {
   return channelDescriptors.find((d) => d.id === type) ?? unknownChannel(type)
 }

@@ -40,7 +40,6 @@ export function Toggle({
   )
 }
 
-/** Segmented control. Used for search style and item filters — fewer clicks than a dropdown. */
 export function SegmentedControl<T extends string>({
   value,
   onChange,

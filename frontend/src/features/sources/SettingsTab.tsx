@@ -18,15 +18,6 @@ import { ChunkingFields } from './ChunkingFields'
 import { RetentionField } from './RetentionField'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
 
-/**
- * Grouped by consequence, not by field.
- *
- * The backend routes an edit down one of two very different paths: config-class changes (name,
- * schedule, chunking) are a single in-place write, while provisioning-class changes (inputs, auth,
- * backfill off→on) pause the source, re-verify the account, re-discover and reconcile. Those are
- * separated here with an explicit warning, because the second kind can take minutes and briefly
- * takes the source offline.
- */
 export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
   const descriptor = connectorFor(knowledge.connectorDetails.type)
   const patch = usePatchKnowledge(knowledge.id)
@@ -51,7 +42,6 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
     initialValues(descriptor.inputFields, knowledge.inputs as Record<string, unknown>),
   )
   const [backfill, setBackfill] = useState(knowledge.config.backfill.enabled)
-  // Normalised so a window stored in ISO-8601 (`P14D`) still shows as an amount and a unit.
   const [retention, setRetention] = useState(() =>
     normalizeDuration(knowledge.config.retention.period),
   )
@@ -59,8 +49,7 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
   const save = (body: PatchKnowledgeBody, message: string) =>
     patch.mutate(body, {
       onSuccess: (updated) => {
-        // A provisioning edit re-verifies, and a failure there lands the source in ERROR with a
-        // 200 — same trap as create. Report it as a failure, because it is one.
+        // A failed re-verify still answers 200, with the source in ERROR.
         if (updated.status === 'ERROR') {
           toast.error("Saved, but the source couldn't be reached", {
             description: updated.lastError ?? undefined,
@@ -189,8 +178,7 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
               variant="primary"
               size="sm"
               loading={patch.isPending}
-              // An empty window sends an explicit null, which this endpoint reads as "clear back to
-              // inherit" — unlike cron/interval, which it can only set.
+              // An empty window sends null, which clears back to inherit.
               onClick={() => save({ retentionPeriod: retention || null }, labels.settings.saved)}
             >
               {labels.settings.save}
@@ -248,8 +236,6 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
         </Card>
       )}
 
-      {/* Webhooks are accepted by PATCH but there is no endpoint to receive them, so the
-          controls stay hidden until the backend has one. See config/features.ts. */}
       {features.webhooks && null}
 
       {patch.error && <ErrorState error={patch.error} compact />}

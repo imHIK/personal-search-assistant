@@ -32,10 +32,6 @@ import { groupName, presentEntityType, presentItem } from '@/config/presentation
 import { useCursors, useEntities, useEntityActions } from '@/hooks/queries'
 import { absoluteTime, displayName, formatNumber, relativeTime } from '@/lib/utils'
 
-/**
- * The item browser. Backed by `GET /api/knowledge/{id}/entities`, which returns projections —
- * so this never has the item's text, only enough to identify and act on it.
- */
 export function ItemsTab({
   knowledgeId,
   descriptor,
@@ -45,24 +41,20 @@ export function ItemsTab({
 }) {
   const [params, setParams] = useSearchParams()
   const [offset, setOffset] = useState(0)
-  // Same query key as the page's own, so this is a cache read, not a second request.
   const { data: cursors } = useCursors(knowledgeId)
   const noun = descriptor.groupNoun ?? { one: labels.detail.groups, many: labels.detail.groups }
 
-  // One option per group, named exactly as the Groups tab names it.
   const specs = useMemo(() => {
     const ids = [...new Set((cursors ?? []).map((cursor) => cursor.iterableId))]
     const options = ids
       .map((id) => ({ value: id, label: groupName(id, cursors, labels.groups.everything) }))
       .sort((a, b) => a.label.localeCompare(b.label))
-    // A single-group source (one folder, "everything") has nothing to narrow by.
     return withOptions(entityFilters, 'group', options.length > 1 ? options : [], {
       label: noun.one,
       placeholder: labels.filters.all(noun.many),
     })
   }, [cursors, noun.one, noun.many])
 
-  // Filter values live in the URL, so a filtered list survives a reload and can be linked to.
   const values: ListFilterValues = useMemo(() => {
     const next: ListFilterValues = {}
     for (const spec of specs) {
@@ -82,8 +74,6 @@ export function ItemsTab({
     if (value) next.set(id, value)
     else next.delete(id)
     setParams(next, { replace: true })
-    // Page 3 of the old filter is rarely page 3 of the new one, and an out-of-range offset renders
-    // an empty list over a non-zero total.
     setOffset(0)
   }
 
@@ -161,14 +151,6 @@ export function ItemsTab({
   )
 }
 
-/**
- * An item's processing error, folded behind an icon.
- *
- * Inline it dominated the row: three wrapped lines of exception text above the one thing the row is
- * actually about, its name — and repeated verbatim down the whole list when a batch fails the same
- * way, which is the common case. The icon keeps the list scannable while still marking which items
- * carry an error, and the wording stays one hover away.
- */
 function ItemError({ error }: { error: string }) {
   const technical = useTechnicalDetails()
   const friendly = friendlyLastError(error)
@@ -215,9 +197,7 @@ function ItemRow({
 
   const name = displayName(item)
   const presented = presentItem(item)
-  // createdAt, not updatedAt: updatedAt is the row's last write, and almost every one of those is the
-  // indexing stage's own bookkeeping — a claim, a retry, a deferral. An item that has never changed
-  // reads as "added 2 minutes ago" all day if you show it here.
+  // createdAt, not updatedAt: updatedAt moves with indexing bookkeeping.
   const added = relativeTime(item.createdAt)
   const group = item.iterableId ? groupName(item.iterableId, cursors, labels.groups.everything) : null
 

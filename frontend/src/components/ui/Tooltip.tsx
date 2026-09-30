@@ -1,22 +1,13 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-/**
- * Hover/focus popover for detail that would be noise if it were always on screen.
- *
- * CSS-only (`group-hover` / `group-focus-within`) rather than stateful or portalled: every use is a
- * small trigger sitting inside a row, and a portal would buy correct positioning at the price of a
- * positioning library. The one consequence to know about is that an ancestor with `overflow-hidden`
- * clips it — containers that host a tooltip drop that class.
- */
 export function Tooltip({
   content,
   children,
   className,
 }: {
-  /** Rendered inside the popover. Kept as a node so callers can structure it. */
   content: React.ReactNode
-  /** The trigger. Must be focusable for keyboard users to reach the content. */
+  /** Must be focusable for keyboard users to reach the content. */
   children: React.ReactNode
   className?: string
 }) {

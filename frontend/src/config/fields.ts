@@ -1,10 +1,5 @@
 import { z } from 'zod'
 
-/**
- * A declarative field description. `SchemaForm` renders one of these into the right control and
- * derives its zod validator from the same object, so a form is data rather than JSX. Adding a
- * field to a connector means appending a FieldSpec — no component changes anywhere.
- */
 export type FieldKind =
   | 'text'
   | 'textarea'
@@ -17,37 +12,28 @@ export type FieldKind =
   | 'json'
 
 export interface FieldSpec {
-  /** Key written into the target blob (`inputs`, `auth` or `config`). */
   name: string
   kind: FieldKind
   label: string
-  /** One line under the control explaining what it is, in user terms. */
   hint?: string
   placeholder?: string
   required?: boolean
-  /** Hide unless the Technical details toggle is on — for internals a user shouldn't need. */
   technical?: boolean
   /**
-   * `select` and `picklist`. `note` is muted text beside the label — the platform, or the country.
-   *
-   * `values` is for a picklist row that stands for several stored entries: a city with two accepted
-   * spellings ticks both, because the backend matches a location by substring and "bengaluru" does
-   * not contain "bangalore". Ticking adds the whole group, unticking removes it, and each entry is
-   * still an individually removable chip — so a half-present group reads as unticked, which is true.
+   * `select` and `picklist`. `values`: a row that stands for several stored entries, such as every
+   * spelling of a city.
    */
   options?: { value: string; label: string; note?: string; values?: string[] }[]
   /** `picklist` only: label for the free-text row that takes values outside `options`. */
   addOwnLabel?: string
-  /** `picklist` only: plural noun for the catalog toggle — "Choose from 13 <noun>". */
+  /** `picklist` only: plural noun for the catalog toggle ("Choose from 13 <noun>"). */
   browseNoun?: string
   /** `number` only. */
   min?: number
   max?: number
-  /** Extra validation beyond the kind's default, e.g. an absolute-path check. */
   validate?: (value: unknown) => string | undefined
 }
 
-/** Build a zod object schema from a field list. Kept next to FieldSpec so the two can't drift. */
 export function schemaFor(fields: FieldSpec[]): z.ZodType<Record<string, unknown>> {
   const shape: Record<string, z.ZodTypeAny> = {}
 
@@ -90,7 +76,6 @@ export function schemaFor(fields: FieldSpec[]): z.ZodType<Record<string, unknown
   return z.object(shape)
 }
 
-/** Sensible empty value per kind, used to seed a fresh form. */
 export function emptyValue(field: FieldSpec): unknown {
   switch (field.kind) {
     case 'boolean':
@@ -116,10 +101,6 @@ export function initialValues(fields: FieldSpec[], existing?: Record<string, unk
   return values
 }
 
-/**
- * Strip empty values so a patch body doesn't send `""` for fields the user left alone. The
- * backend treats absent and null identically ("unchanged"), so omitting is the correct encoding.
- */
 export function pruneEmpty(values: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(values)) {

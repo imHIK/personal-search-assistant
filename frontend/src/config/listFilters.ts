@@ -1,39 +1,24 @@
 import type { EntityStatus } from '@/api/types'
 import type { GroupState } from '@/config/presentation'
 
-/**
- * One descriptor per filter offered above a list — the source detail page's mirror of
- * `searchFilters.ts`, and the same bargain: the controls, the URL parameters and the request are
- * all derived from these objects, so offering a new filter is appending one object and no
- * component changes.
- *
- * A spec with a `param` is sent to the API; one without is applied in the browser, which is the
- * honest split between the two lists here — entities are paged server-side (filtering the loaded
- * page would silently search 50 of 4,000 rows), while cursors arrive as one unpaged array.
- */
 export type ListFilterKind = 'search' | 'enumMulti' | 'select'
 
 export interface ListFilterSpec {
-  /** URL parameter name, and the key into the values map. */
   id: string
   label: string
   kind: ListFilterKind
-  /** API query parameter this maps to. Omit for a filter applied client-side. */
+  /** Omit for a filter applied client-side. */
   param?: string
   placeholder?: string
   hint?: string
   /**
-   * `enumMulti` and `select`. Nothing selected means "no filter", which is how "All" disappears.
-   * Options that only exist at runtime (a source's own companies) are left out here and supplied by
-   * the caller through {@link withOptions}, so the list itself stays a static descriptor.
+   * `enumMulti` and `select` only; nothing selected means no filter. Runtime options are supplied
+   * through {@link withOptions}.
    */
   options?: { value: string; label: string }[]
 }
 
-/**
- * Values are flat strings so they live in the URL unchanged: an `enumMulti` is a comma-separated
- * list, which is also the wire format the API takes.
- */
+/** An `enumMulti` value is a comma-separated list, which is also the API's wire format. */
 export type ListFilterValues = Record<string, string>
 
 const entityStatusOptions: { value: EntityStatus; label: string }[] = [
@@ -59,7 +44,6 @@ export const entityFilters: ListFilterSpec[] = [
     options: entityStatusOptions,
   },
   {
-    // A dropdown, not chips: a job-board source has a hundred companies.
     id: 'group',
     param: 'iterableId',
     kind: 'select',
@@ -89,10 +73,6 @@ export const groupFilters: ListFilterSpec[] = [
   },
 ]
 
-/**
- * Fill in a spec's runtime options — and optionally its label and empty-option text, so a job board's
- * dropdown can say "All companies" — without the descriptor list knowing about any one source.
- */
 export function withOptions(
   specs: ListFilterSpec[],
   id: string,
@@ -102,13 +82,11 @@ export function withOptions(
   return specs.map((spec) => (spec.id === id ? { ...spec, ...overrides, options } : spec))
 }
 
-/** The selected values of one `enumMulti`, as a list. */
 export function selectedValues(values: ListFilterValues, id: string): string[] {
   const raw = values[id]
   return raw ? raw.split(',').filter(Boolean) : []
 }
 
-/** Add or remove one option of an `enumMulti`, preserving the rest. */
 export function toggleValue(values: ListFilterValues, id: string, option: string): string {
   const current = selectedValues(values, id)
   const next = current.includes(option)
@@ -117,15 +95,10 @@ export function toggleValue(values: ListFilterValues, id: string, option: string
   return next.join(',')
 }
 
-/** True when anything is set, so an empty result can say "nothing matches" rather than "nothing yet". */
 export function hasActiveFilters(specs: ListFilterSpec[], values: ListFilterValues): boolean {
   return specs.some((spec) => Boolean(values[spec.id]))
 }
 
-/**
- * The API parameters for the specs that have one. Client-side specs are skipped rather than sent:
- * the backend would ignore an unknown parameter, which reads as "my filter did nothing".
- */
 export function buildListQuery(
   specs: ListFilterSpec[],
   values: ListFilterValues,

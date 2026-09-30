@@ -4,11 +4,6 @@ import { labels } from '@/config/labels'
 import { presentDelivery } from '@/config/presentation'
 import { useChannels, useRunDeliveries } from '@/hooks/queries'
 
-/**
- * Where a run was sent, one badge per channel. Renders nothing for a run that was not sent — a digest
- * with no channels, a quiet run, anything recorded before digests could publish — so those look exactly
- * as they did.
- */
 export function RunDeliveries({ runId }: { runId: string }) {
   const { data: deliveries } = useRunDeliveries(runId)
   const { data: channels } = useChannels()

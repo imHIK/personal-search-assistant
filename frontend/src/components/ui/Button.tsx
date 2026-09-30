@@ -36,7 +36,6 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof button> {
   asChild?: boolean
-  /** Swaps the leading content for a spinner and disables the button. */
   loading?: boolean
 }
 

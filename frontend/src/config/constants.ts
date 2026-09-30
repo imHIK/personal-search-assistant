@@ -1,10 +1,5 @@
 import type { SearchMode } from '@/api/types'
 
-/**
- * Enumerations that drive their own controls. Nothing here is repeated inline in a component —
- * a new chunking strategy or search mode is added once, in this file.
- */
-
 export const searchModes: { value: SearchMode; label: string; hint: string }[] = [
   {
     value: 'HYBRID',
@@ -26,10 +21,7 @@ export const searchModes: { value: SearchMode; label: string; hint: string }[] =
 export const DEFAULT_SEARCH_MODE: SearchMode = 'HYBRID'
 export const DEFAULT_TOP_K = 10
 export const TOP_K_OPTIONS = [5, 10, 20, 50]
-/**
- * Matching chunks one result may carry (`maxChunksPerEntity`). 0 means every match; choosing none
- * leaves the server's `app.search.max-chunks-per-entity` in force.
- */
+/** 0 means every match; choosing none leaves the server default in force. */
 export const MATCHES_PER_RESULT_OPTIONS = [1, 3, 5, 0]
 
 /** Mirrors `app.chunking.strategy` in application.properties. */
@@ -40,16 +32,6 @@ export const chunkingStrategies = [
   { value: 'token', label: 'Token', hint: 'Sizes chunks by real tokens rather than characters.' },
 ]
 
-/**
- * How far back a digest run looks. Separate from the schedule: "run daily, but consider the last
- * week" is a normal thing to want, and an empty value means no time bound at all.
- */
-/**
- * How far back a run looks. "No time limit" leads because it is the safe default: the window filters
- * on when a chunk was *indexed*, so a source that finishes ingesting and is then left alone drops out
- * of a short window and never returns — a digest set to "Last day" over a static folder is empty on
- * every run, forever. Newness is `onlyNew`'s job; the window is only an extra bound on top.
- */
 export const digestWindows = [
   { value: '', label: 'No time limit' },
   { value: '1d', label: 'Last day' },
@@ -57,10 +39,7 @@ export const digestWindows = [
   { value: '30d', label: 'Last month' },
 ] as const
 
-/**
- * Cadences offered for a digest. Deliberately not `schedulePresets`: a digest has no "only when I
- * ask" — that is what pausing it means — and hourly matters here in a way it does not for ingestion.
- */
+/** Not `schedulePresets`: a digest has no "only when I ask" (that is pausing it). */
 export const digestIntervals = [
   { value: '1h', label: 'Every hour' },
   { value: '6h', label: 'Every 6 hours' },
@@ -69,11 +48,8 @@ export const digestIntervals = [
 ] as const
 
 /**
- * Map an interval the API returned back onto one of the options above.
- *
- * The backend stores a `Duration` and serialises it ISO-8601, so a digest created with "1d" reads
- * back as "PT24H". Without this the edit form's picker would match nothing, fall back to its first
- * option, and quietly rewrite the cadence on save.
+ * The backend returns ISO-8601, so "1d" reads back as "PT24H"; unmatched, the picker would fall
+ * back to its first option and rewrite the cadence on save.
  */
 export function digestIntervalValue(interval: string | null): string {
   if (!interval) return '1d'
@@ -90,7 +66,6 @@ export function digestIntervalValue(interval: string | null): string {
   return interval
 }
 
-/** How far back a run looks, in words — "Last week" rather than "P7D". */
 export function formatDigestWindow(window: string | null): string | null {
   if (!window) return null
   const direct = digestWindows.find((option) => option.value === window)
@@ -107,14 +82,12 @@ export function formatDigestWindow(window: string | null): string | null {
   return window
 }
 
-/** How often a digest runs, in words. Never the raw ISO duration, which reads as a machine error. */
 export function formatDigestInterval(interval: string | null): string | null {
   if (!interval) return null
   const value = digestIntervalValue(interval)
   return digestIntervals.find((option) => option.value === value)?.label ?? interval
 }
 
-/** Units offered for `retentionPeriod`, as `Durations` shorthand suffixes. */
 export const retentionUnits = [
   { value: 'm', label: 'Minutes' },
   { value: 'h', label: 'Hours' },
@@ -126,8 +99,8 @@ export type RetentionUnit = (typeof retentionUnits)[number]['value']
 const unitSeconds: Record<RetentionUnit, number> = { m: 60, h: 3600, d: 86400 }
 
 /**
- * Read a stored duration — `Durations` shorthand (`14d`) or ISO-8601 (`P14D`, `PT36H`) — as an amount
- * in the largest unit that divides it evenly. Null for empty or anything it cannot represent.
+ * Accepts `Durations` shorthand (`14d`) or ISO-8601 (`P14D`, `PT36H`). Null for anything it cannot
+ * represent.
  */
 export function parseDuration(value: string | null | undefined): { amount: number; unit: RetentionUnit } | null {
   if (!value) return null
@@ -151,16 +124,12 @@ export function parseDuration(value: string | null | undefined): { amount: numbe
   return { amount: Math.round(seconds / 60), unit: 'm' }
 }
 
-/** A stored duration normalised to shorthand (`P14D` → `14d`), or empty when unset. */
 export function normalizeDuration(value: string | null | undefined): string {
   const parsed = parseDuration(value)
   return parsed ? `${parsed.amount}${parsed.unit}` : ''
 }
 
-/**
- * Check-frequency presets, mapped onto the `interval`/`scheduleEnabled` pair the API takes.
- * `cron` is deliberately not offered here — it is a technical-details field.
- */
+/** `cron` is deliberately not offered here: it is a technical-details field. */
 export const schedulePresets = [
   { value: 'manual', label: 'Only when I ask', interval: null, enabled: false },
   { value: '15m', label: 'Every 15 minutes', interval: '15m', enabled: true },
@@ -171,7 +140,6 @@ export const schedulePresets = [
 
 export type SchedulePresetValue = (typeof schedulePresets)[number]['value']
 
-/** Map an existing schedule back onto a preset, so editing shows what is actually set. */
 export function schedulePresetFor(
   interval: string | null,
   cron: string | null,
@@ -186,11 +154,8 @@ export function schedulePresetFor(
 export const PAGE_SIZE = 25
 export const PAGE_SIZE_OPTIONS = [25, 50, 100]
 
-/** How often live views re-poll while work is in flight. Matches app.indexing.poll-interval. */
+/** Matches app.indexing.poll-interval. */
 export const POLL_INTERVAL_MS = 5000
-/** Health check cadence for the connection indicator. */
 export const HEALTH_INTERVAL_MS = 15000
-/** How long a mutation keeps its query polling, so async server work shows up on its own. */
 export const POLL_AFTER_MUTATION_MS = 30000
-/** How long a cited result stays ringed after a citation chip jumps to it. */
 export const CITATION_HIGHLIGHT_MS = 1200

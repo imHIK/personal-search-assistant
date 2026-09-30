@@ -13,13 +13,6 @@ import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { useTaskActions, useTasks } from '@/hooks/queries'
 
-/**
- * The task library.
- *
- * Built-in tasks are listed but read-only: two of them are what search itself runs, so an edit would
- * degrade every answer with nothing on screen to say why. Duplicate is the way in — and duplicating
- * the shipped scorer is the most useful starting point there is, because it is a working example.
- */
 export function TasksPage() {
   const navigate = useNavigate()
   const { data, isLoading, error, refetch } = useTasks()
@@ -30,10 +23,6 @@ export function TasksPage() {
   const builtIn = (data ?? []).filter((task) => task.builtIn)
   const mine = (data ?? []).filter((task) => !task.builtIn)
 
-  /**
-   * Duplicating returns an unsaved copy, so it opens the editor rather than adding a row. An
-   * abandoned duplicate then leaves nothing behind.
-   */
   const duplicate = async (id: string) => {
     setDuplicating(id)
     try {
@@ -167,8 +156,6 @@ export function TasksPage() {
         onConfirm={() => {
           if (pendingRemoval) {
             remove.mutate(pendingRemoval.id, {
-              // The API refuses while a digest still points at it, and names which — that message is
-              // the useful part, so it is shown rather than a generic failure.
               onError: (cause) =>
                 toast.error(labels.tasks.removeFailed, {
                   description: friendlyError(cause).detail,

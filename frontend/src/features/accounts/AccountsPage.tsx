@@ -28,23 +28,14 @@ export function AccountsPage() {
 
   const needsAccounts = accountTypes()
 
-  // This page doubles as the landing spot for an OAuth callback, which arrives as a plain redirect
-  // carrying its result in the query string. Report it once, then strip the parameters so a reload
-  // or a back-navigation doesn't replay a stale outcome.
-  //
-  // The timeout is load-bearing, not defensive padding. An OAuth callback is a *fresh page load*, so
-  // this effect runs during the first commit — and React runs effects child-first, so it fires before
-  // <Toaster/> (a sibling of the router, mounted in main.tsx) has subscribed to sonner's store. A
-  // toast emitted in that gap is published to nobody and silently lost, which is exactly the message
-  // the user needs most: whether their reconnect actually worked. Deferring by a macrotask puts it
-  // after every effect in the commit, Toaster's included.
+  // The OAuth callback lands here with its result in the query string: report it once, then strip
+  // it. The timeout matters: on this fresh page load the effect runs before <Toaster/> subscribes,
+  // and an earlier toast is lost.
   useEffect(() => {
     const outcome = readOAuthOutcome(location.search)
     if (!outcome) return
-    //
-    // Deliberately not cleaned up on unmount: the `navigate` below changes `location.search`, which
-    // re-runs this effect — and a cleanup would cancel the very toast the previous run scheduled. A
-    // toast is global state in sonner rather than this component's, so letting it land is correct.
+    // No cleanup: the navigate below re-runs this effect, and a cleanup would cancel the toast just
+    // scheduled.
     window.setTimeout(() => {
       if (outcome.status === 'ok') {
         toast.success(labels.accounts.connectOk)
@@ -98,8 +89,6 @@ export function AccountsPage() {
               testing={test.isPending && test.variables === connection.id}
               onTest={() =>
                 test.mutate(connection.id, {
-                  // The endpoint always resolves; a broken account comes back as ERROR on the body,
-                  // so the outcome is read from the result rather than caught.
                   onSuccess: (checked) =>
                     checked.status === 'ERROR'
                       ? toast.error(labels.accounts.testFailed(checked.name), {
@@ -145,8 +134,6 @@ export function AccountsPage() {
             },
             onError: (mutationError) => {
               const friendly = friendlyError(mutationError)
-              // A 409 here always means a source still binds this account — say that, rather
-              // than showing the raw IllegalStateException text.
               toast.error(friendly.title, {
                 description:
                   mutationError instanceof Error && mutationError.name === 'ApiError'

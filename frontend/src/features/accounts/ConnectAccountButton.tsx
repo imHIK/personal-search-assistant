@@ -7,16 +7,6 @@ import type { AccountDescriptor } from '@/config/accounts'
 import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 
-/**
- * Hands the sign-in to the provider instead of asking the user to fetch a token by hand.
- *
- * Rendered whenever a descriptor carries `oauth` — never on a check against a particular connector —
- * so a new OAuth application appears here by adding that one field to its descriptor.
- *
- * A full-page navigation rather than a popup: the callback redirects the browser back to
- * `/connections`, which is where the result belongs anyway, and a popup would need message-passing
- * to tell the opener anything.
- */
 export function ConnectAccountButton({
   descriptor,
   type,
@@ -25,9 +15,8 @@ export function ConnectAccountButton({
   disabled,
 }: {
   descriptor: AccountDescriptor
-  /** The connection type being connected — a SourceType name or e.g. `GMAIL_SEND`. */
   type: string
-  /** Present when re-credentialing an existing account rather than creating one. */
+  /** Present when re-credentialing an existing account. */
   connectionId?: string
   name?: string
   disabled?: boolean

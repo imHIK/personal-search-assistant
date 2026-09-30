@@ -25,20 +25,10 @@ import {
 } from '@/config/tasks'
 import { useLlmProfiles, useTask, useTaskActions } from '@/hooks/queries'
 
-/**
- * Create or edit a task.
- *
- * The default path asks for an instruction and the shape of the reply, and the app renders both into
- * a shipped wrapper that carries the rules a user should not have to remember — that retrieved text
- * is data rather than instructions, and that the model must not draw on its own knowledge. Writing
- * the prompt outright is available under technical details, with that responsibility handed back
- * explicitly.
- */
 export function TaskFormPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  // A duplicate arrives as unsaved state rather than a saved row, so abandoning it leaves nothing.
   const draft = (location.state as { draft?: Task } | null)?.draft
 
   const editing = Boolean(id)

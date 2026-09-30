@@ -8,18 +8,10 @@ import { ErrorState } from '@/components/ui/States'
 import { labels } from '@/config/labels'
 
 interface Props {
-  /** Companies already in the form, so a resolved name can be appended rather than replacing them. */
   current: string[]
   onAdd: (companies: string[]) => void
 }
 
-/**
- * Check which platform hosts each of a list of companies before committing them.
- *
- * Reach here is a function of how many companies are named, and finding out whether one is reachable
- * otherwise means creating a source and seeing what happens. This answers it for a whole list at once,
- * and adds only the ones that resolved.
- */
 export function CompanyLookup({ current, onAdd }: Props) {
   const [draft, setDraft] = useState('')
   const [results, setResults] = useState<Lookup[] | null>(null)
@@ -47,7 +39,6 @@ export function CompanyLookup({ current, onAdd }: Props) {
 
   const found = (results ?? []).filter((r) => r.found)
   const missing = (results ?? []).filter((r) => !r.found)
-  // Only names not already listed, so adding twice is harmless.
   const toAdd = found.map((r) => r.company).filter((c) => !current.includes(c))
 
   return (
@@ -95,8 +86,6 @@ export function CompanyLookup({ current, onAdd }: Props) {
         )}
       </div>
 
-      {/* The shared display, not a bare line: a lookup failure needs the same cause-and-fix
-          translation as every other one, and --tone-bad never existed so this rendered uncoloured. */}
       {error ? <ErrorState error={error} compact className="mt-2" /> : null}
 
       {results && (

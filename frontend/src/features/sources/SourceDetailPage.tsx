@@ -22,10 +22,6 @@ const tabIds = ['overview', 'items', 'groups', 'settings'] as const
 
 type TabId = (typeof tabIds)[number]
 
-/**
- * The groups tab takes the connector's own word for its iterables — Companies, Folders, Labels —
- * falling back to the generic one. A descriptor lookup, so nothing here branches on a SourceType.
- */
 function tabsFor(descriptor: ConnectorDescriptor): { id: TabId; label: string }[] {
   return [
     { id: 'overview', label: labels.detail.overview },
@@ -41,7 +37,6 @@ function tabFromParam(value: string | null): TabId {
   return tabIds.includes(value as TabId) ? (value as TabId) : 'overview'
 }
 
-/** Filter values are per-tab, so leaving a tab drops the filters that belong to it. */
 const tabFilterParams: Record<string, string[]> = {
   items: ['q', 'status', 'group'],
   groups: ['gq', 'gstate'],
@@ -54,8 +49,6 @@ export function SourceDetailPage() {
   const [pendingRemoval, setPendingRemoval] = useState(false)
 
   const { data: knowledge, isLoading, error, refetch, armPolling } = useKnowledge(id)
-  // Cursors sharpen the derived state ("importing older items" vs a generic "processing"), and
-  // the activity tab needs them anyway — so fetch once here and share.
   const { data: cursors } = useCursors(id)
   const { pause, resume, remove, sync } = useKnowledgeLifecycle(id ?? '')
 

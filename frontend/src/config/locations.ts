@@ -1,36 +1,18 @@
 /**
- * Places a job posting is commonly filed under, offered as a checkbox list.
- *
- * The backend matches a location by **lowercased substring** on whatever string the board printed
- * (`AtsNormalization.matchesLocation`), and a posting with no location at all is always kept. Three
- * consequences shape this list:
- *
- *  - A country name alone usually misses. Boards file a role as "Bengaluru" with no country, so
- *    "India" on its own drops most Indian roles. Cities are the useful unit; `India` is here only for
- *    the boards that do print it, and is never sufficient on its own.
- *  - A place with more than one accepted name needs every one of them — "bengaluru" does not contain
- *    "bangalore". Those rows carry `values`, so one tick stores the whole group and the trap goes away.
- *  - **An alias that is already a substring of another is redundant**, and one that is short is
- *    dangerous. "New Delhi" contains "delhi" and "Greater Noida" contains "noida", so neither is
- *    listed; "blr", "sf" and "uk" are not listed either, because a two- or three-letter needle
- *    matches inside unrelated words ("uk" hits Fukuoka) and there is no word-boundary check to save it.
- *
- * Values are lowercase because that is what the matcher compares against; the label is what the user
- * reads. Anything not listed can still be typed into the row beside the list.
+ * The backend matches by lowercased substring (`AtsNormalization.matchesLocation`), so list every
+ * spelling of a place, skip an alias that contains another entry, and avoid short needles ("uk"
+ * matches Fukuoka).
  */
 export interface KnownLocation {
   label: string
-  /** Region shown beside the name. Display only. */
+  /** Display only. */
   note: string
-  /** Stored term, and the group's identity. */
   value: string
-  /** Every accepted name, when the place has more than one. Ticking the row stores all of them. */
+  /** Every accepted name; ticking the row stores all of them. */
   values?: string[]
 }
 
 export const knownLocations: KnownLocation[] = [
-  // India — the alias pairs here are the ones that actually cost roles: a board files a Bengaluru
-  // job under either spelling depending on how old the requisition is.
   { label: 'Bengaluru / Bangalore', note: 'India', value: 'bengaluru', values: ['bengaluru', 'bangalore'] },
   { label: 'Delhi / NCR', note: 'India', value: 'delhi', values: ['delhi', 'noida', 'faridabad', 'ghaziabad'] },
   { label: 'Gurugram / Gurgaon', note: 'India', value: 'gurugram', values: ['gurugram', 'gurgaon'] },

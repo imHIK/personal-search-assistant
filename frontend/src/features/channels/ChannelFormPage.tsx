@@ -20,11 +20,6 @@ import { useChannel, useChannelMutations, useConnections } from '@/hooks/queries
 import { DeliveriesList } from './DeliveriesList'
 import { notifyMutationError, notifyTestResult } from './notifyTest'
 
-/**
- * Create or edit a channel. The destination fields and the kind of account it sends through come from
- * the type's descriptor in `config/channels.ts`, so a new platform needs no work here. `type` is fixed
- * after creation.
- */
 export function ChannelFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit = Boolean(id)
@@ -57,7 +52,6 @@ export function ChannelFormPage() {
     setTarget(initialValues(channelFor(existing.type).targetFields, existing.target))
   }, [existing])
 
-  // A different type has a different destination shape and account kind, so both start empty.
   useEffect(() => {
     if (isEdit) return
     setTarget(initialValues(channelFor(type).targetFields))
@@ -76,8 +70,7 @@ export function ChannelFormPage() {
     setTargetErrors(errors)
     if (missingName || Object.keys(errors).length > 0) return
 
-    // The whole target is sent on edit: the server replaces it, which is how a cleared optional
-    // field (an emptied "Copy to") is actually removed.
+    // Sent whole: the server replaces the target, which is how a cleared optional field is removed.
     const body = { name: name.trim(), target: pruneEmpty(target), enabled }
     if (isEdit && id) {
       patch.mutate(
@@ -244,7 +237,6 @@ export function ChannelFormPage() {
   )
 }
 
-/** Required fields left empty, keyed by name. An empty list counts as empty. */
 function missingRequired(fields: FieldSpec[], values: FormValues): Record<string, string> {
   const present = pruneEmpty(values)
   const errors: Record<string, string> = {}

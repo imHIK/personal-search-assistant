@@ -7,82 +7,46 @@ import { roleExcludeTerms, roleIncludeTerms } from './roleTerms'
 import { seniorityOptions } from './searchFilters'
 import type { FieldSpec } from './fields'
 
-/** A metadata value worth showing under a search result's title. */
 export interface ResultFieldSpec {
-  /** Key in the hit's `metadata`. */
   key: string
   /**
-   * `text` shows the value as it is; `flag` shows `label` when the value is true; `option` shows the
-   * matching option's label and hides anything unrecognised; `date` shows `label` plus a relative time.
+   * `flag` shows `label` when true; `option` shows the matching option's label and hides anything
+   * unknown; `date` shows `label` plus a relative time.
    */
   kind: 'text' | 'flag' | 'option' | 'date'
   label?: string
   options?: { value: string; label: string }[]
 }
 
-/**
- * One descriptor per connector. This is the frontend's mirror of the backend's CDI discovery:
- * over there a connector is "add an @ApplicationScoped bean", over here it is "append an object
- * to this array". The wizard, the type filters, the account forms, the settings form and the
- * empty states all render from these — no component branches on a SourceType anywhere.
- *
- * To add a connector once the backend supports it: add the object, flip `implemented` to true.
- */
 export interface ConnectorDescriptor {
   id: SourceType
-  /** What the user picks in the wizard. */
   label: string
-  /** One sentence answering "what will this let me search?". */
   description: string
   icon: LucideIcon
   /** False for SourceType constants with no connector behind them yet. */
   implemented: boolean
-  /** Whether an Account must be selected before this source can be created. */
   requiresConnection: boolean
-  /**
-   * Offer the company lookup helper on this connector's form. A descriptor flag rather than a check
-   * on the id, so no component branches on a SourceType.
-   */
   companyResolver?: boolean
-  /** Written into `Knowledge.inputs`. */
   inputFields: FieldSpec[]
   /**
-   * Inputs the form does not render, derived from the ones it does just before a create or edit is
-   * sent. `previous` is the stored `inputs` on an edit. A descriptor hook, so no page branches on a
-   * SourceType to add them.
+   * Adds inputs the form does not render, just before a create or edit is sent. `previous` is the
+   * stored `inputs` on an edit.
    */
   deriveInputs?: (
     inputs: Record<string, unknown>,
     previous?: Record<string, unknown>,
   ) => Record<string, unknown>
-  /** Written into `Connection.auth` — rendered masked. */
+  /** Rendered masked. */
   authFields: FieldSpec[]
-  /** Written into `Connection.config`. */
   configFields: FieldSpec[]
-  /** Rendered in the "how do I get these?" panel on the account form. */
   credentialHelp?: { title: string; steps: string[]; scopes?: string[] }
-  /**
-   * Connect this account through the backend's OAuth flow instead of pasting a token by hand. The
-   * value is the provider's server-side id (`OAuthProvider.id()`), used as a path segment — so a new
-   * OAuth application is this one field plus one bean, and no component changes.
-   */
+  /** The provider's server-side id. */
   oauth?: { provider: string }
-  /**
-   * What a search result from this source shows under its title, in order — the facts that tell two
-   * results apart at a glance (a posting's company and level, a mail's sender). Omit to show none.
-   */
   resultFields?: ResultFieldSpec[]
-  /**
-   * What this connector's iterables are called. The Groups tab is one row per iterable, and the
-   * generic word is nearly always the wrong one — a job board's groups are companies, Gmail's are
-   * labels. A descriptor entry rather than a lookup in the component, so no tab branches on a
-   * SourceType; omitted falls back to "Groups".
-   */
   groupNoun?: { one: string; many: string }
   /**
-   * The connector tier of `RetentionResolver` (`defaultRetention()`), as `Durations` shorthand —
-   * repeated here only so an empty retention field can say what it inherits. Omit when the
-   * connector has none.
+   * Mirrors the connector's `defaultRetention()`, so an empty retention field can say what it
+   * inherits.
    */
   defaultRetention?: string
 }
@@ -235,8 +199,7 @@ export const connectors: ConnectorDescriptor[] = [
     companyResolver: true,
     deriveInputs: withCompanyLabels,
     groupNoun: { one: 'Company', many: 'Companies' },
-    // Mirrors JobBoardsConnector.defaultRetention(). A closed posting is never tombstoned by the
-    // board — it just stops appearing — so this window is the only thing that removes it.
+    // Mirrors JobBoardsConnector.defaultRetention().
     defaultRetention: '14d',
     inputFields: [
       {
@@ -247,8 +210,6 @@ export const connectors: ConnectorDescriptor[] = [
         placeholder: 'Or type another name — e.g. lever:paytm',
         addOwnLabel: 'Add',
         browseNoun: 'companies we have checked',
-        // Display only: `note` says which board the name resolved against, so ticking a row tells
-        // the user what they are about to read from.
         options: knownCompanies.map((company) => ({
           value: company.handle,
           label: company.label,
@@ -344,10 +305,7 @@ export const connectors: ConnectorDescriptor[] = [
 
 const byId = new Map(connectors.map((c) => [c.id, c]))
 
-/**
- * Look up a descriptor. Falls back to a synthetic one so an unknown SourceType from the backend
- * renders as itself rather than crashing the page.
- */
+/** Falls back to a synthetic descriptor, so an unknown SourceType renders as itself. */
 export function connectorFor(type: SourceType | string): ConnectorDescriptor {
   return (
     byId.get(type as SourceType) ?? {
@@ -366,6 +324,5 @@ export function connectorFor(type: SourceType | string): ConnectorDescriptor {
 
 export const availableConnectors = () => connectors.filter((c) => c.implemented)
 
-/** Connectors that need an Account — drives whether the Accounts screen is relevant at all. */
 export const connectorsNeedingAccounts = () =>
   connectors.filter((c) => c.implemented && c.requiresConnection)

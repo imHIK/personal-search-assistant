@@ -1,46 +1,7 @@
-/**
- * Companies known to sit on a supported job board, offered as a checkbox list so nobody has to guess
- * the handle.
- *
- * The old form asked for the name "as it appears in their careers URL", which is a thing a user
- * cannot know without going and looking — and a wrong guess is indistinguishable from a company that
- * simply is not on Greenhouse/Lever/Ashby/SmartRecruiters. Picking from a list removes the guess for
- * the common case; the free-text row beside it still takes anything not listed.
- *
- * `handle` is the bare name, not a pinned `platform:handle`, on purpose: a bare name is re-probed
- * against every platform at discovery, so a company that migrates ATS can be recovered by re-saving
- * the source. `platform` here is display only — it tells the user which board they will be reading,
- * and is not sent anywhere.
- *
- * Workday is the exception, and the reason the catalog earns its keep most: its handle is a
- * `tenant/site/wdN` triple that **cannot be derived from the company name or even from the careers
- * URL**, because large employers front Workday with a vanity domain (Mastercard's job pages live on
- * `careers.mastercard.com`, which names neither the tenant nor the pod). Someone has to read the
- * triple off an Apply link once; putting it here means nobody reads it twice.
- *
- * **Every entry resolved against the live `POST /api/connectors/job-boards/lookup`.** Anything added
- * here must too — an unverified handle looks authoritative and is worse than no list. Note what that
- * check does and does not prove: it proves a board exists under that handle, not that the board
- * belongs to the company on the label. A handle guessed from a truncated name can land on a stranger
- * ("Automated System Design" resolves a board called `automated`), so only full-name handles are
- * listed, and an entry carrying very few postings for a large employer is worth re-checking.
- *
- * Absent by design: employers that run their own careers stack (Amazon, Apple, Google, Meta,
- * Microsoft, Flipkart, Zomato, Myntra, Jio), and everyone on an ATS with no connector yet — iCIMS
- * (Booking.com), Avature (Bloomberg, Delta), Eightfold (Netflix, PayPal, Morgan Stanley),
- * SuccessFactors (HCL), Radancy (Intuit), RippleHire (7-Eleven), TurboHire (Flipkart).
- *
- * Note how little of a handle is guessable, which is the argument for this file existing at all:
- * DigitalOcean's Greenhouse token is `digitalocean98`, Bank of America's Workday tenant is `ghr`,
- * Samsung's is `sec`, and Akamai's Oracle pod is `fa-extu-saasfaprod1.fa.ocs.oraclecloud.com`. Every
- * one had to be read off a live careers page; none could be derived from the company name.
- */
 export interface KnownCompany {
-  /** What the user sees. */
   label: string
-  /** What goes into `inputs.companies`. */
   handle: string
-  /** Which board hosted it when it was checked. Shown next to the name; never sent to the server. */
+  /** Display only; never sent to the server. */
   platform: string
 }
 
@@ -118,23 +79,11 @@ export const knownCompanies: KnownCompany[] = [
   { label: 'YugabyteDB', handle: 'yugabyte', platform: 'greenhouse' },
 ]
 
-/** Catalog entry for `handle`, if it is one we ship. */
 export function knownCompany(handle: string): KnownCompany | undefined {
   const needle = handle.trim().toLowerCase()
   return knownCompanies.find((c) => c.handle.toLowerCase() === needle)
 }
 
-/**
- * `inputs` with `companyLabels` filled in: the catalog's name for every listed company it knows, so
- * a posting is filed under "Kotak Mahindra Bank" rather than Oracle's site number `CX` or Workday's
- * tenant `ghr`. The server has no source for those names — neither platform publishes one — so this
- * list is the only place they exist.
- *
- * A pinned entry (`lever:paytm`) is looked up without its prefix. An entry the catalog does not know
- * keeps whatever label `previous` gave it, so a label set through the API survives an edit here.
- * The key is omitted when nothing is labelled: an edit that changes nothing must send inputs equal to
- * the stored ones, or the server treats it as a re-provision.
- */
 export function withCompanyLabels(
   inputs: Record<string, unknown>,
   previous?: Record<string, unknown>,

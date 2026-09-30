@@ -1,7 +1,6 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-/** Forwards its ref so callers can scroll a card into view (search citations do exactly this). */
 export const Card = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & { interactive?: boolean }
@@ -31,7 +30,6 @@ export function CardBody({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   return <div className={cn('px-5 py-4', className)} {...props} />
 }
 
-/** A single headline number with its label. Used for the Searchable/Processing/Failed tiles. */
 export function StatTile({
   label,
   value,

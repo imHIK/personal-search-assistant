@@ -22,15 +22,6 @@ import {
 import { useCursors } from '@/hooks/queries'
 import { absoluteTime, formatNumber, relativeTime } from '@/lib/utils'
 
-/**
- * Sync progress, one row per group.
- *
- * The backend models this as cursors: one per (iterableId, direction), each with a position, a
- * lease and a status. None of those words appear here, and neither does the direction — a card per
- * group with a line per direction meant a forward-only source (every job board) repeated "New
- * items" on every row while the real question, "is this one moving, stuck or done", was split
- * across two badges. One row, one state; history only gets named while it is actually being walked.
- */
 export function GroupsTab({
   knowledgeId,
   descriptor,
@@ -64,7 +55,6 @@ export function GroupsTab({
     setParams(next, { replace: true })
   }
 
-  // Grouped by iterable, so the two directions of the same stream read as one thing.
   const groups = useMemo(() => {
     const byIterable = new Map<string, CursorInfo[]>()
     for (const cursor of data ?? []) {
@@ -79,8 +69,6 @@ export function GroupsTab({
     }))
   }, [data])
 
-  // Both filters are applied here rather than by the API: cursors arrive as one unpaged array, so
-  // there is nothing to page and no request to save.
   const needle = (values.gq ?? '').trim().toLowerCase()
   const wantedStates = selectedValues(values, 'gstate')
   const visible = groups.filter((group) => {
@@ -154,7 +142,6 @@ function GroupRow({
   cursors: CursorInfo[]
 }) {
   const presented = presentGroup(cursors)
-  // Lands on Items narrowed to this group; the group-tab filters are dropped since they mean nothing there.
   const itemsLink = { search: `?${new URLSearchParams({ tab: 'items', group: iterableId })}` }
   const alert = groupAlert(cursors)
   const fetched = cursors.reduce((total, cursor) => total + cursor.fetched, 0)

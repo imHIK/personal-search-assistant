@@ -16,13 +16,6 @@ import { cn, relativeTime } from '@/lib/utils'
 import { DigestForm } from './DigestForm'
 import { runOutcome } from './RunView'
 
-/**
- * Every digest, one card each.
- *
- * The cards used to carry the latest run's whole item list, because there was nowhere else to put it.
- * With a detail page they carry only the outcome, and the results live one click away where there is
- * room for them and for every earlier run.
- */
 export function DigestsPage() {
   const { data, isLoading, error, refetch } = useDigests()
   const { create } = useDigestActions()
@@ -109,7 +102,6 @@ function DigestCard({ digest }: { digest: Digest }) {
           <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
             {digest.query ?? ''}
             {digest.interval && ` · ${formatDigestInterval(digest.interval)}`}
-            {/* The window labels already read as phrases ("Last week"), so no prefix. */}
             {digest.window && ` · ${formatDigestWindow(digest.window)}`}
           </p>
         </Link>

@@ -11,14 +11,6 @@ export interface ScheduleValue {
   cron: string
 }
 
-/**
- * Check-frequency picker. Presents plain choices ("Every hour") and maps them onto the
- * `interval` + `scheduleEnabled` pair the API takes; `cron` is offered only under Technical
- * details, since it is an expert escape hatch rather than a user decision.
- *
- * Note the API cannot clear `cron`/`interval` back to inherited — null means "unchanged" — so
- * this deliberately never offers a "reset to default" option it could not honour.
- */
 export function ScheduleField({
   value,
   onChange,
@@ -76,7 +68,6 @@ export function ScheduleField({
   )
 }
 
-/** Turn the picker's value into the flat schedule fields the API expects. */
 export function scheduleToBody(value: ScheduleValue) {
   if (value.preset === 'custom') {
     return { cron: value.cron.trim() || null, interval: null, scheduleEnabled: true }

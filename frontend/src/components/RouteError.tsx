@@ -3,10 +3,6 @@ import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/States'
 import { labels } from '@/config/labels'
 
-/**
- * Route-level boundary. A render crash shows a translated error and a way back rather than a
- * blank page — the rest of the app stays usable.
- */
 export function RouteError() {
   const error = useRouteError()
 

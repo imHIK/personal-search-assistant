@@ -4,15 +4,6 @@ import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Input'
 import { labels } from '@/config/labels'
 
-/**
- * Editor for an account's rate limits — a repeating list of "N requests per window" rows.
- *
- * This is the one place the account form does not render from a `FieldSpec`, because `SchemaForm`
- * has no repeating-group kind: its `list` kind is a list of strings, and flattening a variable
- * number of typed pairs into that would trade a real editor for a syntax the user has to learn.
- * It is still not a branch on any enum — the connector, status and source type never reach here.
- */
-
 const UNITS: { seconds: number; label: string }[] = [
   { seconds: 1, label: labels.accounts.rateLimitUnits.second },
   { seconds: 60, label: labels.accounts.rateLimitUnits.minute },
@@ -20,10 +11,6 @@ const UNITS: { seconds: number; label: string }[] = [
   { seconds: 86400, label: labels.accounts.rateLimitUnits.day },
 ]
 
-/**
- * The largest unit that divides the window exactly, so a rule saved as 3600s reads back as "1 hour"
- * rather than "3600 seconds". Anything that divides nothing evenly falls back to seconds.
- */
 function split(windowSeconds: number): { count: number; unit: number } {
   for (const unit of [...UNITS].reverse()) {
     if (windowSeconds % unit.seconds === 0) {

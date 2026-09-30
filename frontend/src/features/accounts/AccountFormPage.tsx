@@ -19,13 +19,6 @@ import { useConnection, useConnectionMutations } from '@/hooks/queries'
 import { ConnectAccountButton } from './ConnectAccountButton'
 import { RateLimitFields } from './RateLimitFields'
 
-/**
- * Create or edit an account. Both modes render the same descriptor-driven form — the only
- * differences are that `type` is fixed on edit, and that saving goes to POST vs PATCH.
- *
- * The whole form body comes from `descriptor.authFields` / `configFields`, so a new connector's
- * credential shape needs no work here at all.
- */
 export function AccountFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit = Boolean(id)
@@ -45,8 +38,6 @@ export function AccountFormPage() {
 
   const descriptor = accountFor(isEdit && existing ? existing.type : type)
 
-  // Seed the form once the existing account arrives. Secrets round-trip from the server
-  // unredacted, so they land in the masked `secret` controls rather than plain text.
   useEffect(() => {
     if (!existing) return
     setName(existing.name)
@@ -55,13 +46,9 @@ export function AccountFormPage() {
     const d = accountFor(existing.type)
     setAuth(initialValues(d.authFields, existing.auth as Record<string, unknown>))
     setConfig(initialValues(d.configFields, existing.config as Record<string, unknown>))
-    // Rebuilt rather than assigned: the response also carries a derived `unlimited` flag (Jackson
-    // reads the record's isUnlimited() as a getter), and echoing unknown keys back on PATCH is
-    // sloppy even though the server tolerates them.
     setRateLimit({ rules: existing.rateLimit?.rules ?? [] })
   }, [existing])
 
-  // Reset the credential fields when the type changes on a new account — the field set differs.
   useEffect(() => {
     if (isEdit) return
     const d = accountFor(type)
@@ -80,8 +67,7 @@ export function AccountFormPage() {
     }
     setNameError(undefined)
 
-    // Sent on every save, empty list included: absent means "unchanged" server-side, so an empty
-    // list is the only way to express that the user removed the limit they had.
+    // Always sent, even empty: absent means unchanged, so `[]` is how a removed limit is saved.
     const body = {
       name: name.trim(),
       auth: pruneEmpty(auth),
@@ -189,11 +175,6 @@ export function AccountFormPage() {
               {descriptor.credentialHelp && <CredentialHelp descriptor={descriptor} />}
             </CardHeader>
             <CardBody className="space-y-4">
-              {/*
-                When the connector supports it, signing in is the primary path and the token fields
-                are a fallback for someone who obtained one by hand — which is why those fields are
-                marked `technical` in the descriptor and only appear behind the details toggle.
-              */}
               {descriptor.oauth && (
                 <ConnectAccountButton
                   descriptor={descriptor}
@@ -249,8 +230,6 @@ export function AccountFormPage() {
           <ErrorState
             error={saveError}
             compact
-            // The backend verifies credentials before saving, so this is nearly always a
-            // rejected-token 400 rather than a bug.
           />
         )}
 
@@ -267,7 +246,6 @@ export function AccountFormPage() {
   )
 }
 
-/** Collapsible, connector-specific instructions sourced from the descriptor. */
 function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof accountFor> }) {
   const [open, setOpen] = useState(false)
   const help = descriptor.credentialHelp
@@ -305,10 +283,6 @@ function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof accountF
   )
 }
 
-/**
- * Escape hatch for credential keys no descriptor names yet — the backend treats `auth` and
- * `config` as opaque blobs, so a new connector can be exercised before it has a descriptor.
- */
 function RawBlobEditor({
   label,
   values,

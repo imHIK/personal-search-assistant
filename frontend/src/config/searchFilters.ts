@@ -1,23 +1,9 @@
 import type { Blob, SourceType } from '@/api/types'
 
-/**
- * One descriptor per offered search filter. This is the search page's mirror of
- * `connectors.ts`: the panel, its controls and the request body are all derived from this list,
- * so no component ever branches on a field name or a SourceType.
- *
- * A spec's `kind` is what turns a control's value into a filter value. The backend reads a scalar
- * as an exact term and a `{ gte, lte }` map as a range, which is what lets "posted this week" exist at
- * all — it is not expressible as a term.
- *
- * To offer a new filter: append an object. To offer it only for certain sources, list them in
- * `sourceTypes`; a spec with none is offered everywhere.
- */
 export type SearchFilterKind = 'term' | 'select' | 'boolean' | 'min' | 'sinceDays'
 
 export interface SearchFilterSpec {
-  /** URL parameter name. Also the form control's key. */
   id: string
-  /** Full index field path sent to the API. */
   field: string
   kind: SearchFilterKind
   label: string
@@ -25,17 +11,11 @@ export interface SearchFilterSpec {
   placeholder?: string
   /** `select` and `sinceDays` only. */
   options?: { value: string; label: string }[]
-  /**
-   * Restrict the filter to sources where it can actually match. A posting facet offered while
-   * searching Drive would only ever return nothing, which reads as a broken search rather than an
-   * inapplicable filter. Omit to offer the filter everywhere.
-   */
   sourceTypes?: SourceType[]
 }
 
 const jobBoards: SourceType[] = ['JOB_BOARDS']
 
-/** Posting levels, shared by the seniority filter and the result card so both say the same words. */
 export const seniorityOptions: { value: string; label: string }[] = [
   { value: 'INTERN', label: 'Intern' },
   { value: 'JUNIOR', label: 'Junior' },
@@ -93,7 +73,6 @@ export const searchFilters: SearchFilterSpec[] = [
   },
 ]
 
-/** The filters worth offering for the current scope. */
 export function filtersFor(sourceType: SourceType | null): SearchFilterSpec[] {
   return searchFilters.filter(
     (spec) => !spec.sourceTypes || (sourceType !== null && spec.sourceTypes.includes(sourceType)),
@@ -101,9 +80,8 @@ export function filtersFor(sourceType: SourceType | null): SearchFilterSpec[] {
 }
 
 /**
- * The filters worth offering across several sources at once — a digest may span more than one.
- * A union rather than an intersection: a filter that matches only some of the selected sources still
- * narrows usefully, whereas hiding it would leave the user unable to express what they want at all.
+ * A union, not an intersection: a filter that matches only some of the sources still narrows
+ * usefully.
  */
 export function filtersForSources(sourceTypes: SourceType[]): SearchFilterSpec[] {
   if (sourceTypes.length === 0) return searchFilters.filter((spec) => !spec.sourceTypes)
@@ -112,11 +90,6 @@ export function filtersForSources(sourceTypes: SourceType[]): SearchFilterSpec[]
   )
 }
 
-/**
- * Turn the raw control values into the API's `filters` map, skipping anything blank or unusable.
- * A number that will not parse is dropped rather than sent: the backend would read it as a term
- * and silently match nothing, which looks like "the filter broke my search".
- */
 export function buildFilters(
   specs: SearchFilterSpec[],
   values: Record<string, string>,

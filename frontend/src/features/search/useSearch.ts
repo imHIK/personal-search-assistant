@@ -4,7 +4,6 @@ import type { SearchBody, SearchResult } from '@/api/types'
 
 export interface SearchOutcome {
   result: SearchResult
-  /** Asked for an answer and did not get one; the hits are intact. */
   answerUnavailable: boolean
 }
 
@@ -16,8 +15,6 @@ async function run(body: SearchBody): Promise<SearchOutcome> {
     const result = await searchApi.search(body)
     return { result, answerUnavailable: Boolean(result.answerError) }
   } catch (error) {
-    // Only worth a retry if the answer flag is what could have broken it — a failure with answers off
-    // is a genuine search failure and should surface as one.
     const retried = await searchApi.search({ ...body, answer: false }).catch(() => null)
     if (retried) {
       return { result: retried, answerUnavailable: true }
@@ -27,8 +24,8 @@ async function run(body: SearchBody): Promise<SearchOutcome> {
 }
 
 /**
- * Cached per request for the whole session and never refetched on its own, so returning to a search
- * costs no request and no LLM call. `refetch` is the explicit re-run.
+ * Never refetched on its own: returning to a search costs no request and no LLM call. `refetch`
+ * re-runs it.
  */
 export function useSearch(body: SearchBody | null) {
   return useQuery({

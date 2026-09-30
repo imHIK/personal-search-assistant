@@ -3,10 +3,6 @@ import type { Channel } from '@/api/types'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
 
-/**
- * The test endpoint always resolves; a channel that could not send comes back as ERROR on the body,
- * so the outcome is read from the result rather than caught. Shared by the list and the form.
- */
 export function notifyTestResult(channel: Channel) {
   if (channel.status === 'ERROR') {
     toast.error(labels.channels.testFailed(channel.name), {

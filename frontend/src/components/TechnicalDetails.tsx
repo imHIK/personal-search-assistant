@@ -2,17 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { cn } from '@/lib/utils'
 import { labels } from '@/config/labels'
 
-/**
- * The single escape hatch for everything a user shouldn't have to see.
- *
- * The domain model is full of machinery — ids, checksums, cursor positions, leases, generations,
- * raw enum names, RRF scores. Hiding it outright would make the app undebuggable; showing it makes
- * the app unusable. So it is all rendered through this one toggle, off by default and persisted.
- *
- * Rule of thumb for what goes behind it: if a non-technical user could not act on it, it is
- * technical.
- */
-
 const STORAGE_KEY = 'psa.technical-details'
 
 const TechnicalDetailsContext = createContext<{
@@ -35,7 +24,6 @@ export function TechnicalDetailsProvider({ children }: { children: React.ReactNo
   )
 }
 
-/** True when the user has asked to see internals. */
 export function useTechnicalDetails() {
   return useContext(TechnicalDetailsContext).enabled
 }
@@ -44,24 +32,18 @@ export function useTechnicalDetailsToggle() {
   return useContext(TechnicalDetailsContext)
 }
 
-/** Renders its children only when the toggle is on. */
 export function Technical({ children, className }: { children: React.ReactNode; className?: string }) {
   const enabled = useTechnicalDetails()
   if (!enabled) return null
   return <div className={className}>{children}</div>
 }
 
-/** Inline variant, for a single value tucked next to something user-facing. */
 export function TechnicalInline({ children }: { children: React.ReactNode }) {
   const enabled = useTechnicalDetails()
   if (!enabled) return null
   return <>{children}</>
 }
 
-/**
- * A labelled block of raw key/value data. Used for cursor positions, checksums, index rollups —
- * anything that is a debugging aid rather than an answer to a user's question.
- */
 export function TechnicalPanel({
   title = labels.common.technical,
   rows,

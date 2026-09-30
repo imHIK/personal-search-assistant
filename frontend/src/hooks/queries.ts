@@ -29,13 +29,9 @@ import {
   POLL_INTERVAL_MS,
 } from '@/config/constants'
 
-/**
- * Query keys in one place, so a mutation can invalidate precisely what it affected.
- */
 export const keys = {
   knowledge: ['knowledge'] as const,
   knowledgeOne: (id: string) => ['knowledge', id] as const,
-  /** `filters` is the whole values map, so a new filter needs no change here. */
   entities: (id: string, filters: Record<string, string>, offset: number, limit: number) =>
     ['knowledge', id, 'entities', filters, offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
@@ -43,7 +39,6 @@ export const keys = {
   digestOne: (id: string) => ['digests', id] as const,
   digestRuns: (id: string, limit: number, offset: number) =>
     ['digests', id, 'runs', limit, offset] as const,
-  /** Everything under one digest's runs, for invalidating every page at once. */
   digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
   tasks: ['tasks'] as const,
   taskOne: (id: string) => ['tasks', id] as const,
@@ -59,14 +54,6 @@ export const keys = {
   runDeliveries: (runId: string) => ['deliveries', 'run', runId] as const,
 }
 
-/**
- * The backend does all real work on background pollers and exposes no job status or SSE, so the
- * only way to show progress is to re-read. Polling every 5s forever would be wasteful, so each
- * live query decides for itself whether work is still in flight.
- *
- * `hasWorkInFlight` is deliberately generous: a mutation also arms polling for a short window,
- * because a freshly-triggered sync hasn't produced any observable "in flight" signal yet.
- */
 function knowledgeHasWork(knowledge: Knowledge): boolean {
   if (knowledge.status === 'DRAFT') return true
   if (knowledge.status !== 'ACTIVE') return false
@@ -83,10 +70,6 @@ function cursorsHaveWork(cursors: CursorInfo[]): boolean {
   )
 }
 
-/**
- * Arms polling for a fixed window after a mutation, so server-side effects that take a tick or
- * two to appear (a sync arming cursors, an entity being re-claimed) show up without a refresh.
- */
 function useRecentlyMutated() {
   const [until, setUntil] = useState(0)
   const arm = useCallback(() => setUntil(Date.now() + POLL_AFTER_MUTATION_MS), [])
@@ -99,8 +82,6 @@ function useRecentlyMutated() {
   }, [until])
   return { armed: Date.now() < until, arm }
 }
-
-// ---- Knowledge ------------------------------------------------------------------------------
 
 export function useKnowledgeList() {
   const { armed, arm } = useRecentlyMutated()
@@ -148,7 +129,7 @@ export function useEntities(
         limit,
       }),
     enabled: Boolean(id),
-    placeholderData: (previous) => previous, // keeps the table steady while paging
+    placeholderData: (previous) => previous,
     refetchInterval: (q) => {
       const data = q.state.data
       if (!data) return false
@@ -167,7 +148,6 @@ export function useCursors(id: string | undefined, enabled = true) {
   })
 }
 
-/** Every knowledge mutation invalidates the same set, so callers never have to remember. */
 function useKnowledgeInvalidation() {
   const client = useQueryClient()
   return useCallback(
@@ -225,8 +205,6 @@ export function useKnowledgeLifecycle(id: string) {
   return { pause, resume, remove, sync }
 }
 
-// ---- Entities -------------------------------------------------------------------------------
-
 export function useEntityActions(knowledgeId: string) {
   const client = useQueryClient()
   const invalidateEntities = useCallback(() => {
@@ -245,8 +223,6 @@ export function useEntityActions(knowledgeId: string) {
 
   return { reindex, remove }
 }
-
-// ---- Connections ----------------------------------------------------------------------------
 
 export function useConnections(type?: string) {
   return useQuery({
@@ -300,15 +276,12 @@ export function useConnectionMutations() {
   return { create, patch, makeDefault, test, remove }
 }
 
-/** Connections indexed by id, for showing an account name next to a source. */
 export function useConnectionsById(): Map<string, Connection> {
   const { data } = useConnections()
   const map = useRef(new Map<string, Connection>())
   map.current = new Map((data ?? []).map((connection) => [connection.id, connection]))
   return map.current
 }
-
-// ---- Publishing channels ----------------------------------------------------------------------
 
 export function useChannels() {
   return useQuery({ queryKey: keys.channels, queryFn: channelsApi.list })
@@ -348,10 +321,6 @@ export function useChannelMutations() {
   return { create, patch, test, remove }
 }
 
-/**
- * A channel's recent deliveries. Polls while anything is still queued, since the worker sends in the
- * background and there is no push channel to say it has.
- */
 export function useDeliveries(channelId: string | undefined, limit = 20) {
   return useQuery({
     queryKey: keys.deliveries(channelId!, null, limit, 0),
@@ -370,7 +339,6 @@ export function useRetryDelivery() {
   })
 }
 
-/** What a digest run was sent to. Polls while any of it is still queued. */
 export function useRunDeliveries(runId: string | undefined) {
   return useQuery({
     queryKey: keys.runDeliveries(runId!),
@@ -381,8 +349,6 @@ export function useRunDeliveries(runId: string | undefined) {
   })
 }
 
-// ---- Health ---------------------------------------------------------------------------------
-
 export function useHealth() {
   return useQuery({
     queryKey: keys.health,
@@ -392,8 +358,6 @@ export function useHealth() {
     staleTime: 0,
   })
 }
-
-// ---- Digests --------------------------------------------------------------------------------
 
 export function useDigests() {
   return useQuery({ queryKey: keys.digests, queryFn: digestsApi.list })
@@ -412,15 +376,10 @@ export function useDigestRuns(id: string | undefined, limit = 20, offset = 0) {
     queryKey: keys.digestRuns(id!, limit, offset),
     queryFn: () => digestsApi.runs(id!, limit, offset),
     enabled: Boolean(id),
-    // A page of history stays valid while paging back and forth; only a run makes it stale.
     placeholderData: (previous) => previous,
   })
 }
 
-/**
- * The task library. Rarely changes and is read on the digest form as well as its own page, so it is
- * worth keeping around between visits.
- */
 export function useTasks() {
   return useQuery({ queryKey: keys.tasks, queryFn: tasksApi.list, staleTime: 60_000 })
 }
@@ -433,7 +392,6 @@ export function useTask(id: string | undefined) {
   })
 }
 
-/** Configured models. Fixed for the life of the process, so it never needs refetching. */
 export function useLlmProfiles() {
   return useQuery({ queryKey: keys.llmProfiles, queryFn: tasksApi.llmProfiles, staleTime: Infinity })
 }
@@ -461,7 +419,6 @@ export function useTaskActions() {
   return { create, update, remove }
 }
 
-/** Create / enable / delete / run-now, each invalidating exactly what it affected. */
 export function useDigestActions() {
   const client = useQueryClient()
   const invalidate = () => void client.invalidateQueries({ queryKey: keys.digests })
@@ -499,7 +456,6 @@ export function useDigestActions() {
       invalidate()
     },
   })
-  /** Clears the seen-set only — the runs stay, so the history view is unaffected. */
   const resetHistory = useMutation({
     mutationFn: (id: string) => digestsApi.resetHistory(id),
     onSuccess: (_data, id) => {

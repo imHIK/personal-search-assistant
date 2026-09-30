@@ -1,12 +1,3 @@
-/**
- * Every user-facing string in the app.
- *
- * Two reasons this file exists. First, the interface vocabulary is reviewable in one place rather
- * than scattered across components. Second, the domain vocabulary and the UI vocabulary are
- * deliberately different: the code, API and docs say Knowledge / Entity / Iterable / Cursor
- * (see CLAUDE.md — that is fixed), but none of those words mean anything to someone using the app.
- * The mapping lives here and nowhere else, so changing "Sources" back to "Knowledge" is one edit.
- */
 
 export const nouns = {
   /** Knowledge */
@@ -20,7 +11,6 @@ export const nouns = {
   accounts: 'Accounts',
 } as const
 
-/** Named here so the idle hint can quote the toggle by the exact name on the switch. */
 const answerToggle = 'Summarize results'
 
 export const labels = {
@@ -123,7 +113,6 @@ export const labels = {
       `${indexed.toLocaleString()} of ${total.toLocaleString()} ready to search`,
   },
 
-  /** Shared by every filter bar. The filters themselves are descriptors in `config/listFilters.ts`. */
   filters: {
     clear: 'Clear',
     all: (noun: string) => `All ${noun.toLowerCase()}`,
@@ -367,8 +356,6 @@ export const labels = {
     sentTo: 'Sent to',
     noResults: 'Nothing new',
     resultCount: (n: number) => `${n} new ${n === 1 ? 'result' : 'results'}`,
-    // A digest that is not filtering by newness has no "new" to speak of; calling its matches new
-    // is simply wrong, and was the copy every non-job-search digest got.
     resultCountPlain: (n: number) => `${n} ${n === 1 ? 'result' : 'results'}`,
     paused: 'Paused',
     pause: 'Pause',
@@ -383,7 +370,6 @@ export const labels = {
     save: 'Save changes',
     saved: 'Saved',
 
-    // Detail page
     back: 'All digests',
     tabRuns: 'History',
     tabSettings: 'Settings',
@@ -403,20 +389,14 @@ export const labels = {
     taskLabel: 'Then',
     taskNone: 'Just lists what is new',
     useLlmOff: 'LLM off',
-    // A digest naming a task that cannot be resolved must not be described as naming none — that
-    // reads as a working digest and hides the reason its runs carry no task output.
     taskMissing: 'Task unavailable',
     showsOnlyNew: 'Shows only what is new',
     showsEverything: 'Shows every match, new or not',
 
-    // Run outcomes. These three all rendered as "no results" before the counters existed.
     outcomeFailed: 'Failed',
     outcomeNothingMatched: 'Nothing matched',
     outcomeAllSeen: (n: number) =>
       `Nothing new — ${n} ${n === 1 ? 'result' : 'results'}, all seen before`,
-    // The window counts from when something was last indexed, so a source that is ingested once and
-    // then left alone silently leaves a short window and never comes back. Reported as "nothing
-    // matched", that sends people to rewrite a query that was fine all along.
     outcomeOutsideWindow: (n: number) =>
       `Nothing in this window — ${n} older ${n === 1 ? 'match' : 'matches'}`,
     outcomeOutsideWindowHint:
@@ -437,7 +417,6 @@ export const labels = {
     resetHistoryDone: 'History reset — the next run starts fresh',
     historyResetAt: 'History was reset',
 
-    // Form additions
     taskField: 'What should I do with the results?',
     taskFieldHint: 'An instruction the assistant runs over everything the digest finds.',
     taskFieldNone: 'Nothing — just show me what is new',

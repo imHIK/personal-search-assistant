@@ -3,31 +3,18 @@ import type { Block, Inline } from '@/lib/answerMarkdown'
 import { parseAnswer } from '@/lib/answerMarkdown'
 import { cn } from '@/lib/utils'
 
-/**
- * Where a `[n]` marker points. `label` is what the chip announces — the title of the source it
- * names — and `onClick` is what brings that source into view.
- */
 export interface Citation {
   label: string
   onClick: () => void
 }
 
-/**
- * Renders the Markdown subset our prompts produce, with `[n]` markers turned into buttons.
- *
- * Shared by the search answer and the digest task summary. Both get the same string shape from the
- * same family of prompts and the same numbered-sources contract, so they get the same renderer:
- * the only thing that differs is what a citation jumps to, which is `citation`'s business.
- *
- * Nothing here is ever interpreted as HTML — see `lib/answerMarkdown.ts`.
- */
 export function Markdown({
   text,
   citation,
   className,
 }: {
   text: string
-  /** Resolve a 1-based marker to something clickable; return null to render it as inert text. */
+  /** Resolves a 1-based marker; null renders it as inert text. */
   citation?: (index: number) => Citation | null
   className?: string
 }) {
@@ -59,8 +46,6 @@ function BlockView({ block, citation }: { block: Block; citation: Resolve }) {
       return <ListView block={block} citation={citation} />
 
     case 'table':
-      // Tabular source data is often wider than its container; it scrolls inside its own box so the
-      // page itself never scrolls sideways.
       return (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
@@ -99,12 +84,6 @@ function BlockView({ block, citation }: { block: Block; citation: Resolve }) {
   }
 }
 
-/**
- * A list and whatever is nested under it.
- *
- * `space-y-1` on the outer list only: a sub-list is part of its parent item, so spacing it away from
- * the line it belongs to reads as a sibling rather than a child.
- */
 function ListView({
   block,
   citation,
@@ -162,8 +141,6 @@ function InlineView({ inline, citation }: { inline: Inline[]; citation: Resolve 
 }
 
 function CitationChip({ index, target }: { index: number; target: Citation | null }) {
-  // The model can cite a number outside the source list. Render it inert rather than linking to
-  // something that isn't there.
   if (!target) {
     return <sup className="text-[var(--text-subtle)]">[{index}]</sup>
   }

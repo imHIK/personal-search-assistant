@@ -2,21 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBlocker } from 'react-router-dom'
 
 /**
- * Asks before throwing away a half-filled form.
- *
- * Three ways out need covering, and no single mechanism reaches all of them:
- * - **In-app navigation** (back links, sidebar, Cancel, the browser back button) goes through the
- *   data router, so `useBlocker` holds it until the user answers.
- * - **Tab close / reload** never reaches the router; `beforeunload` is the only hook, and browsers
- *   show their own prompt there — a custom dialog is not allowed.
- * - **In-page resets** ("Change type") are plain state changes the router never sees; wrap them in
- *   `guard(action)`.
- *
- * Call `allowNavigation()` right before a navigation that *is* the save (e.g. to the created record) —
- * the form is still dirty at that moment and would otherwise block its own success path. It is a ref,
- * not state, because the navigate happens in the same tick, before any re-render.
- *
- * Render the result as `<ConfirmDialog {...guard.dialogProps} …copy… />`.
+ * Covers three exits: in-app navigation (`useBlocker`), tab close or reload (`beforeunload`, with
+ * the browser's own prompt), and in-page resets (wrap them in `guard(action)`). Call
+ * `allowNavigation()` right before a navigation that is the save: the form is still dirty then.
  */
 export function useUnsavedChangesGuard(dirty: boolean) {
   const bypass = useRef(false)

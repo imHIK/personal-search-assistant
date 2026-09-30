@@ -13,10 +13,7 @@ export const knowledgeApi = {
 
   get: (id: string) => http<Knowledge>(`/api/knowledge/${encodeURIComponent(id)}`),
 
-  /**
-   * Note: this resolves with **200 even when activation failed** — the returned knowledge then
-   * carries `status: 'ERROR'` and a `lastError`. Callers must check `status`, not just the promise.
-   */
+  /** Resolves 200 even when activation failed: check the returned `status` for 'ERROR'. */
   create: (body: CreateKnowledgeBody) =>
     http<Knowledge>('/api/knowledge', { method: 'POST', body }),
 
@@ -32,10 +29,7 @@ export const knowledgeApi = {
   remove: (id: string) =>
     http<null>(`/api/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /**
-   * `status` is a set, not one value: the API takes a comma-separated list, which is what lets one
-   * filter chip cover both in-flight states. `q` matches the title or the external id.
-   */
+  /** `status` is a comma-separated set; `q` matches the title or the external id. */
   entities: (
     id: string,
     params: {

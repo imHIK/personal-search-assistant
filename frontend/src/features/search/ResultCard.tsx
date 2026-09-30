@@ -11,11 +11,6 @@ import { labels } from '@/config/labels'
 import { useKnowledgeList } from '@/hooks/queries'
 import { cn, copyToClipboard, displayName, highlightSegments, relativeTime } from '@/lib/utils'
 
-/**
- * The metadata a connector says is worth showing on a result, formatted in its order. Absent values
- * are skipped, and an option value the descriptor does not know is hidden rather than shown raw — an
- * enum name belongs behind technical details.
- */
 function resultFacts(fields: ResultFieldSpec[] | undefined, metadata: Blob | null | undefined): string[] {
   const facts: string[] = []
   for (const field of fields ?? []) {
@@ -44,12 +39,10 @@ function resultFacts(fields: ResultFieldSpec[] | undefined, metadata: Blob | nul
   return facts
 }
 
-/** A leg rank for the technical panel; a leg that did not return the chunk shows a dash, not a zero. */
 function rankLabel(rank: number | null): string {
   return rank === null ? '—' : `#${rank}`
 }
 
-/** An excerpt with the query's terms marked. */
 function Excerpt({ text, query }: { text: string; query: string }) {
   return (
     <>
@@ -67,22 +60,11 @@ function Excerpt({ text, query }: { text: string; query: string }) {
   )
 }
 
-/**
- * One result — an item, not a passage. Its best-matching excerpt shows by default; the item's other
- * matching passages sit behind a disclosure, so a long document that matches in five places is one
- * card rather than five near-identical ones.
- *
- * The relevance bar is deliberately relative to the top hit rather than absolute: the score is a
- * raw RRF value with no calibration behind it (the reranker is a passthrough), so an absolute
- * number would imply a precision that isn't there. The raw score is available under Technical
- * details for anyone who wants it.
- */
 export const ResultCard = forwardRef<HTMLElement, {
   hit: SearchHit
   rank: number
   query: string
   topScore: number
-  /** Briefly set after a citation in the answer jumps here, so the arrival is visible. */
   highlighted?: boolean
 }>(function ResultCard({ hit, rank, query, topScore, highlighted }, ref) {
   const technical = useTechnicalDetails()
@@ -99,8 +81,6 @@ export const ResultCard = forwardRef<HTMLElement, {
   return (
     <Card
       ref={ref as React.Ref<HTMLDivElement>}
-      // Focusable but not in the tab order: a citation jump moves focus here so a screen reader and
-      // the keyboard both follow the scroll, without adding a stop to every card on the page.
       id={`hit-${rank}`}
       tabIndex={-1}
       className={cn(
@@ -225,8 +205,6 @@ export const ResultCard = forwardRef<HTMLElement, {
             ['entityId', hit.entityId],
             ['knowledgeId', hit.knowledgeId],
             ['ordinal', String(hit.ordinal)],
-            // Why this result sits where it does, stage by stage — the thing to read before changing a
-            // search setting.
             ['lexicalRank', rankLabel(hit.ranking.lexicalRank)],
             ['vectorRank', rankLabel(hit.ranking.vectorRank)],
             ['retrievalScore', hit.ranking.retrievalScore.toFixed(6)],
