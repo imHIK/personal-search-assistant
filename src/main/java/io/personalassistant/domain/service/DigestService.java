@@ -22,8 +22,7 @@ public interface DigestService {
      * untouched; see {@link #resetHistory} for clearing that deliberately.
      *
      * @throws java.util.NoSuchElementException if no such digest exists
-     * @throws IllegalArgumentException        if the edit would leave it with neither a query nor a
-     *                                         source document
+     * @throws IllegalArgumentException        if the edit would leave it without a query
      */
     Digest update(String id, DigestPatch patch);
 

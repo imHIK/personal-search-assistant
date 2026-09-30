@@ -258,8 +258,118 @@ Two request-shaping details on both legs, and one distinction that has already c
   (`SearchHit.groundingText()`), and only its `chunkId`, `ordinal`, `snippet` and `score` go on the wire.
 - **`ranking` says how the score was reached.** `lexicalRank` / `vectorRank` (where each leg placed the
   best chunk; null when that leg did not return it), `retrievalScore` (fused, or the single leg's score),
-  `groupedScore` (after the further-matches bonus) and `recencyFactor`. A document search records
-  `facetsMatched` instead of leg ranks, since every facet ran its own legs. Nothing ranks on it: it exists
+  `groupedScore` (after the further-matches bonus) and `recencyFactor`. Nothing ranks on it: it exists
+  so that when the wrong item comes first, the stage responsible — and so the one setting worth changing —
+  is visible. The console shows it under Technical details.
+
+---
+
+## Filtering & permissions
+
+Every query carries a `filter` on `knowledgeId` (and later, allowed-scope ids).
+
+> **This is scoping, not access control.** The app has no authentication or authorization of any kind
+> today (see [`limitations.md`](./limitations.md) and `ROADMAP.md`), so the `knowledgeId` filter only
+> restricts a query to what the *caller asked for* — it does not restrict what a caller is *allowed*
+> to ask for. Retrieval-time enforcement is the intended shape once identity exists; it is not a
+> property the system has now.
+
+`SearchQuery.filters` is a free-form `field → value` map with the key used **verbatim as the field
+name**. That means callers can filter on any indexed field — top-level keywords like `sourceType`,
+`iterableId`, or `uri`, or a dotted path into `metadata` — without a code change.
+
+The *value* decides the clause:
+
+| Value | Clause | Example |
+|---|---|---|
+| a scalar | `term` | `{"metadata.company": "Acme"}` |
+| a map with `gte`/`gt`/`lte`/`lt` | `range` | `{"metadata.postedAt": {"gte": "2026-08-18T00:00:00Z"}}` |
+
+A scalar cannot express "newer than" or "at least", which ruled out every date window and numeric
+floor — hence the range form. Two details are load-bearing:
+
+- **JSON types are preserved.** Values used to go through `String.valueOf`, which made
+  `{"metadata.remote": true}` serialise as the string `"true"` — a term query against a `boolean`
+  field then matches nothing, and a range bound compares lexicographically, where `"9" > "150000"`.
+- **Unrecognised keys inside a bounds map are dropped, not forwarded.** Passing them through would let
+  a caller inject query DSL through what is documented as a value. A map with no recognised bound
+  degrades to a term that matches nothing, which is visible in the query rather than silently widening
+  the result set.
+
+### Collapsing duplicates
+
+Opt-in per request (`collapseDuplicates`; the console sends it unless the user turns grouping off),
+applied **after** entity grouping and **before** the topK trim, so a collapsed result set is still full.
+It is a grouping over the returned results — nothing is deleted and the index is never touched. Three
+layers: identical normalised text, an equal `metadata.dedupeKey`, then token-shingle overlap above
+`app.search.dedupe.near-duplicate-threshold`. The text compared is a result's whole grounding text (best
+chunk and further matches), not one chunk.
+
+The two text layers also require the titles to agree — token overlap of at least
+`app.search.dedupe.title-similarity` (0.5; a blank title does not block). Identical text under unrelated
+titles is shared boilerplate, not a copy: every posting of one company carries the same "About us", and a
+text-only comparison merged different roles whose best-matching passage was that intro. 0.5 still groups
+"Fwd: Q3 report" with "Q3 report". The key layer skips the check, since a source that states a
+`dedupeKey` has already defined "the same".
+
+> **Shingles rather than embedding cosine, deliberately.** Cosine answers a different question: two
+> genuinely distinct roles at one company, or two reports on one project, sit very close in embedding
+> space, and collapsing them would hide a real result — a worse failure than showing a duplicate.
+> Shingle overlap measures shared *wording*, which is what "the same document twice" actually is. It is
+> also free, since hits already carry their text while the vectors are excluded from `_source`.
+
+`SearchQuery.maxChunksPerEntity` overrides it per request; a digest sends 1, since it reports items.
+- **Score.** Best chunk plus `app.search.grouping.extra-match-weight` (0.1) of each further match. Best
+  chunk alone ignores that matching in several passages is a better match; a plain sum would rank long
+  documents above short ones on length. Bounded by the per-result cap, the bonus breaks near-ties only.
+- **Answers keep every passage.** The answer is grounded in `SearchHit.groundingText()` — the best chunk
+  and its further matches in document order — so a question whose answer spans many chunks of one document
+  still sees them all. That is the case a per-entity cap on chunks used to harm, and why it was off by
+  default; grouping does not have that cost.
+
+The cap used to be applied inside `HybridRetriever`, to the pool it had already fetched, which is what
+starved the result set. It no longer exists there.
+
+### Freshness
+
+`RecencyBoost` runs right after grouping and multiplies a result's score by
+`1 + app.search.recency.weight × 0.5^(age / half-life)` — at most +10% for a brand-new item, halving every
+`app.search.recency.half-life-days` (14). A multiplier rather than a sort or a filter: an unfitting posting
+from yesterday is still worse than a fitting one from last week, so freshness may only break near-ties.
+The date comes from the `recency` field set in `config/field-sets.json`, tried in order; it ships as
+`postedAt` alone, because a file's `modifiedAt` moves on every save and would reward churn. A result with
+no such value is untouched. Only the set's default list applies — results carry no source type by then.
+
+---
+
+## What comes back on a hit
+
+Two request-shaping details on both legs, and one distinction that has already caused a real bug:
+
+- **`_source` excludes `embedding`.** Nothing on the read path reads the vector back, so without this
+  every hit ships its full 768 floats to be parsed and dropped — on a 100-candidate hybrid search that
+  is two orders of magnitude more bytes than the text the caller wanted.
+- **`highlight` on `text` + `title`, lexical leg only** (`app.search.highlight-fragments`, 0 to
+  disable). The `<em>` markers are stripped when the fragments are joined: the fragment *boundaries*
+  are the useful part, and passing markup on would force the UI to render server-supplied HTML. The
+  knn leg carries no query terms, so asking it for fragments would return none.
+- **`text` vs `snippet` on `SearchHit`.** `text` is the chunk exactly as indexed and is what grounding
+  is built from. `snippet` is a display excerpt — the highlight fragment where there is one, otherwise
+  the first `app.search.snippet-chars` characters (280 by default; 0 disables truncation). Only
+  `snippet` goes on the wire, since the console renders it and nothing renders the full text.
+
+  This split is the fix for a shipped bug, and the reason it is documented here. The 280-char
+  truncation used to be applied in the adapter with no way to recover the rest, and `DefaultSearchAgent`
+  built its prompt from the snippet — so grounded answers were produced from roughly a quarter of every
+  chunk. On a table the visible symptom was an answer that listed the first few rows, cut off mid-item,
+  and then stated that the remaining rows were not present in the sources. Any new consumer of
+  `SearchHit` has to pick a side of that line deliberately: display takes `snippet`, reasoning takes
+  `text`.
+- **`moreMatches` follows the same split.** Each further match keeps its full `text` for grounding
+  (`SearchHit.groundingText()`), and only its `chunkId`, `ordinal`, `snippet` and `score` go on the wire.
+- **`ranking` says how the score was reached.** `lexicalRank` / `vectorRank` (where each leg placed the
+  best chunk; null when that leg did not return it), `retrievalScore` (fused, or the single leg's score),
+  `groupedScore` (after the further-matches bonus) and `recencyFactor`. Nothing ranks on it: it exists
   so that when the wrong item comes first, the stage responsible — and so the one setting worth changing —
   is visible. The console shows it under Technical details.
 

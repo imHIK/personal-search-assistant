@@ -25,7 +25,6 @@ public record DigestDto(
         String id,
         String name,
         String query,
-        String sourceEntityId,
         List<String> knowledgeIds,
         Map<String, Object> filters,
         String window,
@@ -43,21 +42,16 @@ public record DigestDto(
         Instant historyResetAt,
         List<String> channelIds) {
 
-    /**
-     * @throws IllegalArgumentException if it names neither a query nor a source document — a digest
-     *                                  with nothing to search for would run forever and find nothing
-     */
+    /** @throws IllegalArgumentException on a blank query or name */
     public Digest toDomain() {
-        boolean hasQuery = query != null && !query.isBlank();
-        boolean hasDocument = sourceEntityId != null && !sourceEntityId.isBlank();
-        if (!hasQuery && !hasDocument) {
-            throw new IllegalArgumentException("a digest needs either query or sourceEntityId");
+        if (query == null || query.isBlank()) {
+            throw new IllegalArgumentException("query must not be blank");
         }
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name must not be blank");
         }
         return new Digest(
-                id, name, query, sourceEntityId,
+                id, name, query,
                 knowledgeIds == null ? List.of() : knowledgeIds,
                 filters == null ? Map.of() : filters,
                 DigestPatchDto.checkedWindow(window),
@@ -91,7 +85,7 @@ public record DigestDto(
     }
 
     public static DigestDto from(Digest d) {
-        return new DigestDto(d.id(), d.name(), d.query(), d.sourceEntityId(), d.knowledgeIds(),
+        return new DigestDto(d.id(), d.name(), d.query(), d.knowledgeIds(),
                 d.filters(), d.window(), d.schedule().cron(),
                 d.schedule().interval() == null ? null : d.schedule().interval().toString(),
                 d.taskId(), d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(), d.onlyNew(),

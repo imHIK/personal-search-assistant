@@ -408,31 +408,6 @@ public class OpenSearchSearchIndex implements SearchIndex {
         return joined.isEmpty() ? null : joined;
     }
 
-    @Override
-    public List<String> chunkTextsByEntity(String entityId, int limit) {
-        ObjectNode body = mapper.createObjectNode();
-        body.put("size", Math.max(limit, 1));
-        body.putObject("query").putObject("term").put("entityId", entityId);
-        // Ordinal order, so the reassembled text reads as the document did rather than in score order.
-        body.putArray("sort").addObject().putObject("ordinal").put("order", "asc");
-        body.putObject("_source").putArray("includes").add("text");
-
-        Request request = new Request("POST", "/" + alias + "/_search");
-        request.setJsonEntity(write(body));
-        JsonNode response = execute(request);
-        if (response == null) {
-            return List.of();
-        }
-        List<String> texts = new ArrayList<>();
-        for (JsonNode hit : response.path("hits").path("hits")) {
-            String text = hit.path("_source").path("text").asText("");
-            if (!text.isBlank()) {
-                texts.add(text);
-            }
-        }
-        return List.copyOf(texts);
-    }
-
     private void deleteByTerm(String field, String value) {
         ObjectNode body = mapper.createObjectNode();
         body.putObject("query").putObject("term").put(field, value);

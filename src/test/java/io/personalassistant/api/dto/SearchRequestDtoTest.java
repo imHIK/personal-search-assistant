@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 class SearchRequestDtoTest {
 
     private static SearchRequestDto request(String query, String mode, Integer topK) {
-        return new SearchRequestDto(query, null, null, topK, mode, null, null, null, null);
+        return new SearchRequestDto(query, null, null, topK, mode, null, null, null);
     }
 
     @Test

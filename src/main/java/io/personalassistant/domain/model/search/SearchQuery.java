@@ -22,10 +22,6 @@ import java.util.Map;
  *                     posting) rather than a long document whose answer legitimately spans chunks
  * @param collapseDuplicates whether to group near-identical results and keep one per group. Off by
  *                     default so existing callers see unchanged behaviour
- * @param sourceEntityId an already-ingested entity to search <em>by</em> rather than searching for —
- *                     "find everything like this document". When set, {@code text} stops being the
- *                     query and becomes a statement of intent ("roles I could do next") that steers
- *                     how the document is turned into queries; it may be blank
  */
 public record SearchQuery(
         String text,
@@ -35,35 +31,17 @@ public record SearchQuery(
         Mode mode,
         boolean answer,
         Integer maxChunksPerEntity,
-        boolean collapseDuplicates,
-        String sourceEntityId) {
+        boolean collapseDuplicates) {
 
     public enum Mode { LEXICAL, SEMANTIC, HYBRID }
 
-    public SearchQuery {
-        if (sourceEntityId != null && sourceEntityId.isBlank()) {
-            sourceEntityId = null;
-        }
-    }
-
     public static SearchQuery of(String text) {
-        return new SearchQuery(text, List.of(), Map.of(), 10, Mode.HYBRID, false, null, false, null);
-    }
-
-    /** True when this searches by an existing document rather than by typed text. */
-    public boolean isDocumentQuery() {
-        return sourceEntityId != null;
-    }
-
-    /** A copy running {@code facet} as the query text, used for each derived facet query. */
-    public SearchQuery withText(String facet) {
-        return new SearchQuery(facet, knowledgeIds, filters, topK, mode, answer, maxChunksPerEntity,
-                collapseDuplicates, sourceEntityId);
+        return new SearchQuery(text, List.of(), Map.of(), 10, Mode.HYBRID, false, null, false);
     }
 
     /** A copy retrieving by {@code other} — how a search whose query vector was refused stays lexical. */
     public SearchQuery withMode(Mode other) {
         return new SearchQuery(text, knowledgeIds, filters, topK, other, answer, maxChunksPerEntity,
-                collapseDuplicates, sourceEntityId);
+                collapseDuplicates);
     }
 }

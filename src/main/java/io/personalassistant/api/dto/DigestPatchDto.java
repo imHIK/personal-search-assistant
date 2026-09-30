@@ -32,7 +32,6 @@ public record DigestPatchDto(JsonNode body) {
         return new DigestPatch(
                 patch.requiredText("name"),
                 patch.text("query"),
-                patch.text("sourceEntityId"),
                 patch.strings("knowledgeIds"),
                 patch.map("filters"),
                 window(patch),

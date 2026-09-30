@@ -67,12 +67,11 @@ public record SearchResponseDto(List<Hit> hits, String answer, String answerErro
      *
      * @param lexicalRank    where the word-match leg ranked the best chunk, or null
      * @param vectorRank     where the meaning leg ranked it, or null
-     * @param facetsMatched  facet queries that returned it, for a document search; otherwise 0
      * @param retrievalScore score out of retrieval
      * @param groupedScore   after the further-matches bonus
      * @param recencyFactor  freshness multiplier; 1 when none applied
      */
-    public record Ranking(Integer lexicalRank, Integer vectorRank, int facetsMatched, double retrievalScore,
+    public record Ranking(Integer lexicalRank, Integer vectorRank, double retrievalScore,
                           double groupedScore, double recencyFactor) {}
 
     /**
@@ -89,8 +88,8 @@ public record SearchResponseDto(List<Hit> hits, String answer, String answerErro
                                 .map(m -> new Match(m.chunkId(), m.ordinal(), m.snippet(), m.score()))
                                 .toList(),
                         new Ranking(h.ranking().lexicalRank(), h.ranking().vectorRank(),
-                                h.ranking().facetsMatched(), h.ranking().retrievalScore(),
-                                h.ranking().groupedScore(), h.ranking().recencyFactor())))
+                                h.ranking().retrievalScore(), h.ranking().groupedScore(),
+                                h.ranking().recencyFactor())))
                 .toList();
         return new SearchResponseDto(hits, r.answer(), r.answerError(), r.vectorError(), r.tookMs());
     }

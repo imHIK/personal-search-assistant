@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, ScanSearch } from 'lucide-react'
+import { Copy, ExternalLink } from 'lucide-react'
 import { forwardRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -84,9 +84,7 @@ export const ResultCard = forwardRef<HTMLElement, {
   topScore: number
   /** Briefly set after a citation in the answer jumps here, so the arrival is visible. */
   highlighted?: boolean
-  /** Search for items like this one. */
-  onFindSimilar?: (hit: SearchHit) => void
-}>(function ResultCard({ hit, rank, query, topScore, highlighted, onFindSimilar }, ref) {
+}>(function ResultCard({ hit, rank, query, topScore, highlighted }, ref) {
   const technical = useTechnicalDetails()
   const { data: sources } = useKnowledgeList()
   const [showMatches, setShowMatches] = useState(false)
@@ -137,17 +135,6 @@ export const ResultCard = forwardRef<HTMLElement, {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          {onFindSimilar && (
-            <Button
-              variant="ghost"
-              size="iconSm"
-              title={labels.search.findSimilar}
-              aria-label={`${labels.search.findSimilar} — ${name}`}
-              onClick={() => onFindSimilar(hit)}
-            >
-              <ScanSearch />
-            </Button>
-          )}
           {hit.uri && (
             <>
               <Button
@@ -242,9 +229,6 @@ export const ResultCard = forwardRef<HTMLElement, {
             // search setting.
             ['lexicalRank', rankLabel(hit.ranking.lexicalRank)],
             ['vectorRank', rankLabel(hit.ranking.vectorRank)],
-            ...(hit.ranking.facetsMatched > 0
-              ? [['facetsMatched', String(hit.ranking.facetsMatched)] as [string, string]]
-              : []),
             ['retrievalScore', hit.ranking.retrievalScore.toFixed(6)],
             ['groupedScore', hit.ranking.groupedScore.toFixed(6)],
             ['recencyFactor', `×${hit.ranking.recencyFactor.toFixed(3)}`],

@@ -3,7 +3,7 @@
 A **digest** is a saved search plus a schedule, a look-back window, and an optional prompt-catalogue
 task over the results. Each execution is kept as a **run**.
 
-It is deliberately generic. The job-hunt case that motivated it — new postings scored against a CV —
+It is deliberately generic. The job-hunt case that motivated it — new postings scored by a task —
 is one row of the `digests` collection, not a feature: see [`job-discovery.md`](./job-discovery.md).
 The same shape gives "everything new in Drive about project X, weekly" with no code involved.
 
@@ -14,8 +14,7 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
 ```jsonc
 {
   "name": "New backend roles",
-  "query": "roles I could do next",   // with sourceEntityId set, this is INTENT, not the search text
-  "sourceEntityId": "ent_…",          // search BY a document instead of by text; optional
+  "query": "backend engineer java",   // required
   "knowledgeIds": ["kn_…"],           // empty searches everything
   "filters": { "metadata.remote": true },
   "window": null,                     // how far back a run looks; null = no time bound (the default)
@@ -30,8 +29,7 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
 }
 ```
 
-A digest needs **either** `query` **or** `sourceEntityId`; neither is a 400. Everything else has a
-default.
+A digest needs a `query`; a blank one is a 400. Everything else has a default.
 
 > **Scope it with `knowledgeIds`.** Empty means every source, which is the search API's own default and
 > is usually wrong for a digest. A one-off search is read by someone who can see what came back; a
@@ -175,7 +173,7 @@ with a 200 either way.
 | Endpoint | Effect |
 |---|---|
 | `GET /api/digests` | list |
-| `POST /api/digests` | create; 400 if it names neither a query nor a source document |
+| `POST /api/digests` | create; 400 on a blank query |
 | `GET /api/digests/{id}` | read one |
 | `PATCH /api/digests/{id}` | edit any field; **absent** = unchanged, **`null`** = clear. So `{"enabled": false}` still pauses, and `{"window": null}` really does remove the look-back |
 | `POST /api/digests/{id}/reset-history` | forget what has been reported, keeping the runs |
@@ -185,10 +183,6 @@ with a 200 either way.
 | `GET /api/digests/{id}/runs/{runId}` | one run; 404 when it belongs to another digest |
 | `GET /api/digests/{id}/runs/latest` | the most recent run, 404 if it has never run |
 | `GET /api/deliveries?refId={runId}` | what one run was sent to (see *Sending results to channels*) |
-
-`GET /api/entities/{id}` is adjacent rather than part of this API, but exists for it: a digest that
-searches *by* a document holds only `sourceEntityId`, and the console was rendering "Like ent_3f9…"
-as the digest's description.
 
 ## Storage
 

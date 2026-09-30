@@ -35,7 +35,7 @@ class DigestPatchDtoTest {
 
     /** A fully-populated digest, so "unchanged" is visibly different from "cleared". */
     private static Digest existing() {
-        return new Digest("dig_1", "Roles", "engineer", "ent_cv", List.of("kn_1"),
+        return new Digest("dig_1", "Roles", "engineer", List.of("kn_1"),
                 Map.of("metadata.remote", true), "7d", SyncSchedule.ofInterval(Duration.ofDays(1)),
                 "job-fit", 5, true, 1, true, true, null, null, null, null);
     }
@@ -48,7 +48,6 @@ class DigestPatchDtoTest {
         Assertions.assertEquals("7d", edited.window());
         Assertions.assertEquals("job-fit", edited.taskId());
         Assertions.assertEquals(1, edited.maxChunksPerEntity());
-        Assertions.assertEquals("ent_cv", edited.sourceEntityId());
     }
 
     @Test

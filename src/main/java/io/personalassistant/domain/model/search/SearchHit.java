@@ -117,38 +117,31 @@ public record SearchHit(
      * bonus or freshness put it there, so the one setting that matters is the one that gets changed.
      *
      * @param lexicalRank    1-based rank of the best chunk in the word-match leg; null when that leg did not
-     *                       return it or did not run. Always null for a document search, whose legs run once
-     *                       per facet and so have no single rank
+     *                       return it or did not run
      * @param vectorRank     the same for the meaning leg
-     * @param facetsMatched  for a document search, how many derived facet queries returned the best chunk;
-     *                       0 for a typed query
      * @param retrievalScore the best chunk's score out of retrieval — the fused RRF score, or the single leg's
      *                       own score in LEXICAL / SEMANTIC mode
      * @param groupedScore   after the further-matches bonus; equal to {@code retrievalScore} when there is none
      * @param recencyFactor  the freshness multiplier applied on top; 1 when the result carries no date
      */
-    public record Ranking(Integer lexicalRank, Integer vectorRank, int facetsMatched, double retrievalScore,
+    public record Ranking(Integer lexicalRank, Integer vectorRank, double retrievalScore,
                           double groupedScore, double recencyFactor) {
 
         /** A breakdown that says only "retrieval scored it this". */
         public static Ranking of(double score) {
-            return new Ranking(null, null, 0, score, score, 1.0);
+            return new Ranking(null, null, score, score, 1.0);
         }
 
         public Ranking withLegRanks(Integer lexical, Integer vector, double fusedScore) {
-            return new Ranking(lexical, vector, facetsMatched, fusedScore, fusedScore, recencyFactor);
-        }
-
-        public Ranking withFacetsMatched(int facets, double fusedScore) {
-            return new Ranking(null, null, facets, fusedScore, fusedScore, recencyFactor);
+            return new Ranking(lexical, vector, fusedScore, fusedScore, recencyFactor);
         }
 
         public Ranking withGroupedScore(double grouped) {
-            return new Ranking(lexicalRank, vectorRank, facetsMatched, retrievalScore, grouped, recencyFactor);
+            return new Ranking(lexicalRank, vectorRank, retrievalScore, grouped, recencyFactor);
         }
 
         public Ranking withRecencyFactor(double factor) {
-            return new Ranking(lexicalRank, vectorRank, facetsMatched, retrievalScore, groupedScore, factor);
+            return new Ranking(lexicalRank, vectorRank, retrievalScore, groupedScore, factor);
         }
     }
 }

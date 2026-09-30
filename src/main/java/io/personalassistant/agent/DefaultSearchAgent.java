@@ -49,23 +49,11 @@ public class DefaultSearchAgent implements SearchAgent {
 
     @Override
     public String answer(SearchQuery query, List<SearchHit> hits) {
-        return runTask(taskId, query, hits);
+        return runTask(taskId, query, hits).reply();
     }
 
     @Override
-    public String runTask(String id, SearchQuery query, List<SearchHit> hits) {
-        return runTask(id, query, hits, java.util.Map.of());
-    }
-
-    @Override
-    public String runTask(String id, SearchQuery query, List<SearchHit> hits,
-                          java.util.Map<String, String> variables) {
-        return runTaskWithSources(id, query, hits, variables).reply();
-    }
-
-    @Override
-    public TaskResult runTaskWithSources(String id, SearchQuery query, List<SearchHit> hits,
-                                         java.util.Map<String, String> variables) {
+    public TaskResult runTask(String id, SearchQuery query, List<SearchHit> hits) {
         if (hits == null || hits.isEmpty()) {
             return new TaskResult(NO_SOURCES, List.of());
         }
@@ -73,18 +61,10 @@ public class DefaultSearchAgent implements SearchAgent {
         TaskSpec task = resolvedTask.spec();
         SourceTexts.Resolved resolved = sourceTexts.resolve(task, hits);
 
-        // The task's own variables first, so a caller cannot accidentally overwrite the instruction a
-        // user task is made of; the framework's own (today, fence, …) are added downstream and win.
-        java.util.Map<String, String> values =
-                new java.util.LinkedHashMap<>(resolvedTask.variables());
-        if (variables != null) {
-            variables.forEach(values::putIfAbsent);
-        }
-
         // One render for both messages, so every value is legal in either half — see
         // AnswerPromptBuilder.render for why that matters to a user-written prompt.
         AnswerPromptBuilder.Rendered prompt = prompts.render(resolvedTask.prompt(), task, query,
-                resolved.hits(), resolved.textByChunkId(), values);
+                resolved.hits(), resolved.textByChunkId(), resolvedTask.variables());
 
         var messages = List.of(new LlmProvider.Message("user", prompt.user()));
         String reply = llm.complete(profiles.get(task.llmProfile()), task.responseFormat(),

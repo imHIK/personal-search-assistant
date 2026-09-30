@@ -16,16 +16,11 @@ One connector, one prompt, and one row of config. That is the whole of it:
 | Filtering by company / remote / pay / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | One result per posting | results are one per entity on every search — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | Collapsing the same role from two boards | duplicate collapsing | Generic |
-| Ranking postings against a CV | document-as-query | Generic |
 | Scoring the shortlist and delivering it | [`digests.md`](./digests.md) | Generic |
 
 ## Setting it up
 
-**1. Index the CV.** Add a `LOCAL_FS` knowledge pointing at the folder holding it, and note the
-entity id from `GET /api/knowledge/{id}/entities`. **Wait until it is `INDEXED`**: a local file keeps
-only a `fileRef`, so its text is read back from its chunks, which do not exist until indexing finishes.
-
-**2. Add the companies.** **One** `JOB_BOARDS` knowledge, with `inputs.companies` listing company
+**1. Add the companies.** **One** `JOB_BOARDS` knowledge, with `inputs.companies` listing company
 handles and `inputs.locations` listing the cities you would work in. Which platform hosts each company
 is resolved for you — check a batch of candidates first with `POST /api/connectors/job-boards/lookup`,
 or the same helper in the console. `retentionPeriod` inherits the connector default of 14 days.
@@ -34,13 +29,12 @@ Backfill off; the connector is forward-only anyway.
 **List the cities, not just `India`** — most boards file a role as plain `Bengaluru` with no country,
 so `["India"]` alone kept 3 of Stripe's 36 Indian roles. See [`connectors.md`](./connectors.md).
 
-**3. Create the digest.**
+**2. Create the digest.**
 
 ```jsonc
 {
   "name": "New roles for me",
-  "query": "roles I could do next",
-  "sourceEntityId": "ent_…",              // the CV
+  "query": "backend engineer java",
   "knowledgeIds": ["kn_job_boards"],       // the companies knowledge
   "filters": { "metadata.remote": true },
   "window": "1d",

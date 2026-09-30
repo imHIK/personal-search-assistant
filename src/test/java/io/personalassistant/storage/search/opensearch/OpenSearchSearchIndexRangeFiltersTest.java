@@ -22,7 +22,7 @@ class OpenSearchSearchIndexRangeFiltersTest {
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
 
     private ArrayNode filtersFor(Map<String, Object> filters) {
-        return index.filters(new SearchQuery("anything", List.of(), filters, 10, Mode.HYBRID, false, null, false, null));
+        return index.filters(new SearchQuery("anything", List.of(), filters, 10, Mode.HYBRID, false, null, false));
     }
 
     @Test

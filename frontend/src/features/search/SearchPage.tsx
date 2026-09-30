@@ -1,15 +1,7 @@
-import {
-  FileText,
-  Info,
-  Search as SearchIcon,
-  SearchX,
-  SlidersHorizontal,
-  Sparkles,
-  X,
-} from 'lucide-react'
+import { Info, Search as SearchIcon, SearchX, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import type { SearchBody, SearchHit, SearchMode } from '@/api/types'
+import type { SearchBody, SearchMode } from '@/api/types'
 import { Technical, TechnicalInline } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Input'
@@ -24,10 +16,9 @@ import {
 } from '@/config/constants'
 import { labels } from '@/config/labels'
 import { buildFilters, filtersFor, searchFilters } from '@/config/searchFilters'
-import { DocumentPicker } from '@/features/digests/DocumentPicker'
-import { useEntity, useKnowledgeList } from '@/hooks/queries'
+import { useKnowledgeList } from '@/hooks/queries'
 import { useCitationJump } from '@/hooks/useCitationJump'
-import { displayName, formatSeconds } from '@/lib/utils'
+import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
 import { SearchFilters } from './SearchFilters'
@@ -52,9 +43,6 @@ export function SearchPage() {
   const matchesParam = params.get('matches')
   const matches = matchesParam !== null && Number.isInteger(Number(matchesParam)) ? Number(matchesParam) : null
   const scope = params.get('scope') ?? ''
-  // An item to search *by* rather than for. An id in the URL like the rest of the state; its title is
-  // looked up for display, so the id itself is never shown.
-  const doc = params.get('doc') ?? ''
   // Opt-out, not opt-in: the summary is the default reading of a result set, so a bare `?q=` URL
   // produces one and only an explicit `answer=0` suppresses it.
   const wantsAnswer = params.get('answer') !== '0'
@@ -79,35 +67,31 @@ export function SearchPage() {
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [picking, setPicking] = useState(false)
-  const { data: document } = useEntity(doc || null)
 
-  const hasSearch = urlQuery.trim() !== '' || doc !== ''
+  const hasSearch = urlQuery.trim() !== ''
 
   // Re-run whenever the URL changes, so back/forward replays the search rather than showing a
   // stale result set.
   const runRef = useRef(search.mutate)
   runRef.current = search.mutate
   useEffect(() => {
-    if (!urlQuery.trim() && !doc) return
+    if (!urlQuery.trim()) return
     const filters = buildFilters(filterSpecs, JSON.parse(filterKey) as Record<string, string>)
     const body: SearchBody = {
       query: urlQuery,
       mode,
       topK,
-      // A document search has no question to summarise against unless one was typed alongside it.
-      answer: wantsAnswer && urlQuery.trim() !== '',
+      answer: wantsAnswer,
       knowledgeIds: scope ? [scope] : [],
       ...(Object.keys(filters).length > 0 ? { filters } : {}),
       ...(groupDuplicates ? { collapseDuplicates: true } : {}),
-      ...(doc ? { sourceEntityId: doc } : {}),
       ...(matches !== null ? { maxChunksPerEntity: matches } : {}),
     }
     clearCitation()
     runRef.current(body)
     // filterSpecs is derived from scope and sources, and filterKey already captures what it changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlQuery, doc, mode, topK, matches, wantsAnswer, scope, filterKey, groupDuplicates])
+  }, [urlQuery, mode, topK, matches, wantsAnswer, scope, filterKey, groupDuplicates])
 
   const update = (next: Record<string, string | null>) => {
     const merged = new URLSearchParams(params)
@@ -123,13 +107,6 @@ export function SearchPage() {
     update({ q: draft.trim() || null })
   }
 
-  // "More like this": the result becomes the document searched by, and the typed query is dropped so it
-  // does not steer the comparison toward what the previous search was about.
-  const findSimilar = (hit: SearchHit) => {
-    update({ doc: hit.entityId, q: null })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
   const result = search.data
 
   return (
@@ -143,7 +120,7 @@ export function SearchPage() {
           <Input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder={doc ? labels.search.placeholderWithDocument : labels.search.placeholder}
+            placeholder={labels.search.placeholder}
             aria-label={labels.search.title}
             className="h-12 pl-10 pr-24 text-[15px]"
             autoFocus
@@ -158,29 +135,6 @@ export function SearchPage() {
             {labels.search.submit}
           </Button>
         </div>
-
-        {doc && (
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-sunken)] px-3 py-2">
-            <FileText className="size-3.5 shrink-0 text-[var(--text-subtle)]" aria-hidden />
-            <span className="shrink-0 text-xs text-[var(--text-muted)]">{labels.search.similarTo}</span>
-            <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--text)]">
-              {document ? displayName(document) : labels.common.loading}
-            </span>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setPicking(true)}>
-              {labels.search.changeDocument}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="iconSm"
-              aria-label={labels.search.clearDocument}
-              title={labels.search.clearDocument}
-              onClick={() => update({ doc: null })}
-            >
-              <X />
-            </Button>
-          </div>
-        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <SegmentedControl
@@ -258,13 +212,6 @@ export function SearchPage() {
             </Button>
           )}
 
-          {!doc && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setPicking(true)}>
-              <FileText />
-              {labels.search.searchByDocument}
-            </Button>
-          )}
-
           {/* The two toggles sit together rather than one being pinned right: split across the
               row they wrap onto separate lines at this container width. */}
           <div className="ml-auto flex items-center gap-4">
@@ -290,15 +237,6 @@ export function SearchPage() {
           />
         )}
       </form>
-
-      <DocumentPicker
-        open={picking}
-        onOpenChange={setPicking}
-        status="INDEXED"
-        title={labels.search.searchByDocument}
-        description={labels.search.searchByDocumentHint}
-        onPick={(id) => update({ doc: id })}
-      />
 
       <div className="mt-7">
         {search.isPending ? (
@@ -361,7 +299,6 @@ export function SearchPage() {
                   query={urlQuery}
                   topScore={result.hits[0]?.score ?? 1}
                   highlighted={citedRank === index + 1}
-                  onFindSimilar={findSimilar}
                   ref={register(index + 1)}
                 />
               ))}

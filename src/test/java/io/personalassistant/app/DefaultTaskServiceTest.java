@@ -57,7 +57,7 @@ class DefaultTaskServiceTest {
     @Test
     void aTaskADigestStillUsesCannotBeDeleted() {
         Task created = service.create(simple("Score these.", List.of()));
-        digests.save(new Digest("dig_1", "New roles", "engineer", null, List.of(), Map.of(), "1d",
+        digests.save(new Digest("dig_1", "New roles", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.ofInterval(Duration.ofDays(1)), created.id(), 10, false, null, true,
                 true, null, null, null));
 

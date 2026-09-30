@@ -15,7 +15,7 @@ class DigestMessagesTest {
 
     private static Digest digest(boolean onlyNew) {
         Instant now = Instant.now();
-        return new Digest("dig_1", "New roles", "roles", null, List.of(), Map.of(), null, SyncSchedule.NONE, null,
+        return new Digest("dig_1", "New roles", "roles", List.of(), Map.of(), null, SyncSchedule.NONE, null,
                 10, false, 1, onlyNew, true, null, now, now);
     }
 

@@ -274,12 +274,6 @@ export interface SearchBody {
   maxChunksPerEntity?: number
   /** Group near-identical results and keep one of each. Off by default on the server. */
   collapseDuplicates?: boolean
-  /**
-   * Search *by* an already-ingested entity rather than by typed text. When set, `query` stops being
-   * the search text and becomes a statement of intent steering how the document is decomposed; it
-   * may be blank.
-   */
-  sourceEntityId?: string
 }
 
 /** A further matching chunk of a result's entity. */
@@ -296,8 +290,6 @@ export interface SearchRanking {
   lexicalRank: number | null
   /** Where the meaning leg ranked it; null when it did not return it. */
   vectorRank: number | null
-  /** Facet queries that returned it, for a search by document; 0 otherwise. */
-  facetsMatched: number
   retrievalScore: number
   /** After the further-matches bonus. */
   groupedScore: number
@@ -354,15 +346,12 @@ export interface SyncTrigger {
 
 /**
  * A saved search that runs on a schedule and keeps its results. The job-hunt case (new postings
- * scored against a CV) is one row of this, not a separate feature.
+ * scored by a task) is one row of this, not a separate feature.
  */
 export interface Digest {
   id: string
   name: string
-  /** With sourceEntityId set this is a statement of intent rather than the search text. */
   query: string | null
-  /** Search *by* this entity instead of by typed text. */
-  sourceEntityId: string | null
   knowledgeIds: string[]
   filters: Blob
   /** How far back a run looks, e.g. "1d". Null means no time bound. */
@@ -501,15 +490,6 @@ export type TaskBody = Partial<
   Omit<Task, 'id' | 'builtIn' | 'usedBy' | 'usableInDigest' | 'createdAt' | 'updatedAt'>
 > &
   Pick<Task, 'name'>
-
-/** The thin entity read used to show a document's title where only its id is held. */
-export interface EntitySummary {
-  id: string
-  knowledgeId: string
-  title: string | null
-  uri: string | null
-  status: string | null
-}
 
 // ---- Publishing -----------------------------------------------------------------------------
 

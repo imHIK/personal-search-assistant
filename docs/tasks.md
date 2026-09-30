@@ -24,8 +24,8 @@ cannot be held to that: a typo in one must cost that task's next run and nothing
 layered by `TaskLibrary` rather than merged into one store.
 
 **Bundled tasks are read-only.** `answer` is named by `app.agent.task` and runs on every search
-answer; `document-facets` powers search-by-document. An edit to either would degrade search with
-nothing on screen to say why. The console offers **Duplicate** instead, which yields the real prompt
+answer; `job-fit` scores job postings for digests. An edit to either would degrade them with nothing on
+screen to say why. The console offers **Duplicate** instead, which yields the real prompt
 text in `RAW` mode — an approximation reconstructed as an instruction plus a field list would mean
 editing something that never ran.
 

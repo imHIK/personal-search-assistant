@@ -48,7 +48,6 @@ export const keys = {
   tasks: ['tasks'] as const,
   taskOne: (id: string) => ['tasks', id] as const,
   llmProfiles: ['llm-profiles'] as const,
-  entity: (id: string) => ['entities', id] as const,
   connections: ['connections'] as const,
   connectionsOfType: (type?: string) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
@@ -437,21 +436,6 @@ export function useTask(id: string | undefined) {
 /** Configured models. Fixed for the life of the process, so it never needs refetching. */
 export function useLlmProfiles() {
   return useQuery({ queryKey: keys.llmProfiles, queryFn: tasksApi.llmProfiles, staleTime: Infinity })
-}
-
-/**
- * One indexed item, for showing a title where only an entity id is held — a digest that searches by
- * a document, say. Failures are not retried: a deleted document is a normal outcome here, and the
- * caller falls back to showing the id.
- */
-export function useEntity(id: string | null | undefined) {
-  return useQuery({
-    queryKey: keys.entity(id!),
-    queryFn: () => tasksApi.entity(id!),
-    enabled: Boolean(id),
-    retry: false,
-    staleTime: 300_000,
-  })
 }
 
 export function useTaskActions() {

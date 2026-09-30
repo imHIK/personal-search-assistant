@@ -169,7 +169,6 @@ public class MongoDigestRepository implements DigestRepository {
         return new Document("_id", d.id())
                 .append("name", d.name())
                 .append("query", d.query())
-                .append("sourceEntityId", d.sourceEntityId())
                 .append("knowledgeIds", d.knowledgeIds())
                 .append("filters", BsonSupport.toBsonMap(d.filters()))
                 .append("window", d.window())
@@ -197,7 +196,6 @@ public class MongoDigestRepository implements DigestRepository {
                 d.getString("_id"),
                 d.getString("name"),
                 d.getString("query"),
-                d.getString("sourceEntityId"),
                 stringList(d.get("knowledgeIds")),
                 BsonSupport.toPlainMap(d.get("filters")),
                 d.getString("window"),

@@ -11,18 +11,16 @@ import java.util.Map;
  * A saved search that runs on a schedule and keeps its results: "tell me what is new, on this subject,
  * every morning".
  *
- * <p>Deliberately generic. The job-hunt case that motivated it — new postings scored against a CV — is
- * one row of this table, not a feature: {@link #sourceEntityId} points the search at the CV,
- * {@link #taskId} names a scoring prompt, and {@link #window} bounds it to the last day. The same shape
- * gives "everything new in Drive about project X, weekly" with no code involved.
+ * <p>Deliberately generic. The job-hunt case that motivated it — new postings scored by a task — is
+ * one row of this table, not a feature: {@link #query} describes the roles, {@link #taskId} names a
+ * scoring prompt, and {@link #window} bounds it to the last day. The same shape gives "everything new in
+ * Drive about project X, weekly" with no code involved.
  *
  * <p>Persisted in the Mongo {@code digests} collection; each execution appends a {@link DigestRun}.
  *
  * @param id           stable id, {@code dig_...}
  * @param name         human label, shown in the console
- * @param query        the search text. With {@link #sourceEntityId} set this becomes a statement of
- *                     intent that steers how the document is decomposed, and may be blank
- * @param sourceEntityId an entity to search <em>by</em> rather than searching for, or null
+ * @param query        the search text
  * @param knowledgeIds restrict to these sources; empty searches everything
  * @param filters      index filters, exactly as {@code POST /api/search} takes them
  * @param window       how far back a run looks. The run adds this as a range filter on the chunk's
@@ -53,7 +51,6 @@ public record Digest(
         String id,
         String name,
         String query,
-        String sourceEntityId,
         List<String> knowledgeIds,
         Map<String, Object> filters,
         String window,
@@ -74,23 +71,22 @@ public record Digest(
     public static final int DEFAULT_TOP_K = 10;
 
     /** A digest whose history has never been reset and that sends nowhere. */
-    public Digest(String id, String name, String query, String sourceEntityId,
-                  List<String> knowledgeIds, Map<String, Object> filters, String window,
-                  SyncSchedule schedule, String taskId, int topK, boolean collapseDuplicates,
-                  Integer maxChunksPerEntity, boolean onlyNew, boolean enabled, Instant nextRunAt,
-                  Instant createdAt, Instant updatedAt) {
-        this(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+    public Digest(String id, String name, String query, List<String> knowledgeIds,
+                  Map<String, Object> filters, String window, SyncSchedule schedule, String taskId,
+                  int topK, boolean collapseDuplicates, Integer maxChunksPerEntity, boolean onlyNew,
+                  boolean enabled, Instant nextRunAt, Instant createdAt, Instant updatedAt) {
+        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
                 updatedAt, null, List.of());
     }
 
     /** A digest that sends nowhere — the shape every caller used before digests could publish. */
-    public Digest(String id, String name, String query, String sourceEntityId,
-                  List<String> knowledgeIds, Map<String, Object> filters, String window,
-                  SyncSchedule schedule, String taskId, int topK, boolean collapseDuplicates,
-                  Integer maxChunksPerEntity, boolean onlyNew, boolean enabled, Instant nextRunAt,
-                  Instant createdAt, Instant updatedAt, Instant historyResetAt) {
-        this(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+    public Digest(String id, String name, String query, List<String> knowledgeIds,
+                  Map<String, Object> filters, String window, SyncSchedule schedule, String taskId,
+                  int topK, boolean collapseDuplicates, Integer maxChunksPerEntity, boolean onlyNew,
+                  boolean enabled, Instant nextRunAt, Instant createdAt, Instant updatedAt,
+                  Instant historyResetAt) {
+        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
                 updatedAt, historyResetAt, List.of());
     }
@@ -100,9 +96,6 @@ public record Digest(
         filters = filters == null ? Map.of() : Map.copyOf(filters);
         if (query != null && query.isBlank()) {
             query = "";
-        }
-        if (sourceEntityId != null && sourceEntityId.isBlank()) {
-            sourceEntityId = null;
         }
         if (taskId != null && taskId.isBlank()) {
             taskId = null;
@@ -127,31 +120,31 @@ public record Digest(
     /** The search this digest runs, before its time window is applied. */
     public SearchQuery toQuery() {
         return new SearchQuery(query == null ? "" : query, knowledgeIds, filters, topK,
-                SearchQuery.Mode.HYBRID, false, maxChunksPerEntity, collapseDuplicates, sourceEntityId);
+                SearchQuery.Mode.HYBRID, false, maxChunksPerEntity, collapseDuplicates);
     }
 
     public Digest withNextRunAt(Instant next) {
-        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, next,
                 createdAt, updatedAt, historyResetAt, channelIds);
     }
 
     public Digest withEnabled(boolean nowEnabled, Instant updatedAt) {
-        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, nowEnabled, nextRunAt,
                 createdAt, updatedAt, historyResetAt, channelIds);
     }
 
     /** The same digest, marked as edited at {@code at}. */
     public Digest withTouched(Instant at) {
-        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
                 createdAt, at, historyResetAt, channelIds);
     }
 
     /** Start the already-seen set again from {@code at}, keeping every recorded run. */
     public Digest withHistoryResetAt(Instant at) {
-        return new Digest(id, name, query, sourceEntityId, knowledgeIds, filters, window, schedule,
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
                 taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
                 createdAt, at, at, channelIds);
     }

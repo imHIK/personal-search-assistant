@@ -42,11 +42,11 @@ class OpenSearchSearchIndexQueryShapeTest {
     }
 
     private SearchQuery scoped() {
-        return new SearchQuery("anything", List.of("kn_1"), Map.of("sourceType", "EMAIL"), 10, Mode.HYBRID, false, null, false, null);
+        return new SearchQuery("anything", List.of("kn_1"), Map.of("sourceType", "EMAIL"), 10, Mode.HYBRID, false, null, false);
     }
 
     private SearchQuery unscoped() {
-        return new SearchQuery("anything", List.of(), Map.of(), 10, Mode.HYBRID, false, null, false, null);
+        return new SearchQuery("anything", List.of(), Map.of(), 10, Mode.HYBRID, false, null, false);
     }
 
     @Test

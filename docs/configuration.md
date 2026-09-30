@@ -78,8 +78,8 @@ a row.
 Two task keys exist for the digest read path. **`annotates`** names the array in a JSON reply whose
 elements each carry a `source` number, which is how a digest joins the reply back onto the results it
 ran over — see [`digests.md`](./digests.md). **`digest`** opts a task in to being offered in the
-console: `answer` and `document-facets` are machinery the read path runs for itself, and offering them
-would invite a digest that quietly does nothing useful.
+console: `answer` is machinery the read path runs for itself, and offering it would invite a digest
+that quietly does nothing useful.
 
 **Prompts are keyed by task, never by model.** A prompt naming a model cannot be reused when the model
 changes and cannot be shared by two features on different models. Model choice lives in

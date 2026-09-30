@@ -211,7 +211,7 @@ class DefaultChannelServiceTest {
     void deleteIsRefusedWhileADigestSendsToIt() {
         Channel c = create();
         Instant now = Instant.now();
-        digests.save(new Digest("dig_1", "New roles", "roles", null, List.of(), Map.of(), null, SyncSchedule.NONE,
+        digests.save(new Digest("dig_1", "New roles", "roles", List.of(), Map.of(), null, SyncSchedule.NONE,
                 null, 10, false, 1, true, true, null, now, now, null, List.of(c.id())));
 
         IllegalStateException e = Assertions.assertThrows(IllegalStateException.class, () -> service.delete(c.id()));

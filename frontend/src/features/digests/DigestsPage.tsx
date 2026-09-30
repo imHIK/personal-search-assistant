@@ -107,7 +107,7 @@ function DigestCard({ digest }: { digest: Digest }) {
             <ChevronRight className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
           </h3>
           <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
-            {digest.sourceEntityId ? labels.digests.searchesLike : (digest.query ?? '')}
+            {digest.query ?? ''}
             {digest.interval && ` · ${formatDigestInterval(digest.interval)}`}
             {/* The window labels already read as phrases ("Last week"), so no prefix. */}
             {digest.window && ` · ${formatDigestWindow(digest.window)}`}

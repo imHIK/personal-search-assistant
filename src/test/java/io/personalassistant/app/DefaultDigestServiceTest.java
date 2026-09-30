@@ -82,7 +82,7 @@ class DefaultDigestServiceTest {
     }
 
     private Digest digest(String window, String taskId, boolean onlyNew, int topK) {
-        return new Digest(null, "New postings", "engineer", null, List.of(), Map.of(), window,
+        return new Digest(null, "New postings", "engineer", List.of(), Map.of(), window,
                 SyncSchedule.ofInterval(Duration.ofDays(1)), taskId, topK, false, null, onlyNew,
                 true, null, null, null);
     }
@@ -233,7 +233,7 @@ class DefaultDigestServiceTest {
     @Test
     void anUnparseableCronIsRejectedOnCreate() {
         DefaultDigestService svc = service(new StubSearchAgent(""));
-        Digest bad = new Digest(null, "New postings", "engineer", null, List.of(), Map.of(), "1d",
+        Digest bad = new Digest(null, "New postings", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.ofCron("every morning"), null, 10, false, null, true, true, null, null, null);
 
         Assertions.assertThrows(IllegalArgumentException.class, () -> svc.create(bad));
@@ -375,7 +375,7 @@ class DefaultDigestServiceTest {
         search.result = List.of(hit("ent_a"));
         svc.run(created.id());
 
-        svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null, null, null,
+        svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null, null,
                 null, Patched.of("7d"), null, null, null, null, null, null, null));
         DigestRun after = svc.run(created.id());
 
@@ -410,7 +410,7 @@ class DefaultDigestServiceTest {
         DefaultDigestService svc = service(new StubSearchAgent(""));
         Digest created = svc.create(digest("1d", "job-fit", true, 10));
 
-        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null, null,
+        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null,
                 Patched.of(null), null, Patched.of(null), null, null, Patched.of(null), null, null));
 
         Assertions.assertNull(cleared.window(), "no time bound");
@@ -423,7 +423,7 @@ class DefaultDigestServiceTest {
         DefaultDigestService svc = service(new StubSearchAgent(""));
         Digest created = svc.create(digest("1d", "job-fit", true, 10));
 
-        Digest renamed = svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null, null,
+        Digest renamed = svc.update(created.id(), new DigestPatch(Patched.of("Renamed"), null,
                 null, null, null, null, null, null, null, null, null, null));
 
         Assertions.assertEquals("1d", renamed.window());
@@ -436,7 +436,7 @@ class DefaultDigestServiceTest {
         DefaultDigestService svc = service(new StubSearchAgent(""));
         Digest created = svc.create(digest("1d", null, false, 3));
 
-        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null, null, null,
+        Digest cleared = svc.update(created.id(), new DigestPatch(null, null, null, null, null,
                 null, null, Patched.of(null), null, null, Patched.of(null), Patched.of(null)));
 
         Assertions.assertEquals(Digest.DEFAULT_TOP_K, cleared.topK());
@@ -450,7 +450,7 @@ class DefaultDigestServiceTest {
         Digest created = svc.create(digest("1d", null, true, 10));
 
         Assertions.assertThrows(IllegalArgumentException.class,
-                () -> svc.update(created.id(), new DigestPatch(null, Patched.of(""), null,
+                () -> svc.update(created.id(), new DigestPatch(null, Patched.of(""),
                         null, null, null, null, null, null, null, null, null, null)));
     }
 
@@ -524,7 +524,7 @@ class DefaultDigestServiceTest {
     }
 
     private static DigestPatch sendTo(List<String> channelIds) {
-        return new DigestPatch(null, null, null, null, null, null, null, null, null, null, null, null, null,
+        return new DigestPatch(null, null, null, null, null, null, null, null, null, null, null, null,
                 Patched.of(channelIds));
     }
 

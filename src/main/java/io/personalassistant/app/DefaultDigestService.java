@@ -90,7 +90,7 @@ public class DefaultDigestService implements DigestService {
         Instant now = Instant.now();
         Digest stored = new Digest(
                 digest.id() == null || digest.id().isBlank() ? Ids.digest() : digest.id(),
-                digest.name(), digest.query(), digest.sourceEntityId(), digest.knowledgeIds(),
+                digest.name(), digest.query(), digest.knowledgeIds(),
                 digest.filters(), digest.window(), digest.schedule(), digest.taskId(), digest.topK(),
                 digest.collapseDuplicates(), digest.maxChunksPerEntity(), digest.onlyNew(),
                 digest.enabled(),
@@ -120,12 +120,9 @@ public class DefaultDigestService implements DigestService {
     public Digest update(String id, DigestPatch patch) {
         Digest existing = require(id);
         Digest merged = patch.applyTo(existing).withTouched(Instant.now());
-        // The same rules creation enforces: a digest with neither a query nor a document to search by
-        // would run forever and find nothing, and one with no name is a blank row in the console. An
-        // edit is just as capable of producing either.
-        if ((merged.query() == null || merged.query().isBlank())
-                && merged.sourceEntityId() == null) {
-            throw new IllegalArgumentException("a digest needs either query or sourceEntityId");
+        // The same rules creation enforces; an edit is just as capable of breaking them.
+        if (merged.query() == null || merged.query().isBlank()) {
+            throw new IllegalArgumentException("query must not be blank");
         }
         if (merged.name() == null || merged.name().isBlank()) {
             throw new IllegalArgumentException("name must not be blank");
@@ -178,8 +175,7 @@ public class DefaultDigestService implements DigestService {
             List<DigestRun.Item> items = project(fresh);
             String taskOutput = null;
             if (digest.taskId() != null && !fresh.isEmpty()) {
-                SearchAgent.TaskResult result =
-                        agent.runTaskWithSources(digest.taskId(), digest.toQuery(), fresh, Map.of());
+                SearchAgent.TaskResult result = agent.runTask(digest.taskId(), digest.toQuery(), fresh);
                 taskOutput = result.reply();
                 items = annotate(digest, items, result);
             }
@@ -228,8 +224,7 @@ public class DefaultDigestService implements DigestService {
         // reappears here. The already-reported check below is what stops that reaching the user.
         filters.put(INDEXED_AT, Map.of("gte", now.minus(window).toString()));
         SearchQuery windowed = new SearchQuery(base.text(), base.knowledgeIds(), Map.copyOf(filters),
-                base.topK(), base.mode(), false, base.maxChunksPerEntity(), base.collapseDuplicates(),
-                base.sourceEntityId());
+                base.topK(), base.mode(), false, base.maxChunksPerEntity(), base.collapseDuplicates());
         return digest.onlyNew() ? widen(windowed, digest) : windowed;
     }
 
@@ -262,8 +257,7 @@ public class DefaultDigestService implements DigestService {
     private SearchQuery widen(SearchQuery query, Digest digest) {
         int wider = digest.topK() * Math.max(newItemMultiplier, 1);
         return new SearchQuery(query.text(), query.knowledgeIds(), query.filters(), wider,
-                query.mode(), false, query.maxChunksPerEntity(), query.collapseDuplicates(),
-                query.sourceEntityId());
+                query.mode(), false, query.maxChunksPerEntity(), query.collapseDuplicates());
     }
 
     /**

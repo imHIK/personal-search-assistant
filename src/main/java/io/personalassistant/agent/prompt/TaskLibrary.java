@@ -126,9 +126,9 @@ public class TaskLibrary {
     /**
      * One row of the library as the API presents it.
      *
-     * @param builtIn        bundled tasks are read-only: {@code answer} runs on every search answer and
-     *                       {@code document-facets} on every search-by-document, so an edit to either
-     *                       would degrade search silently. The console offers Duplicate instead
+     * @param builtIn        bundled tasks are read-only: {@code answer} runs on every search answer, so
+     *                       an edit to it would degrade search silently. The console offers Duplicate
+     *                       instead
      * @param usableInDigest whether a digest may be pointed at it
      * @param task           the editable record, for a user task; null for a bundled one
      */

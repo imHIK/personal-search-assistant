@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Clock, FileText, FolderOpen, History, Play, RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react'
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Clock, FolderOpen, History, Play, RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,7 +18,6 @@ import {
   useDigest,
   useDigestActions,
   useDigestRuns,
-  useEntity,
   useKnowledgeList,
   useTasks,
 } from '@/hooks/queries'
@@ -249,17 +248,15 @@ export function DigestDetailPage() {
 
 /** One line under the title: what this digest is, without ids or jargon. */
 function describe(digest: Digest): string {
-  const what = digest.sourceEntityId
-    ? labels.digests.searchesLike.toLowerCase()
-    : `${labels.digests.searchesFor.toLowerCase()} “${digest.query ?? ''}”`
+  const what = `${labels.digests.searchesFor.toLowerCase()} “${digest.query ?? ''}”`
   const cadence = formatDigestInterval(digest.interval)
   return cadence ? `${what} · ${cadence.toLowerCase()}` : what
 }
 
 /**
- * What this digest does, in plain terms. Deliberately resolves ids to names — the source document's
- * title, the sources' names, the task's name — because the point of the strip is to be readable by
- * someone who did not set the digest up.
+ * What this digest does, in plain terms. Deliberately resolves ids to names — the sources' names, the
+ * task's name — because the point of the strip is to be readable by someone who did not set the digest
+ * up.
  *
  * A wrapped row of labelled facts rather than a grid of uppercase headings: the six-cell grid it
  * replaced gave a one-word value ("Every hour") the same weight as the page title, and pushed the
@@ -269,7 +266,6 @@ function describe(digest: Digest): string {
 function SummaryStrip({ digest }: { digest: Digest }) {
   const { data: sources } = useKnowledgeList()
   const { data: tasks } = useTasks()
-  const { data: document } = useEntity(digest.sourceEntityId)
 
   const scoped = (sources ?? []).filter((source) => digest.knowledgeIds.includes(source.id))
   const task = (tasks ?? []).find((candidate) => candidate.id === digest.taskId)
@@ -277,17 +273,6 @@ function SummaryStrip({ digest }: { digest: Digest }) {
   const { data: channelList } = useChannels()
   const sendsTo = (channelList ?? []).filter((channel) => digest.channelIds?.includes(channel.id))
   const facts: { icon: typeof FolderOpen; label: string; value: string }[] = [
-    // Only for a digest that searches by a document: the subtitle can only say "finds things like",
-    // and "like what" is the one thing that digest's page must not leave as an id.
-    ...(digest.sourceEntityId
-      ? [
-          {
-            icon: FileText,
-            label: labels.digests.searchesLike,
-            value: document?.title ?? digest.sourceEntityId,
-          },
-        ]
-      : []),
     {
       icon: FolderOpen,
       label: labels.digests.looksIn,

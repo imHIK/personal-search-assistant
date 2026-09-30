@@ -7,7 +7,6 @@ import io.personalassistant.domain.model.search.SearchResponse;
 import io.personalassistant.domain.service.SearchService;
 import io.personalassistant.retrieval.DuplicateCollapser;
 import io.personalassistant.retrieval.EntityGrouper;
-import io.personalassistant.retrieval.FacetedRetrieval;
 import io.personalassistant.retrieval.QueryEmbedder;
 import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Reranker;
@@ -32,7 +31,6 @@ public class DefaultSearchService implements SearchService {
 
     private final QueryEmbedder embeddings;
     private final Retriever retriever;
-    private final FacetedRetrieval faceted;
     private final Reranker reranker;
     private final EntityGrouper grouper;
     private final RecencyBoost recency;
@@ -63,8 +61,8 @@ public class DefaultSearchService implements SearchService {
     int minCandidates;
 
     /**
-     * Ceiling on the candidate pool. It becomes the OpenSearch {@code size} and knn {@code k} on every leg
-     * (and on every facet of a document query), so this is what bounds the cost of one request.
+     * Ceiling on the candidate pool. It becomes the OpenSearch {@code size} and knn {@code k} on every leg,
+     * so this is what bounds the cost of one request.
      */
     @ConfigProperty(name = "app.search.max-candidates", defaultValue = "500")
     int maxCandidates;
@@ -72,7 +70,6 @@ public class DefaultSearchService implements SearchService {
     @Inject
     public DefaultSearchService(QueryEmbedder embeddings,
                                 Retriever retriever,
-                                FacetedRetrieval faceted,
                                 Reranker reranker,
                                 EntityGrouper grouper,
                                 RecencyBoost recency,
@@ -80,7 +77,6 @@ public class DefaultSearchService implements SearchService {
                                 SearchAgent agent) {
         this.embeddings = embeddings;
         this.retriever = retriever;
-        this.faceted = faceted;
         this.reranker = reranker;
         this.grouper = grouper;
         this.recency = recency;
@@ -94,13 +90,8 @@ public class DefaultSearchService implements SearchService {
         int topK = Math.clamp(query.topK(), 1, Math.max(maxTopK, 1));
 
         int candidateLimit = candidateLimit(topK);
-        // A document query is decomposed into facets and fused; a typed query embeds its own text once.
-        // Both produce the same candidate shape, so everything downstream is unchanged. A refused query
-        // embedding turns the retrieval lexical rather than failing it; see QueryEmbedder.
-        QueryEmbedder.Session vectors = embeddings.session();
-        List<SearchHit> candidates = query.isDocumentQuery()
-                ? faceted.retrieve(query, candidateLimit, vectors)
-                : vectors.retrieve(retriever, query, candidateLimit);
+        QueryEmbedder.Retrieval retrieval = embeddings.retrieve(retriever, query, candidateLimit);
+        List<SearchHit> candidates = retrieval.hits();
         // Chunks become results here. Everything after this line — freshness, collapsing, reranking, the
         // topK trim and the answer — works on entities, so topK counts items and one item can no longer
         // fill every slot with its own chunks.
@@ -127,7 +118,7 @@ public class DefaultSearchService implements SearchService {
                 LOG.log(Level.WARNING, "Answer synthesis failed; returning hits without an answer", e);
             }
         }
-        return new SearchResponse(ranked, answer, answerError, vectors.vectorError(),
+        return new SearchResponse(ranked, answer, answerError, retrieval.vectorError(),
                 System.currentTimeMillis() - start);
     }
 

@@ -99,7 +99,7 @@ class DigestSchedulerTest {
     }
 
     private void stored(String id, boolean enabled, Instant nextRunAt) {
-        repository.save(new Digest(id, "d", "engineer", null, List.of(), Map.of(), "1d",
+        repository.save(new Digest(id, "d", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.ofInterval(Duration.ofDays(1)), null, 10, false, null, true, enabled,
                 nextRunAt, Instant.now(), Instant.now()));
     }
@@ -153,7 +153,7 @@ class DigestSchedulerTest {
     @Test
     void aDigestWithNoCadenceOfItsOwnFallsBackToTheGlobalDefault() {
         // Leaving it permanently due would run it on every tick.
-        repository.save(new Digest("dig_nocadence", "d", "engineer", null, List.of(), Map.of(), "1d",
+        repository.save(new Digest("dig_nocadence", "d", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.NONE, null, 10, false, null, true, true, null, Instant.now(), Instant.now()));
 
         scheduler().tick();
@@ -163,7 +163,7 @@ class DigestSchedulerTest {
 
     @Test
     void aStoredUnparseableCronStillRunsAndIsRescheduled() {
-        repository.save(new Digest("dig_badcron", "d", "engineer", null, List.of(), Map.of(), "1d",
+        repository.save(new Digest("dig_badcron", "d", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.ofCron("every morning"), null, 10, false, null, true, true, null,
                 Instant.now(), Instant.now()));
         DigestScheduler scheduler = scheduler();

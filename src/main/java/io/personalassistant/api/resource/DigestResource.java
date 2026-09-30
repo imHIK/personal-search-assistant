@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
- * Scheduled saved searches: a query (or a source document), a cadence, a look-back window, and an
+ * Scheduled saved searches: a query, a cadence, a look-back window, and an
  * optional prompt-catalogue task over the results. Each execution is kept as a run, which is both the
  * history and how "only what is new" is computed.
  */

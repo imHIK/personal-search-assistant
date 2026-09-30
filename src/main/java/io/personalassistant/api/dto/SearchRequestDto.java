@@ -18,8 +18,7 @@ public record SearchRequestDto(
         String mode,        // LEXICAL | SEMANTIC | HYBRID
         Boolean answer,
         Integer maxChunksPerEntity,
-        Boolean collapseDuplicates,
-        String sourceEntityId) {
+        Boolean collapseDuplicates) {
 
     /** Default result count when the caller doesn't ask for one. Mirrored by {@link SearchQuery#of}. */
     private static final int DEFAULT_TOP_K = 10;
@@ -36,21 +35,18 @@ public record SearchRequestDto(
      *                                 {@code Enum.valueOf}.
      */
     public SearchQuery toDomain() {
-        boolean hasSourceDocument = sourceEntityId != null && !sourceEntityId.isBlank();
-        if ((query == null || query.isBlank()) && !hasSourceDocument) {
-            // A document query supplies its own text, so a blank query is only a problem without one.
-            throw new IllegalArgumentException("query must not be blank unless sourceEntityId is set");
+        if (query == null || query.isBlank()) {
+            throw new IllegalArgumentException("query must not be blank");
         }
         return new SearchQuery(
-                query == null ? "" : query,
+                query,
                 knowledgeIds == null ? List.of() : knowledgeIds,
                 filters == null ? Map.of() : filters,
                 topK == null ? DEFAULT_TOP_K : topK,
                 parseMode(mode),
                 answer != null && answer,
                 maxChunksPerEntity,
-                collapseDuplicates != null && collapseDuplicates,
-                sourceEntityId);
+                collapseDuplicates != null && collapseDuplicates);
     }
 
     private static SearchQuery.Mode parseMode(String mode) {

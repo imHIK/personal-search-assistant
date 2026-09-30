@@ -255,7 +255,7 @@ app.llm.profile.lite.temperature=0.0
 app.llm.profile.lite.max-tokens=4096
 ```
 
-`lite` (job-fit scoring and document-facets) is redirected to Gemini's OpenAI-compatible endpoint
+`lite` (job-fit scoring) is redirected to Gemini's OpenAI-compatible endpoint
 because of Groq's free-tier **tokens per minute**. Groq rejects any single request whose prompt plus
 `max_tokens` exceeds the per-minute limit (8000 for `gpt-oss-120b`) with a 413 that waiting cannot fix,
 and job-fit judges whole postings — ten of them run to ~60k chars. `max-tokens` is generous because

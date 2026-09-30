@@ -10,17 +10,13 @@ import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
-import io.personalassistant.retrieval.DocumentQueryPlanner;
 import io.personalassistant.retrieval.DuplicateCollapser;
 import io.personalassistant.retrieval.EntityGrouper;
-import io.personalassistant.retrieval.FacetedRetrieval;
 import io.personalassistant.retrieval.NoopReranker;
 import io.personalassistant.retrieval.QueryEmbedder;
 import io.personalassistant.retrieval.RecencyBoost;
 import io.personalassistant.retrieval.Retriever;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
-import io.personalassistant.testsupport.InMemoryEntityRepository;
-import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.StubSearchAgent;
 import java.time.Clock;
 import java.time.Instant;
@@ -64,14 +60,6 @@ class DefaultSearchServiceTest {
         return new DuplicateCollapser(5, 0.85, 100, 0.5);
     }
 
-    /** Faceted retrieval is only reached by a document query; these tests all pass typed text. */
-    private static FacetedRetrieval faceted(RecordingRetriever retriever, SearchAgent agent) {
-        return new FacetedRetrieval(
-                new DocumentQueryPlanner(new InMemoryEntityRepository(), agent,
-                        new RecordingSearchIndex(), 40_000, 8),
-                retriever, 60);
-    }
-
     private DefaultSearchService service(RecordingRetriever retriever, SearchAgent agent) {
         return service(new FakeEmbeddingProvider(768), retriever, agent);
     }
@@ -80,7 +68,7 @@ class DefaultSearchServiceTest {
     private DefaultSearchService service(FakeEmbeddingProvider embeddings, RecordingRetriever retriever,
                                          SearchAgent agent) {
         DefaultSearchService svc = new DefaultSearchService(
-                new QueryEmbedder(embeddings, 0), retriever, faceted(retriever, agent),
+                new QueryEmbedder(embeddings, 0), retriever,
                 new NoopReranker(), new EntityGrouper(3, 0.1),
                 new RecencyBoost(FieldSets.bundled(), 0.1, 14, Clock.systemUTC()), collapser(), agent);
         svc.maxTopK = 100;
@@ -91,7 +79,7 @@ class DefaultSearchServiceTest {
     }
 
     private static SearchQuery ask(int topK, boolean answer) {
-        return new SearchQuery("holidays", List.of(), Map.of(), topK, SearchQuery.Mode.HYBRID, answer, null, false, null);
+        return new SearchQuery("holidays", List.of(), Map.of(), topK, SearchQuery.Mode.HYBRID, answer, null, false);
     }
 
     /**
@@ -194,7 +182,7 @@ class DefaultSearchServiceTest {
         FakeEmbeddingProvider embeddings = new FakeEmbeddingProvider(768);
         DefaultSearchService svc = service(embeddings, new RecordingRetriever(), new StubSearchAgent(""));
 
-        svc.search(new SearchQuery("holidays", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL, false, null, false, null));
+        svc.search(new SearchQuery("holidays", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL, false, null, false));
 
         assertEquals(0, embeddings.embedCalls, "a lexical search must not pay for an embedding");
 
@@ -252,7 +240,7 @@ class DefaultSearchServiceTest {
                 hit("b", "alpha body about one subject"),
                 hit("c", "beta body about another subject"));
         SearchQuery collapsing = new SearchQuery("holidays", List.of(), Map.of(), 2,
-                SearchQuery.Mode.HYBRID, false, null, true, null);
+                SearchQuery.Mode.HYBRID, false, null, true);
 
         SearchResponse response = service(retriever, new StubSearchAgent("")).search(collapsing);
 

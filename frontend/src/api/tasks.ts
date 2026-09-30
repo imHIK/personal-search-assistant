@@ -1,5 +1,5 @@
 import { http, query } from './http'
-import type { EntitySummary, Task, TaskBody } from './types'
+import type { Task, TaskBody } from './types'
 
 /**
  * The task library — what a digest can be told to do with its results.
@@ -28,7 +28,4 @@ export const tasksApi = {
 
   /** Configured LLM profiles, so the editor offers the models that actually exist. */
   llmProfiles: () => http<string[]>('/api/llm-profiles'),
-
-  /** One indexed item, for showing a title where only an entity id is held. */
-  entity: (id: string) => http<EntitySummary>(`/api/entities/${id}`),
 }

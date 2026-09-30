@@ -36,7 +36,7 @@ class HybridRetrieverTest {
         index.lexicalResult = List.of(hit("B"), hit("C"), hit("A"));
         index.vectorResult = List.of(hit("A"), hit("B"), hit("C"));
 
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 3, SearchQuery.Mode.HYBRID, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 3, SearchQuery.Mode.HYBRID, false, null, false);
         List<SearchHit> fused = retriever(index).retrieve(query, new float[] {0f}, 3);
 
         assertEquals(3, fused.size());
@@ -49,7 +49,7 @@ class HybridRetrieverTest {
     void lexicalModeDelegatesDirectly() {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("A"), hit("B"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 5, SearchQuery.Mode.LEXICAL, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 5, SearchQuery.Mode.LEXICAL, false, null, false);
         assertEquals(2, retriever(index).retrieve(query, null, 5).size());
     }
 
@@ -63,7 +63,7 @@ class HybridRetrieverTest {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("lex-only"));
         index.vectorResult = List.of(hit("vec-only"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 2, SearchQuery.Mode.HYBRID, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 2, SearchQuery.Mode.HYBRID, false, null, false);
 
         HybridRetriever trustLexical = retriever(index);
         trustLexical.vectorWeight = 0.1;
@@ -79,7 +79,7 @@ class HybridRetrieverTest {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("A"), hit("B"));
         index.vectorResult = List.of(hit("B"), hit("A"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 2, SearchQuery.Mode.HYBRID, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 2, SearchQuery.Mode.HYBRID, false, null, false);
 
         HybridRetriever flat = retriever(index);
         flat.rrfK = 1000;
@@ -101,7 +101,7 @@ class HybridRetrieverTest {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("B"), hit("C"), hit("A"));
         index.vectorResult = List.of(hit("A"), hit("B"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 3, SearchQuery.Mode.HYBRID, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 3, SearchQuery.Mode.HYBRID, false, null, false);
 
         Map<String, SearchHit> byId = new java.util.HashMap<>();
         retriever(index).retrieve(query, new float[] {0f}, 3).forEach(h -> byId.put(h.chunkId(), h));
@@ -117,7 +117,7 @@ class HybridRetrieverTest {
     void aSingleLegModeRecordsOnlyItsOwnRank() {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("A"), hit("B"));
-        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 5, SearchQuery.Mode.LEXICAL, false, null, false, null);
+        SearchQuery query = new SearchQuery("q", List.of(), Map.of(), 5, SearchQuery.Mode.LEXICAL, false, null, false);
 
         SearchHit second = retriever(index).retrieve(query, null, 5).get(1);
 
@@ -134,7 +134,7 @@ class HybridRetrieverTest {
         RecordingSearchIndex index = new RecordingSearchIndex();
         index.lexicalResult = List.of(hit("a0", "big"), hit("a1", "big"), hit("a2", "big"), hit("b0", "other"));
         SearchQuery oneEach = new SearchQuery("q", List.of(), Map.of(), 10, SearchQuery.Mode.LEXICAL,
-                false, 1, false, null);
+                false, 1, false);
 
         assertEquals(4, retriever(index).retrieve(oneEach, null, 10).size());
     }

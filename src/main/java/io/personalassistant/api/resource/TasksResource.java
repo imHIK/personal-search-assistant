@@ -22,9 +22,8 @@ import java.util.NoSuchElementException;
  * The task library: what a digest can be told to do with its results.
  *
  * <p>Two kinds of row come back. Bundled tasks ship in {@code config/prompts.json} and are read-only —
- * {@code answer} runs on every search answer and {@code document-facets} on every search-by-document,
- * so an edit to either would degrade search with nothing to show for it. Everything else is a user
- * task, created here and stored in Mongo.
+ * {@code answer} runs on every search answer, so an edit to it would degrade search with nothing to show
+ * for it. Everything else is a user task, created here and stored in Mongo.
  */
 @Path("/api/tasks")
 @Consumes(MediaType.APPLICATION_JSON)

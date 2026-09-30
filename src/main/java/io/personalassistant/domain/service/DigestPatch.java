@@ -25,7 +25,6 @@ import java.util.Map;
 public record DigestPatch(
         Patched<String> name,
         Patched<String> query,
-        Patched<String> sourceEntityId,
         Patched<List<String>> knowledgeIds,
         Patched<Map<String, Object>> filters,
         Patched<String> window,
@@ -42,7 +41,6 @@ public record DigestPatch(
     public DigestPatch {
         name = Patched.orAbsent(name);
         query = Patched.orAbsent(query);
-        sourceEntityId = Patched.orAbsent(sourceEntityId);
         knowledgeIds = Patched.orAbsent(knowledgeIds);
         filters = Patched.orAbsent(filters);
         window = Patched.orAbsent(window);
@@ -57,12 +55,12 @@ public record DigestPatch(
     }
 
     /** An edit that leaves the digest's channels alone. */
-    public DigestPatch(Patched<String> name, Patched<String> query, Patched<String> sourceEntityId,
-                       Patched<List<String>> knowledgeIds, Patched<Map<String, Object>> filters,
-                       Patched<String> window, Patched<SyncSchedule> schedule, Patched<String> taskId,
-                       Patched<Integer> topK, Patched<Boolean> collapseDuplicates,
-                       Patched<Integer> maxChunksPerEntity, Patched<Boolean> onlyNew, Patched<Boolean> enabled) {
-        this(name, query, sourceEntityId, knowledgeIds, filters, window, schedule, taskId, topK,
+    public DigestPatch(Patched<String> name, Patched<String> query, Patched<List<String>> knowledgeIds,
+                       Patched<Map<String, Object>> filters, Patched<String> window,
+                       Patched<SyncSchedule> schedule, Patched<String> taskId, Patched<Integer> topK,
+                       Patched<Boolean> collapseDuplicates, Patched<Integer> maxChunksPerEntity,
+                       Patched<Boolean> onlyNew, Patched<Boolean> enabled) {
+        this(name, query, knowledgeIds, filters, window, schedule, taskId, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, null);
     }
 
@@ -80,7 +78,6 @@ public record DigestPatch(
                 existing.id(),
                 name.orElse(existing.name()),
                 query.orElse(existing.query()),
-                sourceEntityId.orElse(existing.sourceEntityId()),
                 knowledgeIds.orElse(existing.knowledgeIds()),
                 filters.orElse(existing.filters()),
                 window.orElse(existing.window()),

@@ -191,9 +191,9 @@ public class PromptCatalog {
             descriptions.put(id, t.path("description").asText(""));
             // A display name, so a picker shows "Score job postings" rather than the slug "job-fit".
             names.put(id, t.path("name").asText(id));
-            // Not every task is one a user would attach to a digest: "answer" and "document-facets"
-            // are machinery the read path runs for itself, and offering them would invite a digest
-            // that quietly does nothing useful. Opt in per task rather than out.
+            // Not every task is one a user would attach to a digest: "answer" is machinery the read
+            // path runs for itself, and offering it would invite a digest that quietly does nothing
+            // useful. Opt in per task rather than out.
             if (t.path("digest").asBoolean(false)) {
                 offerable.add(id);
             }
