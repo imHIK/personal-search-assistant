@@ -9,11 +9,6 @@ import org.eclipse.microprofile.config.ConfigValue;
 import org.eclipse.microprofile.config.spi.ConfigSource;
 import org.eclipse.microprofile.config.spi.Converter;
 
-/**
- * A map-backed {@link Config} for unit tests, so a bean that resolves property names dynamically (such
- * as {@code OAuthClients}, which composes them from a provider id) can be exercised without a CDI
- * container. Only string values are supported — that is all any dynamic lookup here asks for.
- */
 public class StubConfig implements Config {
 
     private final Map<String, String> values;

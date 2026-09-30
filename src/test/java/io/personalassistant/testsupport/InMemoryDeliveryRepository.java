@@ -13,8 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * In-memory {@link DeliveryRepository} for tests, with the Mongo adapter's lease fence: post-claim writes
- * apply only while the caller holds a live lease.
+ * Mirrors the Mongo adapter's lease fence: post-claim writes apply only while the caller holds a live lease.
  */
 public class InMemoryDeliveryRepository implements DeliveryRepository {
 
@@ -104,7 +103,6 @@ public class InMemoryDeliveryRepository implements DeliveryRepository {
         store.values().removeIf(d -> channelId.equals(d.channelId()));
     }
 
-    /** Simulate another worker taking over the delivery, as after the caller's lease expired. */
     public void steal(String id, String newOwner) {
         Delivery d = store.get(id);
         store.put(id, with(d, d.status(), d.attempts(), d.nextAttemptAt(),

@@ -20,7 +20,6 @@ class HybridRetrieverTest {
         return new SearchHit(chunkId, entityId, "kn", 0, "t", "full text", "s", "u", 0.0, Map.of());
     }
 
-    /** Config fields are injected in production; a hand-wired retriever sets the shipped defaults. */
     private static HybridRetriever retriever(RecordingSearchIndex index) {
         HybridRetriever retriever = new HybridRetriever(index);
         retriever.rrfK = 60;
@@ -32,7 +31,6 @@ class HybridRetrieverTest {
     @Test
     void rrfRewardsChunksRankedHighlyByBothMethods() {
         RecordingSearchIndex index = new RecordingSearchIndex();
-        // "B" is top of lexical and second in vector; "A" tops vector only; "C" mid both.
         index.lexicalResult = List.of(hit("B"), hit("C"), hit("A"));
         index.vectorResult = List.of(hit("A"), hit("B"), hit("C"));
 
@@ -53,11 +51,6 @@ class HybridRetrieverTest {
         assertEquals(2, retriever(index).retrieve(query, null, 5).size());
     }
 
-    /**
-     * Equal weighting assumes both legs are equally trustworthy for every query. On a conversational
-     * query the BM25 leg matches incidental words and contributes a run of irrelevant candidates that can
-     * outrank the vector leg's correct ones, so the weight is the knob for discounting it.
-     */
     @Test
     void perLegWeightsShiftWhichLegWins() {
         RecordingSearchIndex index = new RecordingSearchIndex();
@@ -95,7 +88,6 @@ class HybridRetrieverTest {
         return hits.get(0).score() - hits.get(hits.size() - 1).score();
     }
 
-    /** The fused score cannot say which leg put a chunk where it is; the recorded ranks can. */
     @Test
     void hybridRecordsWhereEachLegRankedAChunk() {
         RecordingSearchIndex index = new RecordingSearchIndex();
@@ -125,10 +117,6 @@ class HybridRetrieverTest {
         assertEquals(null, second.ranking().vectorRank());
     }
 
-    /**
-     * The retriever hands back every chunk it fetched. A per-entity cap here used to trim the pool it had
-     * already sized, starving the result set; grouping into entities is {@link EntityGrouper}'s job.
-     */
     @Test
     void returnsChunksUncappedEvenWhenOneEntityDominates() {
         RecordingSearchIndex index = new RecordingSearchIndex();

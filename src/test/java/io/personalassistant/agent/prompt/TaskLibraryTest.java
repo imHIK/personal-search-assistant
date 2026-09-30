@@ -8,7 +8,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Resolving a task id across the two halves of the library, and what a user task renders as. */
 class TaskLibraryTest {
 
     private final InMemoryTaskRepository repository = new InMemoryTaskRepository();
@@ -31,7 +30,6 @@ class TaskLibraryTest {
 
     @Test
     void aUserTaskIsRoutedByItsIdPrefixRatherThanByLookupOrder() {
-        // The prefix is what makes shadowing impossible: no user task can ever be named "answer".
         Task saved = repository.save(simple(Task.Output.SUMMARY, List.of()));
         Assertions.assertTrue(saved.id().startsWith(Ids.TASK_PREFIX));
 
@@ -48,7 +46,6 @@ class TaskLibraryTest {
 
     @Test
     void aSimpleTaskRendersThroughTheShippedWrapperRatherThanItsOwnPrompt() {
-        // The safety clauses live in the wrapper, so they cannot be omitted by whoever wrote the task.
         Task saved = repository.save(simple(Task.Output.SUMMARY, List.of()));
 
         TaskLibrary.ResolvedTask resolved = library.resolve(saved.id());

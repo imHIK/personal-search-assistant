@@ -11,10 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * A scriptable {@link Publisher}: records what it was asked to send and through which account, and can be
- * made to need an account, refuse a target, fail verification, or throw on send.
- */
 public class StubPublisher implements Publisher {
 
     /** A target carrying this key is refused by {@link #validateTarget}. */
@@ -23,15 +19,12 @@ public class StubPublisher implements Publisher {
     private final ChannelType type;
     public final List<PublishMessage> sent = new ArrayList<>();
     public final List<String> references = new ArrayList<>();
-    /** The account each send went through, in order; null entries for a publisher that needs none. */
+    /** One entry per send; null when the publisher needs no account. */
     public final List<Connection> connections = new ArrayList<>();
-    /** The connection type sends go through; null means this publisher needs no account. */
+    /** null = the publisher needs no account. */
     public String connectionType;
-    /** Thrown by every send while set. */
     public RuntimeException failure;
-    /** Thrown by {@link #verify} while set. */
     public RuntimeException verifyFailure;
-    /** Run inside a send, before it returns — e.g. to simulate losing the lease mid-send. */
     public Runnable duringPublish;
 
     public StubPublisher() {

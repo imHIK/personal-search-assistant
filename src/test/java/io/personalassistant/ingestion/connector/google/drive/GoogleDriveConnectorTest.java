@@ -73,12 +73,9 @@ class GoogleDriveConnectorTest {
         return it.get();
     }
 
-    // ---- discovery ---------------------------------------------------------------------------
-
     @Test
     void discoversFolderTreeBreadthFirst(@TempDir Path scratch) {
         connector = connector(scratch);
-        // root -> f1 -> f2 ; plus a file that must NOT become an iterable
         api.folder("f1", "Projects", "root");
         api.folder("f2", "2026", "f1");
         api.binary("doc", "notes.txt", "text/plain", "f1", Instant.now().toEpochMilli(), 1, "hi".getBytes());
@@ -92,9 +89,6 @@ class GoogleDriveConnectorTest {
 
     @Test
     void aConfiguredRootIsNamedRatherThanShownAsItsId(@TempDir Path scratch) {
-        // Sub-folders arrive from a listing that carries names; a configured root is a bare id the
-        // user pasted in. Labelling it with itself put a raw Drive id in front of the user as the
-        // folder's name, on the source overview and over its sync history.
         connector = connector(scratch);
         api.folder("1qTKf3MTYH6BTMq9l60", "Job hunt", "root");
 
@@ -106,7 +100,6 @@ class GoogleDriveConnectorTest {
 
     @Test
     void aRootWhoseNameCannotBeReadFallsBackToItsId(@TempDir Path scratch) {
-        // A label is not worth failing discovery over; the walk itself will surface a bad root.
         connector = connector(scratch);
 
         List<SourceIterable> iterables =
@@ -114,8 +107,6 @@ class GoogleDriveConnectorTest {
 
         assertEquals("gone", iterable(iterables, "gone").displayName());
     }
-
-    // ---- forward: ascending high-water walk ---------------------------------------------------
 
     @Test
     void forwardReturnsFilesAtOrAfterAnchorOldestFirstAndAdvancesHighWater(@TempDir Path scratch) {
@@ -165,8 +156,6 @@ class GoogleDriveConnectorTest {
         assertEquals(List.of("d1", "d2", "d3", "d4", "d5"), collected, "ascending, once each, no gaps");
     }
 
-    // ---- backward: descending backfill --------------------------------------------------------
-
     @Test
     void backwardPagesHistoryBeforeAnchorThenExhausts(@TempDir Path scratch) {
         connector = connector(scratch);
@@ -193,8 +182,6 @@ class GoogleDriveConnectorTest {
         assertEquals(List.of("h1", "h2", "h3"), collected, "newest-of-old first, excludes post-anchor");
         assertEquals(2, pages, "3 items at cap=2 => 2 pages");
     }
-
-    // ---- content mapping ----------------------------------------------------------------------
 
     @Test
     void nativeDocIsMappedForExportWithoutExportingDuringTheWalk(@TempDir Path scratch) {
@@ -302,7 +289,6 @@ class GoogleDriveConnectorTest {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         api.binary("big", "huge.pdf", "application/pdf", "root",
                 anchor.plusSeconds(1).toEpochMilli(), 1, "well over eight bytes".getBytes());
-        // A native type with no export mime — a Drive form has nothing textual to index.
         api.nativeDoc("form", "Signup", "application/vnd.google-apps.form", "root",
                 anchor.plusSeconds(2).toEpochMilli(), 1, "unused");
 
@@ -315,11 +301,8 @@ class GoogleDriveConnectorTest {
         assertEquals(0, api.exports);
     }
 
-    // ---- L11: per-item re-list --------------------------------------------------------------
-
     @Test
     void declaresThatItsContentMustBeFetchedAgainBeforeReIndexing() {
-        // The whole of L11 hangs off this: its fileRef is a copy in a dir the OS may empty.
         assertEquals(ReindexMode.FETCH_AND_REINDEX, connector(Path.of("/tmp")).defaultReindexMode());
     }
 
@@ -336,8 +319,6 @@ class GoogleDriveConnectorTest {
 
         RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
 
-        // Identical, field for field, is the requirement: a checksum that differed here would make
-        // every subsequent poll see a change that never happened.
         assertEquals(walked.checksum(), relisted.checksum());
         assertEquals(walked.fileRef(), relisted.fileRef());
         assertEquals(walked.contentType(), relisted.contentType());
@@ -359,7 +340,6 @@ class GoogleDriveConnectorTest {
         Path staged = Path.of(walked.fileRef());
         assertTrue(Files.exists(staged));
 
-        // The OS empties the scratch dir; this is the state that used to dead-letter the entity.
         assertTrue(staged.toFile().delete());
 
         RawItem relisted = connector.fetchOne(kn, entityFor(walked)).orElseThrow();
@@ -395,7 +375,6 @@ class GoogleDriveConnectorTest {
         assertTrue(connector.fetchOne(kn, orphan).isEmpty(), "a 404 is an answer here, not a fault");
     }
 
-    /** The entity the walk would have produced for this item — all fetchOne reads is externalId. */
     private static Entity entityFor(RawItem item) {
         return TestData.ingestedFile("ent_" + item.externalId(), "kn_drive", item.externalId(),
                 item.fileRef(), item.contentType());

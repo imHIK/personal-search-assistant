@@ -13,16 +13,9 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
-/**
- * How a {@link LlmProfile} is folded into the provider's own configuration. No HTTP is involved — these
- * assert the resolution rules through {@code callSummary}, which reports exactly what the request was
- * built from. The rules matter because a profile is partial by design: getting inheritance wrong would
- * silently move a call to a different model, endpoint, or temperature than the caller asked for.
- */
 class OpenAiCompatibleLlmProviderProfileTest {
 
     private static OpenAiCompatibleLlmProvider provider() {
-        // No request is ever sent here — these assert resolution, not transport.
         OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider(
                 new OutboundHttp(new RecordingRateLimiter()), RateLimitPolicies.unlimited());
         p.baseUrl = "https://api.groq.com/openai/v1";
@@ -72,10 +65,6 @@ class OpenAiCompatibleLlmProviderProfileTest {
         assertTrue(summary(provider(), rerank).contains("profile=rerank"));
     }
 
-    /**
-     * A profile that redirects {@code base-url} must bring its own credential. Inheriting the provider's
-     * key would send one vendor's secret to another vendor's host — a credential leak, not a fallback.
-     */
     @Test
     void aRedirectedProfileDoesNotInheritTheProvidersKey() {
         LlmProfile ollama = new LlmProfile("local", Optional.of("http://localhost:11434/v1"),
@@ -123,7 +112,6 @@ class OpenAiCompatibleLlmProviderProfileTest {
         assertEquals("openai-compat", provider().providerId());
     }
 
-    /** The stub inherits the default method, so selecting {@code none} still disables answering. */
     @Test
     void theStubProviderIgnoresProfilesAndStillRefuses() {
         LlmProvider stub = new StubLlmProvider();

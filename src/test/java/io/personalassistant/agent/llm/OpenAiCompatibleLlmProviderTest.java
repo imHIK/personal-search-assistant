@@ -25,11 +25,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * Verifies the OpenAI-compatible chat adapter builds the request the schema expects (model, temperature,
- * system-then-user messages, bearer auth) and extracts the reply from the response — against a local stub
- * {@link HttpServer}, no network.
- */
 class OpenAiCompatibleLlmProviderTest {
 
     private final RecordingRateLimiter limiter = new RecordingRateLimiter();
@@ -84,7 +79,6 @@ class OpenAiCompatibleLlmProviderTest {
 
         assertEquals("The answer is 42 [1].", reply);
 
-        // Request assertions.
         assertEquals("/chat/completions", capturedPath.get());
         assertEquals("Bearer secret-key", capturedAuth.get());
         JsonNode body = mapper.readTree(capturedBody.get());
@@ -131,10 +125,6 @@ class OpenAiCompatibleLlmProviderTest {
         assertTrue(ex.getMessage().contains("500"), ex.getMessage());
     }
 
-    /**
-     * A rate-limited answer must say so. Wrapped, it reaches the caller as a generic "LLM request
-     * failed" and the console shows that in answerError instead of the real reason.
-     */
     @Test
     void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
         limiter.failWith = new RateLimitedException(RateLimitKey.llm("openai-compat"),

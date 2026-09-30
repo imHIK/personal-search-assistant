@@ -19,10 +19,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Due selection, and the guard that stops one broken digest becoming a hot loop. */
 class DigestSchedulerTest {
 
-    /** Records which digests were run, and can be made to throw. */
     private static final class RecordingDigestService implements DigestService {
         final List<String> ran = new ArrayList<>();
         RuntimeException failure;
@@ -138,8 +136,6 @@ class DigestSchedulerTest {
 
     @Test
     void aFailingDigestStillHasItsDueTimeAdvanced() {
-        // Otherwise it stays due and is retried every tick — one broken digest becomes a hot loop
-        // against the LLM.
         stored("dig_broken", true, null);
         service.failure = new IllegalStateException("boom");
         DigestScheduler scheduler = scheduler();
@@ -152,7 +148,6 @@ class DigestSchedulerTest {
 
     @Test
     void aDigestWithNoCadenceOfItsOwnFallsBackToTheGlobalDefault() {
-        // Leaving it permanently due would run it on every tick.
         repository.save(new Digest("dig_nocadence", "d", "engineer", List.of(), Map.of(), "1d",
                 SyncSchedule.NONE, null, 10, false, null, true, true, null, Instant.now(), Instant.now()));
 

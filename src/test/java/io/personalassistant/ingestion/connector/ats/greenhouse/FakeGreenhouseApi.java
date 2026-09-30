@@ -5,14 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Scriptable {@link GreenhouseApi} for connector tests — no network, mirrors {@code FakeDriveApi}. */
 public class FakeGreenhouseApi implements GreenhouseApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Map<String, String> boards = new HashMap<>();
 
-    /** Test observability: how many times the board was fetched. */
     public int listCalls;
 
     public FakeGreenhouseApi withBoard(String token, String json) {

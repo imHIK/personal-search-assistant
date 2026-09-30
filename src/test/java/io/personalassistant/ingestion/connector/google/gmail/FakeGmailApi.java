@@ -15,12 +15,6 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * In-memory {@link GmailApi} for connector tests. It models the parts of Gmail the connector leans
- * on: label filtering, {@code after:}/{@code before:} second-granularity windows, newest-first
- * ordering, and opaque (here: numeric-offset) page tokens. This lets the tests exercise the real
- * pagination + high-water logic without any network.
- */
 class FakeGmailApi implements GmailApi {
 
     private static final Pattern AFTER = Pattern.compile("after:(\\d+)");
@@ -31,7 +25,6 @@ class FakeGmailApi implements GmailApi {
     private final Map<String, String> labels = new LinkedHashMap<>();
     private String emailAddress = "user@example.com";
 
-    /** Total {@code listMessages} calls — lets a test assert the connector paginates rather than refetches. */
     int listCalls;
 
     FakeGmailApi add(String id, long internalMs, List<String> labelIds, String subject,
@@ -66,7 +59,7 @@ class FakeGmailApi implements GmailApi {
             }
             matched.add(m);
         }
-        matched.sort(Comparator.comparingLong((Msg m) -> m.internalMs).reversed()); // newest first
+        matched.sort(Comparator.comparingLong((Msg m) -> m.internalMs).reversed());
 
         int offset = pageToken == null || pageToken.isBlank() ? 0 : Integer.parseInt(pageToken);
         int end = Math.min(matched.size(), offset + maxResults);
@@ -84,8 +77,8 @@ class FakeGmailApi implements GmailApi {
 
     @Override
     public JsonNode getMessage(GoogleAuth auth, String id) {
-        // 404, not an IllegalArgumentException: that is what GoogleHttp translates a missing id into,
-        // and the re-list path branches on it to tell "deleted" from "broken".
+        // 404, not IllegalArgumentException: that is what GoogleHttp maps a missing id to, and the re-list
+        // path tells "deleted" from "broken" by it.
         Msg m = messages.stream().filter(x -> x.id.equals(id)).findFirst()
                 .orElseThrow(() -> new GoogleApiException(404, "no such message " + id));
         ObjectNode msg = mapper.createObjectNode();

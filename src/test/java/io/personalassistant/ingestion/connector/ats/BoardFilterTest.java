@@ -10,7 +10,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** The filter rules, including the three places where "absent" deliberately means "keep". */
 class BoardFilterTest {
 
     private static RawItem posting(String title, String location, Boolean remote, Instant postedAt) {
@@ -33,11 +32,8 @@ class BoardFilterTest {
         return posting(title, location, null, Instant.now());
     }
 
-    // ---- title ---------------------------------------------------------------------------------
-
     @Test
     void anEmptyIncludeListKeepsEverything() {
-        // "No opinion", never "match nothing" — otherwise adding an exclude would empty the board.
         BoardFilter f = BoardFilter.ofTitles(List.of(), List.of("manager"));
 
         Assertions.assertTrue(f.matchesTitle("Backend Engineer"));
@@ -46,7 +42,6 @@ class BoardFilterTest {
 
     @Test
     void excludeBeatsInclude() {
-        // "Software Engineering Manager" matches both lists. The exclude has to win or it says nothing.
         BoardFilter f = BoardFilter.ofTitles(List.of("software engineer"), List.of("manager"));
 
         Assertions.assertTrue(f.matchesTitle("Senior Software Engineer, Payments"));
@@ -63,18 +58,14 @@ class BoardFilterTest {
 
     @Test
     void aTitleFilterIsExactBecauseATitleIsAlwaysPresent() {
-        // Unlike location and date, there is no "absent" case to be generous about.
         BoardFilter f = BoardFilter.ofTitles(List.of("engineer"), List.of());
 
         Assertions.assertFalse(f.matchesTitle(null));
         Assertions.assertFalse(f.matchesTitle(""));
     }
 
-    // ---- location and remote -------------------------------------------------------------------
-
     @Test
     void aPostingWithNoLocationSurvivesALocationFilter() {
-        // Boards leave it blank often enough that dropping would lose real roles.
         BoardFilter f = BoardFilter.ofLocations(List.of("bengaluru"));
 
         Assertions.assertTrue(f.matches(posting("Backend Engineer", null)));
@@ -93,13 +84,10 @@ class BoardFilterTest {
 
     @Test
     void includeRemoteDoesNotSmuggleARoleThroughTheTitleFilter() {
-        // It is an OR with the PLACE terms only; every other dimension still applies.
         BoardFilter f = new BoardFilter(List.of("bengaluru"), List.of("engineer"), List.of(), null, true);
 
         Assertions.assertFalse(f.matches(posting("Account Executive", "London, UK", true, Instant.now())));
     }
-
-    // ---- age -----------------------------------------------------------------------------------
 
     @Test
     void anAgeLimitDropsOnlyPostingsThatStateAnOlderDate() {
@@ -112,8 +100,6 @@ class BoardFilterTest {
 
     @Test
     void aPostingWithNoDateSurvivesAnAgeLimit() {
-        // Lever and SmartRecruiters publish only a first-posted stamp, some boards publish none —
-        // treating null as old would silently empty those boards.
         BoardFilter f = new BoardFilter(List.of(), List.of(), List.of(), Duration.ofDays(14), false);
 
         Assertions.assertTrue(f.matches(posting("A", "Pune", null, null)));
@@ -126,11 +112,8 @@ class BoardFilterTest {
                 new BoardFilter(List.of(), List.of(), List.of(), Duration.ofDays(-1), false).maxAge());
     }
 
-    // ---- shape ---------------------------------------------------------------------------------
-
     @Test
     void aTombstoneAlwaysPasses() {
-        // Filtering out a deletion would leave the entity indexed forever.
         BoardFilter f = new BoardFilter(List.of("bengaluru"), List.of("engineer"), List.of(),
                 Duration.ofDays(1), false);
 

@@ -27,10 +27,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * Verifies the OpenAI-compatible embedding adapter builds the request the schema expects and maps the
- * response back correctly — without any network — by pointing it at a local stub {@link HttpServer}.
- */
 class OpenAiCompatibleEmbeddingProviderTest {
 
     private final RecordingRateLimiter limiter = new RecordingRateLimiter();
@@ -81,7 +77,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
 
         Embedding e = p.embed("hello world");
 
-        // Request assertions.
         assertEquals("/embeddings", capturedPath.get());
         assertEquals("Bearer secret-key", capturedAuth.get());
         JsonNode body = mapper.readTree(capturedBody.get());
@@ -90,14 +85,12 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertEquals(1, body.path("input").size());
         assertEquals("hello world", body.path("input").get(0).asText());
 
-        // Response mapping.
         assertEquals("text-embedding-004", e.model());
         assertArrayEquals(new float[] {0.1f, 0.2f, 0.3f, 0.4f}, e.vector(), 1e-6f);
     }
 
     @Test
     void reordersVectorsByReportedIndex() {
-        // Server returns the two vectors out of order; provider must restore input order via "index".
         responseJson = "{\"data\":["
                 + "{\"index\":1,\"embedding\":[9,9]},"
                 + "{\"index\":0,\"embedding\":[1,1]}"
@@ -113,19 +106,12 @@ class OpenAiCompatibleEmbeddingProviderTest {
 
     @Test
     void mismatchedVectorWidthIsRejected() {
-        // Model returns 3 values but the index is pinned to 2 — must fail loudly, not corrupt the index.
         responseJson = "{\"data\":[{\"index\":0,\"embedding\":[1,2,3]}]}";
         OpenAiCompatibleEmbeddingProvider p = provider(2);
 
         assertThrows(IllegalStateException.class, () -> p.embed("x"));
     }
 
-    /**
-     * B7 regression. The response is the right <em>size</em> but its indices collide, so slot 1 is
-     * never written. That null used to travel out of the provider, through the runner, and into
-     * OpenSearch as a chunk with no vector — indexed without error, counted as a success, and
-     * invisible to semantic search from then on.
-     */
     @Test
     void duplicateReportedIndexIsRejectedRatherThanLeavingAHole() {
         responseJson = "{\"data\":["
@@ -140,10 +126,8 @@ class OpenAiCompatibleEmbeddingProviderTest {
     }
 
     /**
-     * The exact shape Gemini's {@code /embeddings} returns, captured from the live endpoint: it
-     * serializes protobuf, where 0 is the proto3 default and default-valued fields are omitted, so
-     * <b>the first item has no {@code index} at all</b> while the rest do. Treating a missing
-     * {@code index} as an error breaks every batch on its first element.
+     * Gemini's real {@code /embeddings} shape: proto3 omits default values, so the first item has no
+     * {@code index}.
      */
     @Test
     void handlesGeminiOmittingIndexOnTheFirstItem() {
@@ -162,7 +146,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertArrayEquals(new float[] {3f, 3f}, out.get(2).vector(), 1e-6f);
     }
 
-    /** And a server that omits {@code index} on every item still works, via payload order. */
     @Test
     void missingIndexFieldFallsBackToPayloadOrder() {
         responseJson = "{\"data\":[{\"embedding\":[1,1]},{\"embedding\":[2,2]},{\"embedding\":[3,3]}]}";
@@ -175,7 +158,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertArrayEquals(new float[] {3f, 3f}, out.get(2).vector(), 1e-6f);
     }
 
-    /** A single input with no index — the shape {@code embed(String)} produces. */
     @Test
     void singleEmbeddingWithoutIndexFieldWorks() {
         responseJson = "{\"data\":[{\"embedding\":[0.5,0.5]}]}";
@@ -204,10 +186,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertTrue(ex.getMessage().contains("429"), ex.getMessage());
     }
 
-    /**
-     * A 429 has to reach the limiter, not just the caller: the vendor has told us its capacity, and the
-     * next backfill batch should wait on that rather than discovering it again.
-     */
     @Test
     void aThrottledResponsePausesTheEmbeddingQuota() {
         status = 429;
@@ -219,11 +197,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
                 "expected the embedding bucket to be paused, saw " + limiter.penalties.keySet());
     }
 
-    /**
-     * The indexing runner keys its deferral off this exact exception type, so the provider must let it
-     * through rather than folding it into the generic IllegalStateException with everything else. If it
-     * is wrapped, a throttled backfill silently reverts to being dead-lettered as an ordinary failure.
-     */
     @Test
     void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
         limiter.failWith = new RateLimitedException(RateLimitKey.embedding("openai-embed"),
@@ -235,10 +208,6 @@ class OpenAiCompatibleEmbeddingProviderTest {
         assertNotNull(e.retryAt());
     }
 
-    /**
-     * The two entry points sit on opposite sides of the wait/fail boundary, and nothing else marks that
-     * split — a backfill must slow down, while a search must still answer.
-     */
     @Test
     void indexingWaitsForQuotaWhileASearchQueryFailsFast() {
         responseJson = "{\"data\":[{\"index\":0,\"embedding\":[1,0,0,0]}]}";

@@ -6,11 +6,7 @@ import java.lang.annotation.Annotation;
 import java.util.Iterator;
 import java.util.List;
 
-/**
- * A fixed-contents {@link Instance} for testing beans that inject {@code Instance<T>} for CDI
- * discovery. Only iteration is supported — that is all such beans use, and stubbing the selection and
- * lifecycle methods would invite tests to depend on behaviour the container really provides.
- */
+/** Only iteration is supported; selection and lifecycle belong to the real container. */
 public class StubInstance<T> implements Instance<T> {
 
     private final List<T> beans;

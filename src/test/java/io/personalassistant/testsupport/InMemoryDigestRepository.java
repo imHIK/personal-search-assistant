@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** In-memory {@link DigestRepository} for tests, mirroring the Mongo adapter's ordering. */
+/** Mirrors the Mongo adapter's ordering. */
 public class InMemoryDigestRepository implements DigestRepository {
 
     public final Map<String, Digest> store = new LinkedHashMap<>();

@@ -16,11 +16,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * Parking semantics ({@code suspendByKnowledge}/{@code resumeByKnowledge}) and least-recently-run
- * ordering of {@code findClaimable}. The in-memory repository mirrors the Mongo adapter, so these
- * assertions document the contract both implementations must honour.
- */
 class CursorParkingTest {
 
     private InMemoryCursorRepository cursors;
@@ -30,7 +25,6 @@ class CursorParkingTest {
         cursors = new InMemoryCursorRepository();
     }
 
-    /** A cursor held by a rate limit until {@code until} — the shape recordFailure writes. */
     private Cursor rateLimited(String id, String knowledgeId, Instant until) {
         return new Cursor(id, knowledgeId, "iter", "iter", java.util.Map.of(), CursorDirection.FORWARD,
                 CursorPosition.start(), CursorStatus.RATE_LIMITED, null,
@@ -95,10 +89,6 @@ class CursorParkingTest {
                 "terminal cursors are not resurrected by resume");
     }
 
-    /**
-     * The rate-limit hold is enforced by the claim query itself, not by a sweeper flipping the status
-     * back — so the persisted instant is the only state, and nothing can strand a cursor by dying.
-     */
     @Test
     void aRateLimitHoldGatesClaimingOnItsInstant() {
         cursors.insertIfAbsent(rateLimited("held", "k1", Instant.now().plusSeconds(600)));
@@ -123,8 +113,6 @@ class CursorParkingTest {
         assertEquals(CursorStatus.SUSPENDED, cursors.findById("held").orElseThrow().status());
     }
 
-    /** The console's only way to shorten a hold: the instant was computed against a limit the user
-     * has typically just raised. */
     @Test
     void retryFailedAlsoReleasesRateLimitedCursors() {
         cursors.insertIfAbsent(rateLimited("held", "k1", Instant.now().plusSeconds(600)));

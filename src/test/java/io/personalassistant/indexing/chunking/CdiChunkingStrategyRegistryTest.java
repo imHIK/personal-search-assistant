@@ -43,8 +43,6 @@ class CdiChunkingStrategyRegistryTest {
         assertEquals("recursive", r.get(null).name());
     }
 
-    // ---- content-type-aware selection ---------------------------------------------------------
-
     private static CdiChunkingStrategyRegistry mimeAware(String configuredDefault) {
         return new CdiChunkingStrategyRegistry(
                 List.of(new RecursiveCharacterChunkingStrategy(), new TableAwareChunkingStrategy(),
@@ -55,11 +53,6 @@ class CdiChunkingStrategyRegistryTest {
     private static final String XLSX =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-    /**
-     * Selection used to be keyed purely on a per-knowledge name, so a spreadsheet living in a knowledge
-     * of mostly prose was chunked as prose — its rows split by character count, its header row confined
-     * to the first chunk.
-     */
     @Test
     void contentTypeBreaksTheTieWhenTheStrategyIsOnlyTheInheritedDefault() {
         CdiChunkingStrategyRegistry registry = mimeAware(RecursiveCharacterChunkingStrategy.NAME);
@@ -70,7 +63,6 @@ class CdiChunkingStrategyRegistryTest {
                 "no content type behaves exactly like name-only lookup");
     }
 
-    /** A deliberate per-knowledge choice must never be second-guessed by content type. */
     @Test
     void anExplicitStrategyWinsOverTheContentTypePreference() {
         assertEquals("token", mimeAware(RecursiveCharacterChunkingStrategy.NAME).get("token", XLSX).name());

@@ -15,52 +15,21 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * Guards against {@code @ConfigProperty(defaultValue = ...)} drifting away from
- * {@code application.properties}, in both directions. The properties file is the tiebreaker for any
- * config default (see {@code CLAUDE.md}), so a code default that disagrees is a latent bug: it only
- * shows up on a setup where the property is absent, which is exactly when nobody is watching.
- *
- * <p>Four such disagreements shipped at once — including
- * {@code app.embedding.dimension} defaulting to 384 against a 768-wide index mapping, which
- * invariant 5 says needs a whole new physical index to undo. Hence a test rather than a convention.
- *
- * <p><strong>This test previously enforced nothing.</strong> Its pattern required a literal space after
- * {@code (} and before {@code )} — {@code @ConfigProperty( name = … )} — a formatting the codebase has
- * never used, so it matched <em>zero</em> of 74 real annotations and passed vacuously for its whole
- * life. Two live drifts it was written to catch were sitting in the tree when it was fixed:
- * {@code app.embedding.provider} (code {@code onnx-bge} vs file {@code openai-embed}) and
- * {@code app.embedding.openai.dimensions} (code {@code 0} vs file {@code 768}, i.e. a missing property
- * would have requested 3072-wide vectors against a 768 mapping). {@link #reportsAPlantedDrift()} exists
- * so that can never happen quietly again — a guard that has never failed is not a guard.
- *
- * <p>Deliberately source-text based rather than reflective: {@code @ConfigProperty} appears on
- * constructor parameters as well as fields, which reflection makes awkward, and this needs no CDI
- * container. It resolves {@code src/main} relative to the Gradle test working directory, which is
- * the project directory for this single-module build.
- *
- * <p><strong>Known blind spot:</strong> a non-literal default such as
- * {@code defaultValue = RecursiveCharacterChunkingStrategy.NAME} cannot be compared by a text scan, so
- * those keys are invisible here. Closing that would need annotation processing or a running container.
+ * {@code @ConfigProperty} defaults must agree with {@code application.properties}, in both directions. It
+ * scans source text, so a non-literal default (a constant) is invisible to it.
  */
 class ConfigDefaultsTest {
 
-    /**
-     * Matches the single-line form and the wrapped constructor-parameter form. Whitespace is collapsed
-     * before matching so a line break between {@code name} and {@code defaultValue} is irrelevant, and
-     * every separator is {@code \s*} so the pattern does not depend on one formatting style — the exact
-     * mistake that made this whole test inert. Annotations with no {@code defaultValue} simply don't
-     * match; there is nothing to check.
-     */
+    /** Whitespace is collapsed and every separator is {@code \s*}, so no one formatting style is assumed. */
     private static final Pattern WITH_DEFAULT = Pattern.compile(
             "@ConfigProperty\\(\\s*name\\s*=\\s*\"([^\"]+)\"\\s*,\\s*defaultValue\\s*=\\s*\"([^\"]*)\"\\s*\\)");
 
     /**
-     * Keys reached by something other than a {@code @ConfigProperty} injection point, and therefore
-     * legitimately absent from the code scan. Anything not listed here that has no injection point is a
-     * dead key — usually the debris of a rename.
+     * Keys read without a {@code @ConfigProperty} injection point. Any other shipped key that nothing injects
+     * is dead.
      */
     private static final Set<String> REACHED_ANOTHER_WAY = Set.of(
-            // Resolved dynamically by name through MicroProfile Config; see LlmProfiles.
+            // Resolved by name in LlmProfiles.
             "app.llm.profile.answer.model",
             "app.llm.profile.answer.temperature",
             "app.llm.profile.answer.max-tokens",
@@ -78,8 +47,7 @@ class ConfigDefaultsTest {
             "app.digest.poll-interval",
             "app.publishing.poll-interval",
             "app.connections.health-interval",
-            // Composed per provider id by OAuthClients ("app.oauth." + id + ".client-id"), which is
-            // exactly what lets a new OAuth provider ship two properties and no resolution code.
+            // Composed per provider id by OAuthClients.
             "app.oauth.google.client-id",
             "app.oauth.google.client-secret");
 
@@ -97,11 +65,7 @@ class ConfigDefaultsTest {
                 "@ConfigProperty defaults disagree with application.properties:\n  " + String.join("\n  ", mismatches));
     }
 
-    /**
-     * The pattern must actually match this codebase's formatting. Asserted separately from the
-     * comparison above because a scan that silently matches nothing passes every other test in this
-     * class — which is precisely how the original version stayed green while enforcing nothing.
-     */
+    /** A scan that matches nothing passes every other test here, so prove it matches. */
     @Test
     void theScanActuallyMatchesTheCodebase() throws IOException {
         int matches = 0;
@@ -116,7 +80,6 @@ class ConfigDefaultsTest {
                         + "drifted from the code's formatting and this test is no longer checking anything");
     }
 
-    /** Proves the comparison reports a disagreement rather than merely never finding one. */
     @Test
     void reportsAPlantedDrift() {
         String planted = "@ConfigProperty(name = \"app.embedding.dimension\", defaultValue = \"384\") int dim;";
@@ -128,13 +91,6 @@ class ConfigDefaultsTest {
                 "the report must name both values: " + mismatches.get(0));
     }
 
-    /**
-     * {@code app.embedding.dimension} must carry no code default anywhere. It is baked into the
-     * OpenSearch {@code knn_vector} mapping at index creation (invariant 5), so a guessed width
-     * silently builds an index that the configured provider's vectors do not fit — recoverable only
-     * by creating a new physical index and re-indexing everything. A missing property must fail
-     * startup loudly instead.
-     */
     @Test
     void embeddingDimensionHasNoCodeDefault() throws IOException {
         List<String> offenders = new ArrayList<>();
@@ -150,12 +106,6 @@ class ConfigDefaultsTest {
                 "app.embedding.dimension must have no defaultValue:\n  " + String.join("\n  ", offenders));
     }
 
-    /**
-     * The reverse direction, which never existed: a key shipped in {@code application.properties} that
-     * nothing reads. Renaming a property and missing one injection point leaves the old key sitting
-     * there looking authoritative while the code runs on a default — silent, and invisible to the
-     * forward check, which only looks at keys it finds in the code.
-     */
     @Test
     void everyShippedPropertyIsActuallyRead() throws IOException {
         Map<String, String> properties = readProperties(Path.of("src/main/resources/application.properties"));
@@ -181,7 +131,6 @@ class ConfigDefaultsTest {
                         + String.join("\n  ", orphans));
     }
 
-    /** Every allowlisted key must still be shipped — otherwise the allowlist is itself stale. */
     @Test
     void theAllowlistHasNoStaleEntries() throws IOException {
         Map<String, String> properties = readProperties(Path.of("src/main/resources/application.properties"));
@@ -196,9 +145,6 @@ class ConfigDefaultsTest {
                         + String.join("\n  ", stale));
     }
 
-    // ---- internals ---------------------------------------------------------------------------
-
-    /** Extracted so {@link #reportsAPlantedDrift()} can exercise the comparison on a literal source. */
     private static List<String> mismatchesIn(String javaSource, Map<String, String> properties, String name) {
         List<String> mismatches = new ArrayList<>();
         Matcher m = WITH_DEFAULT.matcher(collapse(javaSource));
@@ -206,8 +152,7 @@ class ConfigDefaultsTest {
             String key = m.group(1);
             String codeDefault = m.group(2);
             String fileValue = properties.get(key);
-            // Only keys the properties file actually ships are checked. A code default for a key
-            // that is deliberately unset (e.g. an optional override) has nothing to disagree with.
+            // A code default for a key the file deliberately leaves unset has nothing to disagree with.
             if (fileValue != null && !fileValue.equals(codeDefault)) {
                 mismatches.add(key + ": code default \"" + codeDefault + "\" but application.properties says \""
                         + fileValue + "\" (" + name + ")");

@@ -12,9 +12,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * Renders every task in the shipped catalogue through the real prompt builder. A declared variable
- * passes the catalogue's own validation even when nothing supplies it at render time, and every other
- * test stubs the agent, so this is the only place a shipped task that cannot render is caught.
+ * The one place an unrenderable shipped task is caught: catalogue validation cannot see what callers supply,
+ * and other tests stub the agent.
  */
 class ShippedPromptsRenderTest {
 

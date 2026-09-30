@@ -8,7 +8,6 @@ import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Connection types come from connectors that need credentials and from standalone kinds, never both. */
 class CdiConnectionKindRegistryTest {
 
     private static ConnectionKind kind(String id) {

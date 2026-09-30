@@ -22,13 +22,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The shared transport, against a local stub {@link HttpServer} — no network.
- *
- * <p>The load-bearing case is the {@code 429}: this is the only layer that sees the response, so if the
- * {@code Retry-After} is not fed back into the limiter here it is lost, and the next caller hammers a
- * service that just asked us to stop.
- */
 class OutboundHttpTest {
 
     private static final RateLimitKey KEY = RateLimitKey.board("greenhouse");
@@ -114,7 +107,6 @@ class OutboundHttpTest {
         assertTrue(until.isAfter(before.plusSeconds(115)), "expected ~120s pause, got " + until);
     }
 
-    /** RFC 9110 allows an HTTP-date instead of delta-seconds, and real services send both. */
     @Test
     void feedsAnHttpDateRetryAfterBackIntoTheLimiter() {
         status = 429;

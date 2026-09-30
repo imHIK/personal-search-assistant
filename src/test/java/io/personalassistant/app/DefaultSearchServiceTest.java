@@ -25,14 +25,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Read-path orchestration. Three behaviours are load-bearing enough to pin down: an answer failure must
- * not cost the caller its hits, the candidate pool must be bounded before it becomes the OpenSearch
- * {@code size} and knn {@code k}, and topK must count entities rather than chunks.
- */
 class DefaultSearchServiceTest {
 
-    /** Records the limit it was asked for so the candidate over-fetch can be asserted. */
     private static final class RecordingRetriever implements Retriever {
         int lastLimit;
         SearchQuery.Mode lastMode;
@@ -55,7 +49,6 @@ class DefaultSearchServiceTest {
                 "file:///holidays.xlsx", 1.0, Map.of());
     }
 
-    /** A collapser with the shipped defaults; unused unless a query opts in. */
     private static DuplicateCollapser collapser() {
         return new DuplicateCollapser(5, 0.85, 100, 0.5);
     }
@@ -64,7 +57,6 @@ class DefaultSearchServiceTest {
         return service(new FakeEmbeddingProvider(768), retriever, agent);
     }
 
-    /** Hand-wired with the shipped defaults. */
     private DefaultSearchService service(FakeEmbeddingProvider embeddings, RecordingRetriever retriever,
                                          SearchAgent agent) {
         DefaultSearchService svc = new DefaultSearchService(
@@ -82,11 +74,6 @@ class DefaultSearchServiceTest {
         return new SearchQuery("holidays", List.of(), Map.of(), topK, SearchQuery.Mode.HYBRID, answer, null, false);
     }
 
-    /**
-     * The failure this exists for: {@code agent.answer} was called uncaught, so an unavailable LLM
-     * turned a successful retrieval into a 500 and the hits were discarded. The console hid it by
-     * retrying without the answer flag; every other API consumer just lost its results.
-     */
     @Test
     void anAnswerFailureKeepsTheHitsAndReportsTheError() {
         RecordingRetriever retriever = new RecordingRetriever();
@@ -138,11 +125,6 @@ class DefaultSearchServiceTest {
         assertEquals(200, larger.lastLimit);
     }
 
-    /**
-     * The pool reaches OpenSearch as both {@code size} and knn {@code k}, so an unbounded value is a
-     * request for an unbounded result set. A non-positive topK previously produced a negative
-     * {@code size} with no validation anywhere on the path.
-     */
     @Test
     void holdsTheCandidatePoolBetweenItsFloorAndCeiling() {
         RecordingRetriever high = new RecordingRetriever();
@@ -154,10 +136,6 @@ class DefaultSearchServiceTest {
         assertEquals(100, low.lastLimit, "0 is raised to 1, and a tiny pool raised to min-candidates");
     }
 
-    /**
-     * The reported symptom: ten results that were two job postings shown five times each. Chunks of one
-     * entity must fold into one result, leaving the remaining slots to other entities.
-     */
     @Test
     void oneEntityCannotFillEveryResultSlotWithItsOwnChunks() {
         RecordingRetriever retriever = new RecordingRetriever();
@@ -190,11 +168,6 @@ class DefaultSearchServiceTest {
         assertTrue(embeddings.embedCalls > 0, "hybrid and semantic do need one");
     }
 
-    /**
-     * The failure this exists for: a spent embedding quota refuses the query vector, and that used to
-     * propagate as a 500 although the lexical leg could run perfectly well. Indexing sharing the same
-     * quota made it the common case, not an edge.
-     */
     @Test
     void aRefusedQueryEmbeddingFallsBackToLexicalAndReportsWhy() {
         FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(768);
@@ -232,8 +205,6 @@ class DefaultSearchServiceTest {
 
     @Test
     void collapsingRunsBeforeTheTopKTrimSoTheResultSetStaysFull() {
-        // Collapsing after the trim would return fewer than topK: the duplicates would already have
-        // eaten slots that a distinct candidate further down could have filled.
         RecordingRetriever retriever = new RecordingRetriever();
         retriever.result = List.of(
                 hit("a", "alpha body about one subject"),

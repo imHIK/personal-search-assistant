@@ -8,10 +8,6 @@ import io.personalassistant.testsupport.RecordingRateLimiter;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
-/**
- * The store switch. Hand-wired through {@link RateLimiterSelector#select} so no CDI container or Redis is
- * needed; the suppliers stand in for the lazy {@code Instance} lookups.
- */
 class RateLimiterSelectorTest {
 
     private final RateLimiter memory = new RecordingRateLimiter();
@@ -28,10 +24,6 @@ class RateLimiterSelectorTest {
         assertSame(memory, RateLimiterSelector.select("memory", () -> memory, mustNotBeBuilt()));
     }
 
-    /**
-     * Not building the Redis bean in memory mode is what lets tests and a Redis-less setup run: its data
-     * source is never touched, so nothing tries to connect.
-     */
     @Test
     void redisSelectsTheRedisStoreWithoutBuildingTheOther() {
         assertSame(redis, RateLimiterSelector.select("redis", mustNotBeBuilt(), () -> redis));
@@ -42,10 +34,6 @@ class RateLimiterSelectorTest {
         assertSame(redis, RateLimiterSelector.select(" Redis ", mustNotBeBuilt(), () -> redis));
     }
 
-    /**
-     * A typo must fail startup rather than fall back to memory — falling back silently is the restart
-     * bug this switch exists to remove, with nothing in the logs to say so.
-     */
     @Test
     void anUnknownStoreFailsLoudly() {
         IllegalStateException e = assertThrows(IllegalStateException.class,

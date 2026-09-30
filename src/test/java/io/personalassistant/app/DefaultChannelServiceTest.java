@@ -25,10 +25,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * Channel lifecycle: publisher-validated creation and edits, the account a channel sends through, the
- * synchronous test send, cascade delete.
- */
 class DefaultChannelServiceTest {
 
     private static final String SEND_TYPE = "GMAIL_SEND";

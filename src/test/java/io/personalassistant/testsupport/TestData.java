@@ -15,7 +15,6 @@ import io.personalassistant.domain.model.enums.SourceType;
 import java.time.Instant;
 import java.util.Map;
 
-/** Builders for domain records used across tests. */
 public final class TestData {
 
     private TestData() {
@@ -29,7 +28,6 @@ public final class TestData {
                 Knowledge.Stats.zero(), now, now, 0L);
     }
 
-    /** A knowledge bound to a specific connection id (for connection-resolution tests). */
     public static Knowledge knowledgeWithConnection(String id, SourceType type, String connectionId,
                                                     Instant anchor, Map<String, Object> inputs) {
         Instant now = Instant.now();
@@ -39,7 +37,6 @@ public final class TestData {
                 Knowledge.Stats.zero(), now, now, 0L);
     }
 
-    /** A simple ACTIVE connection for a type (default flag as given). */
     public static Connection connection(String id, SourceType type, boolean isDefault,
                                         Map<String, Object> auth) {
         Instant now = Instant.now();
@@ -47,7 +44,7 @@ public final class TestData {
                 ConnectionStatus.ACTIVE, null, now, now);
     }
 
-    /** A knowledge whose config carries an explicit retention window (null = inherit). */
+    /** {@code retentionPeriod} null = inherit. */
     public static Knowledge knowledgeWithRetention(String id, SourceType type, String retentionPeriod) {
         Instant now = Instant.now();
         Knowledge.Config defaults = Knowledge.Config.defaults();
@@ -60,7 +57,6 @@ public final class TestData {
                 Knowledge.Stats.zero(), now, now, 0L);
     }
 
-    /** An INDEXED entity with an explicit {@code createdAt} and optional source-declared expiry. */
     public static Entity agedEntity(String id, String knowledgeId, String externalId,
                                     Instant createdAt, Instant expiresAt) {
         return new Entity(id, knowledgeId, "root", EntityType.MESSAGE, externalId,
@@ -70,7 +66,6 @@ public final class TestData {
                 Entity.Retry.zero(), createdAt, createdAt, expiresAt, 0L);
     }
 
-    /** A knowledge whose config carries explicit {@link Knowledge.ChunkingSettings}. */
     public static Knowledge knowledgeWithChunking(String id, SourceType type,
                                                   Knowledge.ChunkingSettings chunking) {
         Instant now = Instant.now();
@@ -83,7 +78,6 @@ public final class TestData {
                 Knowledge.Stats.zero(), now, now, 0L);
     }
 
-    /** A knowledge whose config carries an explicit custom {@link Knowledge.ScheduleSettings}. */
     public static Knowledge knowledgeWithSchedule(String id, SourceType type,
                                                   Knowledge.ScheduleSettings schedule) {
         Instant now = Instant.now();
@@ -106,7 +100,6 @@ public final class TestData {
                 Cursor.Stats.zero(), new Cursor.Scope(type));
     }
 
-    /** An ingested entity in a specific iterable (for cascade-delete / reconcile tests). */
     public static Entity entityInIterable(String id, String knowledgeId, String iterableId, String externalId) {
         Instant now = Instant.now();
         return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, externalId,

@@ -48,7 +48,6 @@ class IndexingRunnerTest {
         knowledge.save(TestData.knowledge("kn_1", SourceType.LOCAL_FS, Instant.now(), java.util.Map.of()));
     }
 
-    /** A runner over the shared fakes, so a test can swap in a deliberately broken embedding provider. */
     private IndexingRunner runnerWith(FakeEmbeddingProvider embeddings) {
         IndexingRunner r = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
@@ -62,9 +61,8 @@ class IndexingRunnerTest {
     }
 
     /**
-     * Claim through the real work-queue path rather than handing the runner a lease-less entity —
-     * every terminal write is now lease-fenced, so a test that skips the claim is not testing the
-     * production path.
+     * Claims through the work queue: terminal writes are lease-fenced, so a lease-less entity would not
+     * exercise the production path.
      */
     private Entity claim(String id) {
         return entities.claimForIndexing(10, WORKER, LEASE).stream()
@@ -73,11 +71,6 @@ class IndexingRunnerTest {
                 .orElseThrow(() -> new AssertionError("entity " + id + " was not claimable"));
     }
 
-    /**
-     * Being throttled is the limiter working, not the source failing. The entity must come back as
-     * retryable with the reopening instant the limiter computed — not the flat backoff, and not
-     * {@code FAILED}.
-     */
     @Test
     void aRateLimitedEntityIsDeferredToTheReopeningInstantRatherThanFailed() {
         Instant reopensAt = Instant.now().plusSeconds(3600);
@@ -95,15 +88,10 @@ class IndexingRunnerTest {
         assertTrue(stored.index().error().contains("Rate limited"), stored.index().error());
     }
 
-    /**
-     * Deferrals get their own, far larger budget: charging them to retry-limit would dead-letter a
-     * healthy entity after a handful of throttled attempts.
-     */
     @Test
     void deferralsDoNotCountAgainstTheOrdinaryRetryLimit() {
         FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
-        // Reopening immediately keeps the entity claimable each pass, so the deferral COUNT is what is
-        // under test rather than the backoff window.
+        // Reopens at once so every pass can re-claim it; the deferral count is under test, not the backoff.
         throttled.rateLimitedUntil = Instant.now();
         IndexingRunner limited = runnerWith(throttled); // retryLimit = 2, maxDeferrals = 4
         entities.upsert(TestData.ingestedText("ent_rl2", "kn_1", "doc", "hello"));
@@ -115,7 +103,6 @@ class IndexingRunnerTest {
         }
     }
 
-    /** An unsatisfiable limit must eventually surface rather than being retried forever. */
     @Test
     void aPersistentlyRateLimitedEntityEventuallyDeadLetters() {
         FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
@@ -163,11 +150,6 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INDEXED, entities.findById("ent_2").orElseThrow().status());
     }
 
-    /**
-     * L11. A staged copy that has been purged is the one failure the retry ladder cannot help with,
-     * so it dead-letters at once — and carries the flag that lets a later walk re-fetch it, which is
-     * what stops this being the permanent dead end it used to be.
-     */
     @Test
     void deadLettersImmediatelyAndFlagsForRefetchWhenTheFileIsGone() {
         entities.upsert(TestData.ingestedFile("ent_3", "kn_1", "missing", "/no/such/file.txt", "text/plain"));
@@ -184,10 +166,6 @@ class IndexingRunnerTest {
                 "the error names the path that vanished: " + stored.index().error());
     }
 
-    /**
-     * The counterpart: a file that is present but unreadable is exactly the transient case the ladder
-     * exists for, so it must keep its backoff rather than being swept into the fast-fail above.
-     */
     @Test
     void stillRetriesWhenTheFileExistsButCannotBeRead(@TempDir Path dir) throws IOException {
         Path unreadable = dir.resolve("locked");
@@ -217,17 +195,11 @@ class IndexingRunnerTest {
         assertEquals(false, stored.needsReindex(), "cleanup clears the deletion flag");
     }
 
-    /**
-     * B2 regression. A worker whose lease lapsed mid-run must not record its outcome — the entity was
-     * re-claimed by someone else who is now working on it, and a late markIndexed would both report a
-     * half-finished run as complete and unset the new owner's lease.
-     */
     @Test
     void staleWorkerCannotRecordItsOutcome() {
         entities.upsert(TestData.ingestedText("ent_5", "kn_1", "doc5", "hello"));
         Entity claimed = claim("ent_5");
 
-        // Same entity, but run under an owner that does not hold the lease.
         runner.indexEntity(claimed, "some-other-worker");
 
         Entity stored = entities.findById("ent_5").orElseThrow();
@@ -237,11 +209,6 @@ class IndexingRunnerTest {
         assertEquals(WORKER, stored.lease().owner());
     }
 
-    /**
-     * B5 regression: retry.count is <em>consecutive</em> failures. Without the reset it accumulates
-     * for the entity's whole lifetime, so something that fails once a month is dead-lettered after
-     * retryLimit months of otherwise-successful indexing.
-     */
     @Test
     void successResetsTheConsecutiveFailureStreak() {
         entities.upsert(TestData.ingestedText("ent_6", "kn_1", "doc6", "fine now"));
@@ -255,11 +222,6 @@ class IndexingRunnerTest {
         assertNull(stored.index().error(), "a success clears the recorded error");
     }
 
-    /**
-     * B7 regression. A chunk whose vector is missing is still accepted by OpenSearch (the mapping
-     * does not require the field), counted by markIndexed, and then invisible to semantic search
-     * forever. It must be a loud failure, not a silent success.
-     */
     @Test
     void anEmbeddingHoleFailsTheRunInsteadOfIndexingAVectorlessChunk() {
         runner = runnerWith(new FakeEmbeddingProvider(8).breaking(FakeEmbeddingProvider.Defect.HOLE));
@@ -275,7 +237,6 @@ class IndexingRunnerTest {
         assertNotNull(stored.index().error());
     }
 
-    /** Same contract, the other way a provider can break it: fewer vectors than chunks. */
     @Test
     void aShortEmbeddingResponseFailsTheRun() {
         runner = runnerWith(new FakeEmbeddingProvider(8).breaking(FakeEmbeddingProvider.Defect.SHORT));
@@ -287,10 +248,6 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INGESTED, entities.findById("ent_9").orElseThrow().status());
     }
 
-    /**
-     * B8a regression. A bulk that OpenSearch partly rejects must not be recorded as a success — the
-     * entity would claim a chunk count it does not have and never be retried.
-     */
     @Test
     void aRejectedBulkIsNotRecordedAsSuccess() {
         entities.upsert(TestData.ingestedText("ent_10", "kn_1", "doc10", "some text"));
@@ -305,10 +262,6 @@ class IndexingRunnerTest {
         assertTrue(stored.index().error().contains("rejected"), "the reason survives onto the entity");
     }
 
-    /**
-     * B1 regression. A dead-lettered entity must leave the work queue entirely; before the fix it was
-     * re-claimed on every tick forever, consuming the per-knowledge quota and the global batch budget.
-     */
     @Test
     void terminalFailureLeavesTheIndexingQueueUntilExplicitlyRevived() {
         entities.upsert(TestData.ingestedFile("ent_7", "kn_1", "gone", "/no/such/file.txt", "text/plain"));
@@ -325,7 +278,6 @@ class IndexingRunnerTest {
         assertTrue(entities.distinctPendingKnowledgeIds(10).isEmpty(),
                 "and it must not keep its knowledge in the pending rotation either");
 
-        // The sanctioned way back in, with a fresh budget.
         entities.flagNeedsReindex("ent_7");
         Entity revived = entities.findById("ent_7").orElseThrow();
         assertEquals(EntityStatus.INGESTED, revived.status());

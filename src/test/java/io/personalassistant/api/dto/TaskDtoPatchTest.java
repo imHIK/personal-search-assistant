@@ -7,15 +7,6 @@ import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * Overlaying a patch onto a stored task.
- *
- * <p>The trap this guards is quiet: bound to a record, every key the caller did not send arrived as a
- * null and went through {@link Task}'s normalizing constructor, which turns nulls into defaults. A
- * merge that then asks "is this field null?" sees {@code SIMPLE}, {@code SUMMARY}, {@code "lite"} and
- * {@code ""} — real-looking values — and writes them. Renaming a RAW task converted it to a SIMPLE one
- * and blanked its description, with a 200.
- */
 class TaskDtoPatchTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -75,14 +66,12 @@ class TaskDtoPatchTest {
 
     @Test
     void aBlankNameKeepsTheStoredOne() {
-        // The library lists by name; an empty one is an unfindable row.
         Assertions.assertEquals("Score roles", patched("{\"name\": \"\"}").name());
         Assertions.assertEquals("Score roles", patched("{\"name\": null}").name());
     }
 
     @Test
     void aClearedBudgetKeepsTheStoredOne() {
-        // Zero is not "no limit" here — it would drop every source from the prompt.
         Assertions.assertEquals(4000, patched("{\"contextChars\": null}").contextChars());
         Assertions.assertEquals(8, patched("{\"maxSources\": 0}").maxSources());
     }

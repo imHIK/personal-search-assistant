@@ -7,10 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
-/**
- * The compact {@code "10/1s,500/1m"} syntax is the only way an operator states a limit in
- * {@code application.properties}, so a misread here is a limit that looks configured and is not.
- */
 class RateLimitRulesTest {
 
     @Test
@@ -36,7 +32,6 @@ class RateLimitRulesTest {
         assertEquals(2, RateLimitRules.parse(" 10/1s , 500/1m , ").rules().size());
     }
 
-    /** A bare number would have to guess a unit, and a guessed window is a wrong limit. */
     @Test
     void rejectsAWindowWithNoUnit() {
         assertThrows(IllegalArgumentException.class, () -> RateLimitRules.parse("10/60"));

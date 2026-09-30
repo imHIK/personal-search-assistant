@@ -14,19 +14,6 @@ import org.bson.BsonDocument;
 import org.bson.conversions.Bson;
 import org.junit.jupiter.api.Test;
 
-/**
- * Asserts the shape of the BSON the entity adapter actually emits.
- *
- * <p>Executing a real {@code Bson} predicate needs something that speaks the MongoDB query language,
- * which the suite deliberately does not have ("tests need no Mongo, OpenSearch, or network"). The
- * fakes in {@code testsupport} are therefore a <em>second implementation</em> of this logic rather
- * than a test of it — which is exactly how the missing lease fence and the cumulative retry counter
- * shipped unnoticed. These assertions are the cheap half of the gap: they pin what we wrote, so a
- * fence or a reset cannot silently disappear again.
- *
- * <p>They are not a substitute for running the predicates. Closing that properly means an in-process
- * MongoDB (mongo-java-server) behind a shared contract suite, which is tracked separately.
- */
 class MongoEntityRepositoryBsonTest {
 
     private final MongoEntityRepository repo = new MongoEntityRepository(null, "test_db");
@@ -43,7 +30,6 @@ class MongoEntityRepositoryBsonTest {
                 now, now, null, 7L);
     }
 
-    /** The B3 fix: ingestion writes fields, never a whole document, and drops the indexer's lease. */
     @Test
     void upsertIsFieldLevelAndDropsTheLease() {
         BsonDocument update = render(repo.upsertUpdate(anEntity()));
@@ -59,7 +45,6 @@ class MongoEntityRepositoryBsonTest {
         assertTrue(update.getDocument("$unset").containsKey("lease"),
                 "dropping the lease is what fences out an indexer on the previous revision");
 
-        // Indexer-owned rollup must survive a re-ingest: it describes what is in OpenSearch *now*.
         assertFalse(set.containsKey("index"), "must not overwrite the whole index sub-document");
         assertFalse(set.containsKey("index.chunkCount"));
         assertFalse(set.containsKey("index.embeddingModel"));
@@ -70,11 +55,6 @@ class MongoEntityRepositoryBsonTest {
                 "identity is set on insert only, so a replay preserves it");
     }
 
-    /**
-     * L11: the one failure that is terminal on sight. It must not look like an ordinary dead letter —
-     * a consumed retry budget or a pending nextAttemptAt would both say "we are still trying" — and it
-     * must carry the flag, which is the entity's only route back.
-     */
     @Test
     void missingContentDeadLettersAtOnceAndAsksForARefetch() {
         BsonDocument update = render(repo.contentMissingUpdate("Staged content missing at /tmp/x"));
@@ -90,7 +70,6 @@ class MongoEntityRepositoryBsonTest {
         assertTrue(update.getDocument("$unset").containsKey("lease"));
     }
 
-    /** The B2 fix: three fields, not one. A filter of just {_id} is the bug. */
     @Test
     void terminalWritesAreFencedOnTheLease() {
         BsonDocument fence = render(MongoEntityRepository.ownedBy("ent_1", "worker-1"));
@@ -104,7 +83,6 @@ class MongoEntityRepositoryBsonTest {
                 "must require a live lease, or an expired owner's write lands");
     }
 
-    /** The B1 fix: a terminal failure leaves the queue; a retryable one stays in it. */
     @Test
     void terminalFailureClearsTheReindexFlagButRetryableDoesNot() {
         BsonDocument terminal = render(repo.failUpdate(EntityStatus.FAILED, "boom", 6, null))
@@ -118,7 +96,6 @@ class MongoEntityRepositoryBsonTest {
                 "a retryable failure leaves the flag alone; INGESTED already re-queues it");
     }
 
-    /** The B5 fix: success zeroes the streak, so retryLimit means "n in a row". */
     @Test
     void successResetsTheRetryStreak() {
         BsonDocument set = render(repo.indexedUpdate(3, "model", Instant.now())).getDocument("$set");

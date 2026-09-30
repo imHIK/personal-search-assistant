@@ -18,10 +18,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The sweeper's two passes, and the properties that keep it from eating a corpus: retention is
- * opt-in, and the clock runs from {@code createdAt} rather than {@code updatedAt}.
- */
 class RetentionSweeperTest {
 
     private static final SourceType TYPE = SourceType.LOCAL_FS;
@@ -47,7 +43,6 @@ class RetentionSweeperTest {
 
     @Test
     void retentionUnsetNeverExpiresAnything() {
-        // The safety property of the whole feature: a document corpus must not delete itself.
         Knowledge kn = TestData.knowledge("kn_1", TYPE, NOW, Map.of());
         knowledges.store.put(kn.id(), kn);
         store(TestData.agedEntity("ent_ancient", kn.id(), "a", NOW.minus(Duration.ofDays(3650)), null));
@@ -72,9 +67,6 @@ class RetentionSweeperTest {
 
     @Test
     void tombstoningLeavesChunkRemovalToTheOrdinaryDeletionPath() {
-        // The sweeper must never delete directly: a tombstone is what IndexingJob.processDeletions
-        // claims under a lease before calling deleteByEntity. Dropping the document instead would
-        // orphan its chunks in OpenSearch forever.
         Knowledge kn = TestData.knowledgeWithRetention("kn_1", TYPE, "1d");
         knowledges.store.put(kn.id(), kn);
         store(TestData.agedEntity("ent_old", kn.id(), "old", NOW.minus(Duration.ofDays(5)), null));
@@ -90,8 +82,6 @@ class RetentionSweeperTest {
 
     @Test
     void ageIsMeasuredFromCreatedAtNotUpdatedAt() {
-        // An entity re-touched by a walk keeps its original createdAt, so it still ages out. The
-        // inverse — clocking on updatedAt — is what would keep stale material alive indefinitely.
         Knowledge kn = TestData.knowledgeWithRetention("kn_1", TYPE, "14d");
         knowledges.store.put(kn.id(), kn);
         Entity old = TestData.agedEntity("ent_old", kn.id(), "old", NOW.minus(Duration.ofDays(20)), null);
@@ -123,8 +113,6 @@ class RetentionSweeperTest {
 
     @Test
     void explicitExpiryBeatsTheKnowledgeWindow() {
-        // The source said this item is valid until well past the window; the window must not
-        // override that statement.
         Knowledge kn = TestData.knowledgeWithRetention("kn_1", TYPE, "7d");
         knowledges.store.put(kn.id(), kn);
         store(TestData.agedEntity("ent_long_lived", kn.id(), "long",

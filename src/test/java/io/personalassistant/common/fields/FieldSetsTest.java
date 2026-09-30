@@ -13,15 +13,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/**
- * Named, connector-scoped field sets.
- *
- * <p>Replaces two hardcoded lists that could not be scoped and, in one case, had silently rotted: the
- * prompt's locator constant read {@code ("sheet", "page", "headingPath")} while nothing in the pipeline
- * produced {@code sheet} or {@code page}, and {@code rowRange} — the one structural locator that <em>is</em>
- * produced — was absent, so it never reached a prompt. {@link #theShippedLocatorSetIncludesTheKeyThePipelineActuallyProduces()}
- * is the regression guard for that.
- */
 class FieldSetsTest {
 
     private static FieldSets from(String json, Path dir) throws IOException {
@@ -33,8 +24,6 @@ class FieldSetsTest {
         return sets;
     }
 
-    // ---- the shipped file --------------------------------------------------------------------
-
     @Test
     void loadsTheBundledSets() {
         FieldSets sets = FieldSets.bundled();
@@ -43,10 +32,7 @@ class FieldSetsTest {
         assertTrue(sets.setNames().contains(FieldSets.PROMPT_LOCATOR));
     }
 
-    /**
-     * The shipped default must stay {@code ["title"]}: it is what existing vectors were built from, so
-     * changing it silently would leave the index inconsistent with the query path until a full re-index.
-     */
+    /** Existing vectors were built from {@code ["title"]}; changing it needs a full re-index. */
     @Test
     void theShippedEmbedContextDefaultMatchesWhatIsAlreadyIndexed() {
         assertEquals(List.of("title"), FieldSets.bundled().resolve(FieldSets.EMBED_CONTEXT, null));
@@ -62,8 +48,6 @@ class FieldSetsTest {
                         + locator);
         assertTrue(locator.contains("headingPath"), locator.toString());
     }
-
-    // ---- scoping -----------------------------------------------------------------------------
 
     @Test
     void aPerConnectorListWinsEntire(@TempDir Path dir) throws IOException {
@@ -86,10 +70,6 @@ class FieldSetsTest {
                 "a missing field set degrades retrieval slightly; taking indexing offline would be worse");
     }
 
-    /**
-     * Config may legitimately be written ahead of the connector that will use it, so an unrecognised
-     * source type is ignored with a warning rather than failing startup.
-     */
     @Test
     void anUnknownSourceTypeIsIgnoredRatherThanFatal(@TempDir Path dir) throws IOException {
         FieldSets sets = from("""
@@ -110,8 +90,6 @@ class FieldSetsTest {
     void aSetWithNoDefaultResolvesToEmpty(@TempDir Path dir) throws IOException {
         assertEquals(List.of(), from("{\"fieldSets\":{\"s\":{}}}", dir).resolve("s"));
     }
-
-    // ---- failure modes -----------------------------------------------------------------------
 
     @Test
     void anEmptyFileFailsToLoad(@TempDir Path dir) {

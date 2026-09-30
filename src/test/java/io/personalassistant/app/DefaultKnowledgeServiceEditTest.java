@@ -36,11 +36,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * Phase 1 of the knowledge-edit design ({@code docs/knowledge-edit-design.md} §8): config vs.
- * provisioning routing, immutable-type / DELETED guards, park-don't-purge on shrink, the
- * membership-signature re-walk, and generation stamping. No deletion is exercised — that is Phase 2.
- */
 class DefaultKnowledgeServiceEditTest {
 
     private InMemoryKnowledgeRepository knowledge;
@@ -63,7 +58,6 @@ class DefaultKnowledgeServiceEditTest {
                 List.of(new SourceIterable("chan_a", "A", Map.of())))
                 .withDynamicIterables(true);
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
-        // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections,
                 index, discovery, new RefetchPolicy(registry));
@@ -91,8 +85,6 @@ class DefaultKnowledgeServiceEditTest {
                 "sha256:" + externalId, Instant.now(), Map.of("k", "v"), "body of " + externalId, null,
                 Map.of("title", externalId), null, false);
     }
-
-    // ---- §8.1 config-only edit ---------------------------------------------------------------
 
     @Test
     void configOnlyEditIsInPlaceWithNoSourceCalls() {
@@ -154,7 +146,6 @@ class DefaultKnowledgeServiceEditTest {
     @Test
     void enablingScheduleReArmsForwardCursors() {
         Knowledge kn = add(Map.of()); // add defaults scheduleEnabled=false
-        // Simulate a forward cursor that has caught up and is waiting for the scheduler.
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
         cursors.store.put(fwd.id(), new Cursor(fwd.id(), fwd.knowledgeId(), fwd.iterableId(), fwd.iterableName(),
                 fwd.attributes(), fwd.direction(), fwd.position(), CursorStatus.IDLE, null,
@@ -165,8 +156,6 @@ class DefaultKnowledgeServiceEditTest {
         assertEquals(CursorStatus.AVAILABLE, cursors.store.get(fwd.id()).status(),
                 "enabling the schedule triggers a forward re-arm (IDLE → AVAILABLE)");
     }
-
-    // ---- chunking config edits (direct update: future chunks change, past chunks stay) ----------
 
     @Test
     void chunkingEditIsAppliedInPlaceWithNoSourceCalls() {
@@ -190,7 +179,6 @@ class DefaultKnowledgeServiceEditTest {
     @Test
     void chunkingEditDoesNotReindexExistingEntities() {
         Knowledge kn = add(Map.of());
-        // An already-indexed entity: its chunks are "in the past" and must be left exactly as-is.
         entities.upsert(TestData.ingestedText("ent_x", kn.id(), "doc", "hello world"));
         entities.seedIndexed("ent_x", 3, "model", Instant.now());
 
@@ -206,7 +194,6 @@ class DefaultKnowledgeServiceEditTest {
         Knowledge kn = add(Map.of());
         service.update(kn.id(), KnowledgePatch.builder()
                 .chunkingStrategy("recursive").chunkingMaxSize(800).build());
-        // A later patch changes only overlap; strategy and size must be retained.
         Knowledge updated = service.update(kn.id(), KnowledgePatch.builder().chunkingOverlap(120).build());
 
         Knowledge.ChunkingSettings chunk = updated.config().chunking();
@@ -215,19 +202,17 @@ class DefaultKnowledgeServiceEditTest {
         assertEquals(120, chunk.overlap().intValue(), "overlap updated");
     }
 
-    // ---- §8.2 provisioning edit (inputs): park-don't-purge on shrink -------------------------
-
     @Test
     void inputsEditParksMissingIterablesButKeepsTheirData() {
-        Knowledge kn = add(Map.of()); // chan_a
+        Knowledge kn = add(Map.of());
         connector.addIterable(new SourceIterable("chan_b", "B", Map.of()));
-        service.reconcileCursors(kn.id()); // chan_a + chan_b cursors
+        service.reconcileCursors(kn.id());
         entities.upsert(TestData.entityInIterable("ent_a", kn.id(), "chan_a", "a1"));
         entities.upsert(TestData.entityInIterable("ent_b", kn.id(), "chan_b", "b1"));
         int verifyBefore = connector.verifyCalls;
         int discoverBefore = connector.discoverCalls;
 
-        connector.removeIterable("chan_a"); // narrowed scope: chan_a no longer discovered
+        connector.removeIterable("chan_a");
         service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("q", "new")).build());
 
         assertTrue(connector.verifyCalls > verifyBefore, "a provisioning edit re-verifies");
@@ -241,8 +226,6 @@ class DefaultKnowledgeServiceEditTest {
         assertTrue(index.deletedIterables.isEmpty(), "no chunk purge happens on an edit shrink");
         assertEquals(KnowledgeStatus.ACTIVE, knowledge.findById(kn.id()).orElseThrow().status());
     }
-
-    // ---- §8.3 provisioning edit (auth) -------------------------------------------------------
 
     @Test
     void authEditReVerifiesAndReDiscoversWithoutBumpingGeneration() {
@@ -260,8 +243,6 @@ class DefaultKnowledgeServiceEditTest {
         assertEquals(0L, updated.syncGeneration(), "auth alone does not move membership → no generation bump");
     }
 
-    // ---- §8.4 / §8.5 guards ------------------------------------------------------------------
-
     @Test
     void changingImmutableTypeIsRejectedAndMutatesNothing() {
         Knowledge kn = add(Map.of());
@@ -275,7 +256,7 @@ class DefaultKnowledgeServiceEditTest {
     @Test
     void editingDeletedKnowledgeIsRejected() {
         Knowledge kn = add(Map.of());
-        // delete() would drop the record entirely; store a DELETED record to exercise the guard.
+        // Saved as DELETED directly: delete() would drop the record.
         knowledge.save(knowledge.findById(kn.id()).orElseThrow().withStatus(KnowledgeStatus.DELETED));
 
         assertThrows(IllegalStateException.class, () ->
@@ -290,26 +271,21 @@ class DefaultKnowledgeServiceEditTest {
                 service.update("kn_missing", KnowledgePatch.builder().name("x").build()));
     }
 
-    // ---- §8.6 membership signature drives the re-walk ----------------------------------------
-
     @Test
     void reWalkHappensOnlyWhenTheMembershipSignatureChanges() {
-        connector.withMembershipKeys("fileTypes"); // only fileTypes affects membership; label is cosmetic
+        connector.withMembershipKeys("fileTypes");
         Knowledge kn = add(Map.of("fileTypes", "pdf,docx", "label", "Docs"));
 
-        // Advance the forward cursor and exhaust the backward one, so a reset is observable.
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
         Cursor bwd = cursorFor(kn.id(), "chan_a", CursorDirection.BACKWARD);
         putStatusAndPosition(fwd, CursorStatus.AVAILABLE, CursorPosition.of(Map.of("seq", 5L)));
         putStatusAndPosition(bwd, CursorStatus.EXHAUSTED, CursorPosition.of(Map.of("seq", 9L)));
 
-        // Cosmetic edit: label changes, fileTypes doesn't → signature unchanged → NO re-walk.
         service.update(kn.id(),
                 KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf,docx", "label", "Files")).build());
         assertFalse(cursors.store.get(fwd.id()).position().isStart(), "a cosmetic edit does not rewind cursors");
         assertEquals(0L, knowledge.findById(kn.id()).orElseThrow().syncGeneration(), "no membership move → no bump");
 
-        // Membership edit: fileTypes narrows → signature changes → re-walk.
         service.update(kn.id(),
                 KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf", "label", "Files")).build());
         assertTrue(cursors.store.get(fwd.id()).position().isStart(), "the forward cursor is rewound to start");
@@ -320,12 +296,6 @@ class DefaultKnowledgeServiceEditTest {
                 "a membership-affecting edit bumps the sync generation");
     }
 
-    /**
-     * L11. A membership re-walk is the one moment the whole corpus passes back through ingestion, so
-     * for a connector that stages its content it is also where staged copies get refreshed. Without
-     * the flag the re-walk would skip every unchanged file and leave them pointing at a scratch dir
-     * the OS may since have emptied.
-     */
     @Test
     void reWalkAlsoRefreshesStagedContentForAConnectorThatFetches() {
         connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
@@ -342,7 +312,6 @@ class DefaultKnowledgeServiceEditTest {
                 "inline content is already in Mongo; fetching it again would buy nothing");
     }
 
-    /** A cosmetic edit starts no walk, so there is nothing to attach a re-fetch to. */
     @Test
     void aCosmeticEditNeverTriggersARefetch() {
         connector.withMembershipKeys("fileTypes").withReindexMode(ReindexMode.FETCH_AND_REINDEX);
@@ -356,23 +325,17 @@ class DefaultKnowledgeServiceEditTest {
         assertFalse(entities.findById("ent_file2").orElseThrow().needsRefetch());
     }
 
-    // ---- §8.7 / §8.8 the async re-walk re-ingests adds and stamps the generation -------------
-
     @Test
     void reWalkReIngestsNewMatchesAndStampsGenerationOnSeenAndSkippedEntities() {
         connector.withMembershipKeys("fileTypes");
         Knowledge kn = add(Map.of("fileTypes", "pdf"));
-        // A pre-existing, already-indexed match that the re-walk will re-see unchanged (skip path).
         entities.upsert(TestData.entityInIterable("ent_keep", kn.id(), "chan_a", "keep"));
         entities.seedIndexed("ent_keep", 1, "model", Instant.now());
 
-        // Widen fileTypes: pdf → pdf,txt. Signature changes → generation bumps, cursors rewind.
         service.update(kn.id(), KnowledgePatch.builder().inputs(Map.of("fileTypes", "pdf,txt")).build());
         long generation = knowledge.findById(kn.id()).orElseThrow().syncGeneration();
         assertEquals(1L, generation);
 
-        // Drive the async re-walk: the forward cursor (rewound to start) re-emits the unchanged match
-        // ("keep") plus a newly-matching txt item ("new_txt").
         Cursor fwd = cursorFor(kn.id(), "chan_a", CursorDirection.FORWARD);
         Cursor leased = cursors.claim(fwd.id(), "w1", Duration.ofMinutes(5)).orElseThrow();
         connector.enqueue(CursorDirection.FORWARD,
@@ -381,28 +344,24 @@ class DefaultKnowledgeServiceEditTest {
 
         runner.runLease(knowledge.findById(kn.id()).orElseThrow(), leased, "w1", () -> {});
 
-        // The previously-missed add is now ingested.
         var newItem = entities.findByKnowledgeAndExternalId(kn.id(), "new_txt").orElseThrow();
         assertEquals(EntityStatus.INGESTED, newItem.status(), "the newly-matching item is re-ingested");
         assertEquals(generation, newItem.lastSeenGeneration(), "a walked (upserted) entity is stamped at the new generation");
 
-        // The unchanged, already-INDEXED entity is skipped by change detection but still stamped.
         var kept = entities.findByKnowledgeAndExternalId(kn.id(), "keep").orElseThrow();
         assertEquals(EntityStatus.INDEXED, kept.status(), "an unchanged entity is not rewritten");
         assertEquals(generation, kept.lastSeenGeneration(),
                 "the skip-unchanged path still stamps the generation, so a valid file isn't left looking stale");
     }
 
-    // ---- §8.9 status matrix ------------------------------------------------------------------
-
     @Test
     void errorKnowledgeRecoversToActiveOnASuccessfulEdit() {
         connector.failDiscoveryWith(new IllegalStateException("source down"));
-        Knowledge kn = add(Map.of()); // discovery fails → ERROR, no cursors
+        Knowledge kn = add(Map.of());
         assertEquals(KnowledgeStatus.ERROR, knowledge.findById(kn.id()).orElseThrow().status());
         assertEquals(0, cursors.findByKnowledge(kn.id()).size());
 
-        connector.failDiscoveryWith(null); // source recovers
+        connector.failDiscoveryWith(null);
         Knowledge recovered = service.update(kn.id(),
                 KnowledgePatch.builder().auth(Map.of("token", "fixed")).build());
 

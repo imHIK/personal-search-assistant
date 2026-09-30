@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** In-memory {@link ChannelRepository} for tests. */
 public class InMemoryChannelRepository implements ChannelRepository {
 
     public final Map<String, Channel> store = new LinkedHashMap<>();

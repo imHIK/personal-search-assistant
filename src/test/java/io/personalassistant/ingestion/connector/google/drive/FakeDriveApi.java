@@ -16,12 +16,6 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * In-memory {@link DriveApi} for connector tests. It models the slices of Drive the connector uses:
- * {@code '<parent>' in parents} filtering, folder vs non-folder selection, {@code modifiedTime}
- * windows and ordering (asc/desc), offset page tokens, plus media download and native export. This
- * exercises the connector's folder-tree discovery and direction-specific pagination without network.
- */
 class FakeDriveApi implements DriveApi {
 
     private static final String FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -33,10 +27,8 @@ class FakeDriveApi implements DriveApi {
     private final List<Item> items = new ArrayList<>();
     private final Set<String> trashed = new HashSet<>();
 
-    /** Byte transfers this fake has served — what the walk must not trigger. */
     int downloads;
     int exports;
-    /** Single-file metadata reads — the re-list path, which the walk must never use. */
     int gets;
 
     /** Move a file to the bin: still readable by id, but invisible to the listing. */
@@ -45,7 +37,6 @@ class FakeDriveApi implements DriveApi {
         return this;
     }
 
-    /** Bump a file's version, i.e. the change signal the connector derives its checksum from. */
     FakeDriveApi revise(String id, int version) {
         Item it = find(id);
         items.set(items.indexOf(it), new Item(it.id, it.name, it.mimeType, it.parentId, it.modifiedMs,

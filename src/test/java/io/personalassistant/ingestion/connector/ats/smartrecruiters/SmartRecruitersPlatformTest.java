@@ -7,11 +7,6 @@ import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The platform that pays per posting. Most of what matters here is about <em>not</em> making calls:
- * its listing has no description, so every posting that survives the location filter costs a second
- * request.
- */
 class SmartRecruitersPlatformTest {
 
     private static FakeSmartRecruitersApi board() {
@@ -34,8 +29,6 @@ class SmartRecruitersPlatformTest {
 
     @Test
     void theLocationHintIsAppliedBeforeTheDetailCalls() {
-        // The whole reason the hint exists. Freshworks is 157 postings of which 34 are in India;
-        // filtering afterwards would still cost 157 detail requests every poll.
         FakeSmartRecruitersApi api = board();
 
         List<RawItem> items = fetch(api, List.of("india"));
@@ -55,7 +48,6 @@ class SmartRecruitersPlatformTest {
 
     @Test
     void aFailedDetailFetchSkipsThatPostingRatherThanTheBoard() {
-        // One posting withdrawn between the listing and the fetch must not cost the others.
         FakeSmartRecruitersApi api = board().failDetail("Acme", "1", new AtsApiException(404, "gone"));
 
         List<RawItem> items = fetch(api, List.of("india"));
@@ -79,8 +71,6 @@ class SmartRecruitersPlatformTest {
 
     @Test
     void theChecksumHashesTheBodyBecauseNoUpdateStampIsPublished() {
-        // releasedDate is when the posting first went live and does not move on an edit, so without
-        // hashing the body an edited posting would be skipped forever by change detection.
         String before = fetch(new FakeSmartRecruitersApi()
                 .withPosting("Acme", "1", "Engineer", "Pune, India", "<p>Original.</p>"),
                 List.of()).get(0).checksum();
@@ -101,12 +91,8 @@ class SmartRecruitersPlatformTest {
         Assertions.assertEquals(250, new SmartRecruitersPlatform(api).fetch("Big", BoardFilter.ofLocations(List.of())).size());
     }
 
-    // ---- resolution ----------------------------------------------------------------------------
-
     @Test
     void anUnknownCompanyIsNotResolvedEvenThoughTheApiReturns200() {
-        // SmartRecruiters answers an unknown company with 200 and totalFound: 0, so reading the status
-        // code would resolve every company ever typed to this platform.
         Assertions.assertFalse(new SmartRecruitersPlatform(board()).hasBoard("NotACompany"));
     }
 
@@ -117,7 +103,6 @@ class SmartRecruitersPlatformTest {
 
     @Test
     void anOutageResolvesToFalseRatherThanPropagating() {
-        // Resolution probes every platform in turn; a miss is the normal outcome for all but one.
         SmartRecruitersApi failing = new SmartRecruitersApi() {
             @Override
             public com.fasterxml.jackson.databind.JsonNode listPostings(String c, int l, int o) {

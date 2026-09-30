@@ -15,10 +15,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The two rules that stop the task library breaking what depends on it — bundled tasks are read-only,
- * and a task a digest still points at cannot be deleted — plus save-time validation.
- */
 class DefaultTaskServiceTest {
 
     private final InMemoryTaskRepository tasks = new InMemoryTaskRepository();
@@ -40,7 +36,6 @@ class DefaultTaskServiceTest {
 
     @Test
     void aCreatedTaskGetsAGeneratedPrefixedId() {
-        // Honouring a supplied id would put the no-shadowing guarantee in the caller's hands.
         Task created = service.create(simple("Score these.", List.of()).withId("answer"));
 
         Assertions.assertTrue(created.id().startsWith("task_"));
@@ -70,8 +65,6 @@ class DefaultTaskServiceTest {
 
     @Test
     void aPlaceholderInAnInstructionIsRejectedWhenItIsSavedRatherThanWhenItRuns() {
-        // The instruction is substituted into the wrapper verbatim, so a {{...}} either reaches the
-        // model as a literal or collides with a framework variable — hours later, in a scheduled run.
         Assertions.assertThrows(IllegalArgumentException.class,
                 () -> service.create(simple("Score against {{myProfile}}.", List.of())));
     }
@@ -94,7 +87,6 @@ class DefaultTaskServiceTest {
 
     @Test
     void aRawTaskWithoutSourcesIsRejected() {
-        // Without {{sources}} the model answers from its own knowledge and the run looks successful.
         Task raw = new Task(null, "Raw", "", Task.Mode.RAW, null, Task.Output.SUMMARY, List.of(),
                 "You are terse.", "Tell me about jobs.", "lite", Task.SourceText.CHUNK, 0, 0,
                 null, null);

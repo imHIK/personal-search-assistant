@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/** A {@link PermitService} that always grants — for tests that aren't exercising concurrency limits. */
 public class AlwaysGrantPermitService implements PermitService {
 
     @Override

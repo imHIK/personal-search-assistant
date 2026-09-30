@@ -27,9 +27,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Driven by a stub provider called "stub" rather than by Google, which is the point: if the flow can
- * be completed end to end without a single Google-specific string, adding the next OAuth application
- * really is one bean.
+ * Uses a non-Google stub provider on purpose: completing the flow with it proves the flow is
+ * provider-neutral.
  */
 class DefaultOAuthConnectServiceTest {
 
@@ -60,8 +59,6 @@ class DefaultOAuthConnectServiceTest {
                 connectionService, connections);
         service.allowedOrigins = "http://localhost:8080,http://localhost:5173";
     }
-
-    // ---- start -------------------------------------------------------------------------------
 
     @Test
     void buildsAConsentUrlForTheRequestedTypesScopes() {
@@ -118,8 +115,6 @@ class DefaultOAuthConnectServiceTest {
                 () -> service.start(start("conn_missing", "http://localhost:8080")));
     }
 
-    // ---- complete ----------------------------------------------------------------------------
-
     @Test
     void createsAConnectionCarryingTheMintedCredentials() {
         String state = stateFrom(service.start(start(null, "http://localhost:8080")));
@@ -174,8 +169,8 @@ class DefaultOAuthConnectServiceTest {
 
     @Test
     void refusesAnExpiredState() {
-        // Negative rather than zero: a zero TTL only expires once the clock has actually moved, and
-        // two Instant.now() calls can land in the same tick on a coarse clock.
+        // Negative, not zero: two Instant.now() calls can land in the same tick, so a zero TTL may not have
+        // expired yet.
         states.stateTtlSeconds = -1;
         String state = stateFrom(service.start(start(null, "http://localhost:8080")));
 
@@ -208,14 +203,11 @@ class DefaultOAuthConnectServiceTest {
                 "peeking at a declined consent must leave the user able to retry");
     }
 
-    // ---- helpers -----------------------------------------------------------------------------
-
     private static OAuthConnectService.StartConnect start(String connectionId, String origin) {
         return new OAuthConnectService.StartConnect("stub", "GMAIL", connectionId,
                 "Test account", origin);
     }
 
-    /** The stub echoes the state into its consent URL, which is the only place a caller can see it. */
     private static String stateFrom(String consentUrl) {
         int from = consentUrl.indexOf("state=") + "state=".length();
         int to = consentUrl.indexOf('&', from);

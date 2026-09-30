@@ -11,15 +11,6 @@ import java.util.List;
 import org.apache.tika.parser.ParseContext;
 import org.junit.jupiter.api.Test;
 
-/**
- * The extraction half of L3. A table has to arrive with its rows on separate lines and its cells
- * separated, or the recursive chunker has no {@code \n} to split on, falls to the {@code " "} rung of its
- * separator ladder, and hard-windows mid-row — which is what made a chunk of a holiday list start and end
- * mid-date.
- *
- * <p>HTML is used as the fixture because it exercises exactly the SAX events every Tika parser emits for
- * a table ({@code <table>/<tr>/<td>/<th>}), with no binary fixture to check in.
- */
 class StructureAwareExtractionTest {
 
     private static ParsedContent parse(String html) {
@@ -61,10 +52,6 @@ class StructureAwareExtractionTest {
         assertTrue(blocks.stream().anyMatch(b -> b.kind() == ParsedContent.BlockKind.TABLE_ROW));
     }
 
-    /**
-     * POI's Excel path emits {@code <td>} for the header row rather than {@code <th>}, so treating the
-     * first row of a table as its header is what gives a spreadsheet a header to repeat at all.
-     */
     @Test
     void treatsTheFirstRowAsTheHeaderEvenWithoutThTags() {
         List<ParsedContent.Block> blocks = parse("""

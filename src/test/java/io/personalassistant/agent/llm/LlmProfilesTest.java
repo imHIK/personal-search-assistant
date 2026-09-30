@@ -9,12 +9,6 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
-/**
- * Profiles are resolved from dynamic config keys rather than fixed injection points, which is what lets
- * a new LLM-using feature pick its model in {@code application.properties} instead of in code. These
- * pin the two properties that makes safe: an unset key inherits rather than overriding, and a name with
- * no configuration at all degrades to the provider defaults instead of taking the caller down.
- */
 class LlmProfilesTest {
 
     private static LlmProfiles profiles(Map<String, String> properties) {
@@ -38,7 +32,6 @@ class LlmProfilesTest {
         assertEquals(Optional.of("sk-test"), profile.apiKey());
     }
 
-    /** A profile that names only a model must not silently reset temperature, timeout or endpoint. */
     @Test
     void leavesUnsetKeysEmptySoTheProviderDefaultApplies() {
         LlmProfile profile = profiles(Map.of("app.llm.profile.lite.model", "llama-3.1-8b-instant"))
@@ -51,10 +44,6 @@ class LlmProfilesTest {
         assertTrue(profile.apiKey().isEmpty());
     }
 
-    /**
-     * A blank value is how a {@code ${ENV_VAR:}}-backed key looks when the variable is unset. It has to
-     * mean "inherit", not "override with empty" — an empty model would be sent to the endpoint verbatim.
-     */
     @Test
     void treatsBlankAsUnset() {
         LlmProfile profile = profiles(Map.of(
@@ -64,10 +53,6 @@ class LlmProfilesTest {
         assertTrue(profile.apiKey().isEmpty(), "blank is absent, not an empty credential");
     }
 
-    /**
-     * Degrading beats failing here: a misspelled profile on a background feature would otherwise take
-     * out that feature entirely, when running on the provider's default model is a working outcome.
-     */
     @Test
     void unknownProfileInheritsEverything() {
         LlmProfile profile = profiles(Map.of("app.llm.profile.answer.model", "x")).get("rerank");

@@ -7,12 +7,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
-/**
- * B8a regression. A partially-rejected bulk used to be logged and reported as success, so the caller
- * recorded {@code chunkCount = chunks.size()} for an entity OpenSearch had only partly accepted — the
- * entity looked fully indexed while part of it was missing from search. The summary built here is
- * what ends up on {@code index.error} and in front of a user, so it has to name what failed.
- */
 class OpenSearchBulkErrorsTest {
 
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");

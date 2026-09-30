@@ -14,9 +14,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Behaviour of the rolling window, driven by a hand-moved clock so nothing here sleeps. The waiter is
- * replaced with one that advances that clock, which is what makes "the caller waited 400ms and then
- * proceeded" an exact assertion rather than a timing race.
+ * The waiter advances the fake clock instead of sleeping, so a wait is an exact assertion rather than a
+ * timing race.
  */
 class SlidingWindowRateLimiterTest {
 
@@ -65,12 +64,6 @@ class SlidingWindowRateLimiterTest {
         }
     }
 
-    /**
-     * The difference from a refilling bucket, and the reason for the swap: half a window buys nothing.
-     * A slot comes back when the call that took it ages out, not at the sustained rate — which is what
-     * keeps the count in any trailing window at or under the permits a server counting the same way
-     * sees.
-     */
     @Test
     void aSlotReturnsOnlyWhenTheCallThatTookItAgesOut() {
         RateLimit limit = limit(RateLimitMode.FAIL_FAST, new RateLimitRule(2, 1));
@@ -78,14 +71,13 @@ class SlidingWindowRateLimiterTest {
         clock.advance(Duration.ofMillis(400));
         limiter.acquire(limit);
 
-        clock.advance(Duration.ofMillis(600)); // 1.0s since the first call, 0.6s since the second
+        clock.advance(Duration.ofMillis(600));
 
         limiter.acquire(limit);
         assertThrows(RateLimitedException.class, () -> limiter.acquire(limit),
                 "only the first call's slot has aged out; the second still counts");
     }
 
-    /** The whole window comes back at once, a window after it was spent — not a permit at a time. */
     @Test
     void theWholeWindowReopensTogether() {
         RateLimitRule rule = new RateLimitRule(5, 60);
@@ -104,12 +96,6 @@ class SlidingWindowRateLimiterTest {
         }
     }
 
-    /**
-     * The invariant a rolling window exists to hold, and the one a bucket breaks: spread calls out as
-     * far as the limiter will allow and no trailing window ever holds more than the rule permits. At
-     * {@code 3/10s} a bucket would admit a 4th call 3.3s in, which a server counting the trailing 10s
-     * would answer with a 429.
-     */
     @Test
     void neverAdmitsMoreThanThePermitsInAnyTrailingWindow() {
         RateLimitRule rule = new RateLimitRule(3, 10);
@@ -121,7 +107,6 @@ class SlidingWindowRateLimiterTest {
                 limiter.acquire(limit);
                 admissions.add(clock.instant());
             } catch (RateLimitedException expected) {
-                // still inside the window; the assertion below is what matters
             }
             clock.advance(Duration.ofSeconds(1));
         }
@@ -147,10 +132,6 @@ class SlidingWindowRateLimiterTest {
         assertEquals(T0.plusSeconds(1), clock.instant());
     }
 
-    /**
-     * The case the whole design turns on: a daily quota must not park a scheduler thread for a day. The
-     * caller is handed the reopening instant instead, to persist and resume from.
-     */
     @Test
     void defersInsteadOfSleepingWhenTheWaitExceedsTheBudget() {
         RateLimit limit = limit(RateLimitMode.WAIT, new RateLimitRule(1, 86400));
@@ -163,7 +144,6 @@ class SlidingWindowRateLimiterTest {
         assertEquals(KEY, e.key());
     }
 
-    /** All-or-nothing: a blocked long window must not consume the short window's token. */
     @Test
     void chargesEveryWindowOnlyWhenAllOfThemHaveRoom() {
         RateLimitRule perSecond = new RateLimitRule(10, 1);
@@ -178,10 +158,6 @@ class SlidingWindowRateLimiterTest {
                 "the refused call spent nothing in the window that had room");
     }
 
-    /**
-     * A server saying "stop" outranks our absence of a local guess, so a penalty binds even where no
-     * policy is configured — otherwise an unconfigured board would keep hammering a service that 429'd.
-     */
     @Test
     void aPenaltyPausesEvenAnUnlimitedKey() {
         RateLimit limit = new RateLimit(KEY, RateLimitPolicy.UNLIMITED, RateLimitMode.FAIL_FAST);
@@ -204,11 +180,6 @@ class SlidingWindowRateLimiterTest {
         assertEquals(List.of(Duration.ofSeconds(5)), waits);
     }
 
-    /**
-     * {@code Retry-After} is remote input, and the instant it produces is load-bearing: a rate-limited
-     * cursor is held out of the ingestion batch until it passes. A misparsed or hostile value must not
-     * be able to park work for a week, so the pause is capped here rather than trusted by each caller.
-     */
     @Test
     void anAbsurdPenaltyIsClampedToTheCeiling() {
         limiter.maxPenaltySeconds = 60;

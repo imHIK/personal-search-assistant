@@ -32,11 +32,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The read-only listing endpoints that back the console's entity browser and sync-progress view.
- * Split from {@link DefaultKnowledgeServiceTest} (lifecycle) and {@code ...EditTest} (patching) so
- * each class stays about one concern.
- */
 class DefaultKnowledgeServiceListingTest {
 
     private InMemoryKnowledgeRepository knowledge;
@@ -59,19 +54,16 @@ class DefaultKnowledgeServiceListingTest {
                 registry, connections, index, discovery, new RefetchPolicy(registry));
     }
 
-    /** Persist a knowledge directly — these tests exercise reads, not the activation path. */
     private Knowledge storedKnowledge(String id) {
         Knowledge kn = TestData.knowledge(id, SourceType.SLACK, Instant.now(), Map.of());
         knowledge.save(kn);
         return kn;
     }
 
-    /** An entity with an explicit updatedAt, so ordering assertions are deterministic. */
     private Entity entity(String id, String knowledgeId, EntityStatus status, Instant updatedAt) {
         return entity(id, knowledgeId, "chan_a", status, updatedAt);
     }
 
-    /** An indexed entity walked from a specific iterable. */
     private Entity entity(String id, String knowledgeId, String iterableId, Instant updatedAt) {
         return entity(id, knowledgeId, iterableId, EntityStatus.INDEXED, updatedAt);
     }
@@ -84,8 +76,6 @@ class DefaultKnowledgeServiceListingTest {
                 "sha256:" + id, status, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), updatedAt, updatedAt, null, 0L);
     }
-
-    // ---- entity listing ----------------------------------------------------------------------
 
     @Test
     void listsEntitiesNewestFirstWithTitleAndUri() {
@@ -282,8 +272,6 @@ class DefaultKnowledgeServiceListingTest {
 
         assertEquals(1, service.listEntities(kn.id(), EntityQuery.all().withTitleContains("   "), 50, 0).total());
     }
-
-    // ---- cursor listing ----------------------------------------------------------------------
 
     @Test
     void listsCursorsForThatKnowledgeOnlyOrderedByIterableThenDirection() {

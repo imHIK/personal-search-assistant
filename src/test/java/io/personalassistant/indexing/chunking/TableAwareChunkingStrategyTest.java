@@ -16,14 +16,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Row-aligned chunking, and the header repetition that is the point of it.
- *
- * <p>The failure being fixed: a table split naively gives chunk 0 the column headers and every later
- * chunk nothing but values. Those later chunks share no term with a query about the table's subject and
- * sit nowhere near it in embedding space, so they never reach the top-k — and an answer assembled from
- * the chunks that did rank looks complete while missing half the rows.
- */
 class TableAwareChunkingStrategyTest {
 
     private final TableAwareChunkingStrategy strategy = new TableAwareChunkingStrategy();
@@ -90,7 +82,6 @@ class TableAwareChunkingStrategyTest {
         }
     }
 
-    /** With the header repeated, overlap would duplicate rows without adding recoverable context. */
     @Test
     void appliesNoRowOverlap() {
         List<Chunk> chunks = chunk(table(60), 600);
@@ -115,11 +106,6 @@ class TableAwareChunkingStrategyTest {
                 "consecutive chunks cover different rows");
     }
 
-    /**
-     * PDFs have no table semantics — a visual table arrives as separate paragraphs, not
-     * {@code <table>} markup — so with no structural blocks this must behave like the recursive default
-     * rather than produce nothing.
-     */
     @Test
     void fallsBackToRecursiveSplittingWhenThereIsNoTableStructure() {
         ParsedContent prose = new ParsedContent("First paragraph.\n\nSecond paragraph.\n\nThird.",
@@ -132,11 +118,6 @@ class TableAwareChunkingStrategyTest {
         assertTrue(chunks.get(0).text().contains("Third."));
     }
 
-    /**
-     * Rows are short and dense, so the prose default of 1000 characters holds very few of them and turns
-     * one table into many chunks. Anything below the table default is widened to it; a larger explicit
-     * size is honoured as-is.
-     */
     @Test
     void widensProseSizedWindowsToTheTableDefault() {
         int atProseDefault = chunk(table(200), 1000).size();

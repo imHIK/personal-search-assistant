@@ -13,10 +13,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Range-filter emission and JSON typing. The RestClient is unused by {@code filters()}, so {@code null}
- * is passed deliberately, matching {@link OpenSearchSearchIndexFiltersTest}.
- */
 class OpenSearchSearchIndexRangeFiltersTest {
 
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
@@ -48,7 +44,6 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void numericBoundsStayNumbersRatherThanStrings() {
-        // A quoted number against a numeric field makes the comparison lexicographic, so "9" > "100".
         JsonNode gte = filtersFor(Map.of("metadata.sourceRank", Map.of("gte", 100L)))
                 .get(0).get("range").get("metadata.sourceRank").get("gte");
 
@@ -57,7 +52,6 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void booleanTermStaysABooleanRatherThanAString() {
-        // metadata.remote is mapped boolean; a "true" string term matches nothing at all.
         JsonNode value = filtersFor(Map.of("metadata.remote", true)).get(0).get("term").get("metadata.remote");
 
         assertTrue(value.isBoolean(), "boolean term must not be serialised as a string: " + value);
@@ -83,8 +77,6 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void aMapWithNoRecognisedBoundDoesNotWidenTheSearch() {
-        // Forwarding unknown keys would let a caller inject query DSL; matching everything would be
-        // worse still. It degrades to a term that simply matches nothing.
         ArrayNode filters = filtersFor(Map.of("metadata.company", Map.of("script", "evil")));
 
         assertEquals(1, filters.size());

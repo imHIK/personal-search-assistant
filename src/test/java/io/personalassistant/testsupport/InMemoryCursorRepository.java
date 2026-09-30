@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** In-memory {@link CursorRepository} mirroring the Mongo adapter's claim/lease semantics. */
+/** Mirrors the Mongo adapter's claim and lease semantics. */
 public class InMemoryCursorRepository implements CursorRepository {
 
     public final Map<String, Cursor> store = new LinkedHashMap<>();
@@ -38,8 +38,6 @@ public class InMemoryCursorRepository implements CursorRepository {
     @Override
     public List<Cursor> findClaimable(Collection<String> knowledgeIds, int limit) {
         Instant now = Instant.now();
-        // Mirror the Mongo adapter: eligible knowledges only, least-recently-run first, never-run
-        // (null lastRunAt) first.
         return store.values().stream()
                 .filter(c -> knowledgeIds.contains(c.knowledgeId()))
                 .filter(c -> isClaimable(c, now))
@@ -89,7 +87,6 @@ public class InMemoryCursorRepository implements CursorRepository {
         if (!ownsLiveLease(c, owner)) {
             return false;
         }
-        // A successful resting ends the consecutive-failure streak — mirrors the Mongo adapter.
         store.put(cursorId, with(c, restingStatus, null, c.position(), Cursor.Retry.zero(), c.stats()));
         return true;
     }
@@ -106,7 +103,6 @@ public class InMemoryCursorRepository implements CursorRepository {
         return true;
     }
 
-    /** Lease fence: the caller must still hold a live lease on the cursor. */
     private static boolean ownsLiveLease(Cursor c, String owner) {
         return c != null && c.lease() != null && owner.equals(c.lease().owner())
                 && c.lease().isLiveAt(Instant.now());
@@ -157,8 +153,6 @@ public class InMemoryCursorRepository implements CursorRepository {
         for (Cursor c : new ArrayList<>(store.values())) {
             if (c.knowledgeId().equals(knowledgeId) && (c.status() == CursorStatus.FAILED
                     || c.status() == CursorStatus.RATE_LIMITED)) {
-                // Position kept: the cursor resumes where it stopped rather than re-walking.
-                // RATE_LIMITED is revived too, and Retry.zero() drops its hold — mirrors Mongo.
                 store.put(c.id(), with(c, CursorStatus.AVAILABLE, null, c.position(),
                         Cursor.Retry.zero(), c.stats()));
                 revived++;
@@ -222,8 +216,7 @@ public class InMemoryCursorRepository implements CursorRepository {
             return true;
         }
         if (c.status() == CursorStatus.RATE_LIMITED) {
-            // Mirrors the Mongo filter exactly, missing instant included: a RATE_LIMITED row with no
-            // nextAttemptAt is never claimable, it does not read as "no hold".
+            // As in the Mongo filter, a RATE_LIMITED row with no nextAttemptAt is never claimable.
             Instant until = c.retry() == null ? null : c.retry().nextAttemptAt();
             return until != null && !until.isAfter(now);
         }

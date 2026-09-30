@@ -11,25 +11,11 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Where the scoping clauses sit in the request body — the difference between a correct and a
- * silently-wrong semantic search.
- *
- * <p>B4 regression. A filter in the surrounding {@code bool.filter} is applied <em>after</em>
- * OpenSearch has picked the global k nearest neighbours, so scoping a search to one knowledge in a
- * large corpus drops most or all of the top-k and returns far fewer hits than asked for — sometimes
- * none, while plenty of relevant chunks exist. Nested inside the knn clause, the filter is honoured
- * during graph traversal and k counts matching documents.
- *
- * <p>The RestClient is unused by the body builders, so {@code null} is passed deliberately (same
- * convention as {@link OpenSearchSearchIndexFiltersTest}).
- */
 class OpenSearchSearchIndexQueryShapeTest {
 
     private final OpenSearchSearchIndex index = configured();
     private final float[] vector = {0.1f, 0.2f, 0.3f};
 
-    /** The config fields are injected in production, so a hand-wired instance sets them explicitly. */
     private static OpenSearchSearchIndex configured() {
         OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
         index.snippetChars = 280;
@@ -81,7 +67,6 @@ class OpenSearchSearchIndexQueryShapeTest {
         assertEquals(25, index.vectorBody(scoped(), vector, 25).path("size").asInt());
     }
 
-    /** The BM25 path is deliberately untouched: bool.filter is already applied during scoring there. */
     @Test
     void lexicalQueryKeepsFiltersInBoolFilter() {
         JsonNode bool = index.lexicalBody(scoped(), 10).path("query").path("bool");
@@ -92,11 +77,6 @@ class OpenSearchSearchIndexQueryShapeTest {
         assertEquals("kn_1", filters.get(0).path("terms").path("knowledgeId").get(0).asText());
     }
 
-    /**
-     * Both legs must exclude the embedding from {@code _source}. Without this every hit ships its full
-     * vector back only to be dropped while parsing — on a 40-candidate hybrid search that is 30k floats
-     * of pure waste, dwarfing the text the caller actually asked for.
-     */
     @Test
     void bothLegsExcludeTheEmbeddingFromSource() {
         for (JsonNode body : List.of(index.lexicalBody(scoped(), 10),
@@ -107,10 +87,6 @@ class OpenSearchSearchIndexQueryShapeTest {
         }
     }
 
-    /**
-     * Highlighting is lexical-only on purpose: a knn query carries no query terms, so asking OpenSearch
-     * for fragments on the vector leg returns none and the excerpt falls back to the head of the chunk.
-     */
     @Test
     void onlyTheLexicalLegAsksForHighlightFragments() {
         JsonNode highlight = index.lexicalBody(scoped(), 10).path("highlight");
@@ -131,13 +107,6 @@ class OpenSearchSearchIndexQueryShapeTest {
                 "0 fragments means no highlight block at all");
     }
 
-    /**
-     * The default {@code multi_match} scores a document for matching <em>any</em> term, so
-     * "give me all the holidays this year" ranked documents containing "give"/"all"/"this"/"year" above
-     * the one document about holidays — and filled the candidate set with them, crowding the vector leg's
-     * correct hits out of the fusion. {@code minimum_should_match} is what requires a real share of the
-     * query to be present.
-     */
     @Test
     void lexicalQueryRequiresAShareOfTheQueryToMatch() {
         JsonNode multiMatch = index.lexicalBody(scoped(), 10)
@@ -157,7 +126,6 @@ class OpenSearchSearchIndexQueryShapeTest {
                 "an untitled boost let a short unrelated chunk outrank the document named for the query");
     }
 
-    /** A phrase hit is a signal term-level scoring misses, so it lifts rather than filters. */
     @Test
     void lexicalQueryAddsThePhraseMatchAsAnOptionalBoost() {
         JsonNode bool = index.lexicalBody(scoped(), 10).path("query").path("bool");

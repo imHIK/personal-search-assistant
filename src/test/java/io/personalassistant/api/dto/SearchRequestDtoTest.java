@@ -10,12 +10,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * What the wire contract accepts, and what it rejects rather than passing downstream. Both rejections
- * used to be silent failures: a blank query reached OpenSearch as an empty {@code multi_match} — after
- * paying for a query embedding — and an unknown mode surfaced as a raw 500 out of {@code Enum.valueOf}
- * because nothing mapped it. {@code SearchResource} turns these into 400s.
- */
 class SearchRequestDtoTest {
 
     private static SearchRequestDto request(String query, String mode, Integer topK) {
@@ -60,7 +54,6 @@ class SearchRequestDtoTest {
                 "a blank mode falls back to the default rather than failing");
     }
 
-    /** Out-of-range values are policy, clamped by the service — the DTO only carries them through. */
     @Test
     void carriesTopKThroughUnclampedForTheServiceToBound() {
         assertEquals(5_000, request("holidays", null, 5_000).toDomain().topK());

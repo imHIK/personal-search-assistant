@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Scriptable {@link WorkdayApi} for platform tests — no network. Models the POST search + detail pair. */
 public class FakeWorkdayApi implements WorkdayApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -17,17 +16,13 @@ public class FakeWorkdayApi implements WorkdayApi {
     private final List<Map<String, Object>> summaries = new ArrayList<>();
     private final Map<String, Map<String, Object>> details = new LinkedHashMap<>();
 
-    /** Test observability: the externalPaths whose detail was fetched, in order. */
     public final List<String> detailCalls = new ArrayList<>();
 
-    /** Test observability: every searchText the platform sent, in order. */
     public final List<String> searchTexts = new ArrayList<>();
 
     /**
-     * Add a posting.
-     *
-     * @param locationsText what the SEARCH reports — may be a count like "5 Locations"
-     * @param location      what the DETAIL reports as the primary location
+     * {@code locationsText} is what the search reports (may be a count like "5 Locations"); {@code location}
+     * is the detail's primary location.
      */
     public FakeWorkdayApi withPosting(String reqId, String title, String locationsText,
                                       String location, String country, String description) {
@@ -57,10 +52,8 @@ public class FakeWorkdayApi implements WorkdayApi {
         if (offset == 0) {
             searchTexts.add(searchText);
         }
-        // Stands in for Workday's own index, and the modelling detail that matters: the index sees the
-        // WHOLE record, not the summary. A role whose listing says "5 Locations" is still found by a
-        // query naming one of them — which is exactly why sending a query is safe where filtering the
-        // returned summaries is not.
+        // Workday's index searches the whole record, so a query naming one of a posting's "5 Locations" still
+        // finds it.
         List<Map<String, Object>> matching = searchText == null || searchText.isBlank()
                 ? summaries
                 : summaries.stream().filter(s -> indexedText(s).contains(lower(searchText))).toList();
@@ -72,7 +65,6 @@ public class FakeWorkdayApi implements WorkdayApi {
         return MAPPER.valueToTree(envelope);
     }
 
-    /** Everything Workday's index can see for one posting: the summary plus its full detail. */
     private String indexedText(Map<String, Object> summary) {
         Map<String, Object> info = details.get(String.valueOf(summary.get("externalPath")));
         StringBuilder out = new StringBuilder(String.valueOf(summary.get("locationsText")));

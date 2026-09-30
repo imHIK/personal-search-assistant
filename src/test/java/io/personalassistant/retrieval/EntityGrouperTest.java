@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/** Chunks in, one result per entity out — and the properties that stop that from losing an answer. */
 class EntityGrouperTest {
 
     private final EntityGrouper grouper = new EntityGrouper(3, 0.1);
@@ -23,10 +22,6 @@ class EntityGrouperTest {
         return hits.stream().map(SearchHit::entityId).toList();
     }
 
-    /**
-     * The failure this exists for: a matching posting's ~7 chunks all rank together, so a chunk-ranked
-     * top 10 was two postings. Grouped, the pool yields every distinct entity it holds.
-     */
     @Test
     void siblingsFloodingThePoolStillYieldOneResultPerEntity() {
         List<SearchHit> pool = new ArrayList<>();
@@ -58,7 +53,6 @@ class EntityGrouperTest {
 
     @Test
     void aCapOfOneReportsTheBestChunkAloneAndScoresOnItAlone() {
-        // What a digest asks for: items, not passages.
         List<SearchHit> results = grouper.group(List.of(chunk("doc", 0, 0.9), chunk("doc", 1, 0.8)), 1);
 
         assertTrue(results.get(0).moreMatches().isEmpty());
@@ -99,8 +93,6 @@ class EntityGrouperTest {
 
     @Test
     void groundingTextJoinsEveryMatchInDocumentOrder() {
-        // The answer case a per-entity cap used to harm: the passages must all reach the prompt, and in
-        // the order they appear in the document rather than the order they scored.
         SearchHit doc = grouper.group(List.of(
                 chunk("doc", 3, 0.9), chunk("doc", 1, 0.8), chunk("doc", 2, 0.7)), null).get(0);
 

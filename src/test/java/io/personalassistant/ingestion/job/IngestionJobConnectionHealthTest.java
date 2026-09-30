@@ -20,13 +20,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * A knowledge whose credentials are known-bad must not be run: an expired token otherwise fails on
- * every tick, burning a lease and a permit each time, forever.
- *
- * <p>The permit service and runner are {@code null} deliberately — reaching either means the job did
- * <em>not</em> skip, so an NPE is the assertion.
- */
 class IngestionJobConnectionHealthTest {
 
     private static final SourceType TYPE = SourceType.SLACK;
@@ -64,7 +57,8 @@ class IngestionJobConnectionHealthTest {
 
     @Test
     void runsAKnowledgeWhoseConnectionIsHealthy() {
-        // Reaching the runner NPEs on the null collaborators, which is how we know it was not skipped.
+        // Reaching the runner NPEs on the null collaborators; that is how this sees the knowledge was not
+        // skipped.
         activeKnowledgeWithClaimableCursor("kn_1");
 
         Assertions.assertThrows(Exception.class, () -> job(ConnectionStatus.ACTIVE, true).tick());
@@ -79,7 +73,6 @@ class IngestionJobConnectionHealthTest {
 
     @Test
     void anUnresolvableConnectionRunsAsBeforeRatherThanBlockingSync() {
-        // The skip is an optimisation; doubt must never be the reason a sync stops.
         activeKnowledgeWithClaimableCursor("kn_1");
         StubConnector connector = new StubConnector(TYPE, List.of()).withRequiresConnection(true);
         IngestionJob job = new IngestionJob(cursors, knowledge, null, null,

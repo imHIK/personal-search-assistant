@@ -10,7 +10,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** What a digest run says when published, and whether it says anything at all. */
 class DigestMessagesTest {
 
     private static Digest digest(boolean onlyNew) {

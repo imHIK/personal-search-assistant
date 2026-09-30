@@ -41,7 +41,6 @@ class AshbyPlatformTest {
 
     @Test
     void carriesAStatedCloseDateAsEntityExpiry() {
-        // Ashby is the one board of the three that can state this; it beats the knowledge window.
         List<RawItem> items = grab();
 
         Assertions.assertNull(items.get(0).expiresAt());
@@ -58,15 +57,11 @@ class AshbyPlatformTest {
 
     @Test
     void leavesSeniorityUnsetWhenTheTitleCarriesNoMarker() {
-        // "Software Engineer" is genuinely ambiguous; guessing a band would corrupt seniority filters.
         Assertions.assertNull(grab().get(0).metadata().get("seniority"));
     }
 
     @Test
     void theChecksumMovesWhenSomethingIndexedChanges() {
-        // This was broken and invisible: Ashby's posting API has no updatedAt — the field this read
-        // does not exist — so the checksum was a constant and an edited posting was never re-indexed,
-        // violating invariant 3. The fixture used to invent the field, which is why nothing caught it.
         String before = grab().get(0).checksum();
 
         for (String edit : List.of(
@@ -81,7 +76,6 @@ class AshbyPlatformTest {
 
     @Test
     void publishedAtIsCarriedAsTheItemTimestamp() {
-        // It is the only date Ashby publishes, and the age filter falls back to it.
         Assertions.assertEquals(Instant.parse("2026-08-01T00:00:00Z"), grab().get(0).modifiedAt());
     }
 }

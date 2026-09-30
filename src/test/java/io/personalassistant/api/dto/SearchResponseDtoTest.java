@@ -11,11 +11,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * The wire contract for search results. {@code chunkId} and {@code knowledgeId} were previously
- * dropped in the mapping even though {@link SearchHit} carried them, which left a caller unable to
- * attribute a hit to its source or pin the exact passage — hence the explicit assertions here.
- */
 class SearchResponseDtoTest {
 
     private static SearchHit hit() {
@@ -45,10 +40,6 @@ class SearchResponseDtoTest {
         assertNull(dto.answerError(), "and so does answerError");
     }
 
-    /**
-     * The full chunk text exists to ground the answer, not to be displayed. Mapping it onto the wire
-     * would multiply the payload for a field nothing renders, so the DTO carries only the snippet.
-     */
     @Test
     void doesNotShipTheFullChunkTextOnTheWire() {
         SearchResponseDto.Hit mapped = SearchResponseDto.from(
@@ -68,10 +59,6 @@ class SearchResponseDtoTest {
         assertEquals("Revenue grew 12% [1].", SearchResponseDto.from(response).answer());
     }
 
-    /**
-     * An unavailable LLM must not cost the caller its hits. The service catches the failure and reports
-     * it beside the results; before that, the whole request 500d and the retrieved hits were discarded.
-     */
     @Test
     void carriesTheAnswerErrorBesideTheHits() {
         SearchResponseDto dto = SearchResponseDto.from(

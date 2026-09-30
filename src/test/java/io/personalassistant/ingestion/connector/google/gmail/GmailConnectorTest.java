@@ -54,8 +54,6 @@ class GmailConnectorTest {
         return out;
     }
 
-    // ---- discovery ---------------------------------------------------------------------------
-
     @Test
     void discoversSingleAllMailIterableByDefault() {
         List<SourceIterable> iterables = connector.discover(knowledge(Instant.now(), Map.of()));
@@ -74,8 +72,6 @@ class GmailConnectorTest {
         assertEquals("Label_1", iterables.get(0).attributes().get("labelId"));
     }
 
-    // ---- forward: incremental high-water walk ------------------------------------------------
-
     @Test
     void forwardReturnsMailAtOrAfterAnchorAndAdvancesHighWater() {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
@@ -90,7 +86,6 @@ class GmailConnectorTest {
         assertEquals(List.of("m_new2", "m_new1"), ids(page), "newest-first, excludes pre-anchor mail");
         assertFalse(page.hasMore());
 
-        // A newer mail arrives; re-grabbing from the returned (high-water) position picks it up.
         api.add("m_new3", anchor.plusSeconds(40).toEpochMilli(), List.of("INBOX"), "New three", "d@x.com", "hello three");
         GrabResult next = connector.grab(req(kn, all, CursorDirection.FORWARD, page.cursor(), 10));
         assertTrue(ids(next).contains("m_new3"), "high-water floor advanced so the new mail is returned");
@@ -118,8 +113,6 @@ class GmailConnectorTest {
         assertEquals(List.of("m5", "m4", "m3", "m2", "m1"), collected, "all matches, newest-first, once each");
     }
 
-    // ---- backward: backfill sweep ------------------------------------------------------------
-
     @Test
     void backwardPagesHistoryBeforeAnchorThenExhausts() {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
@@ -146,8 +139,6 @@ class GmailConnectorTest {
         assertEquals(2, pages, "3 items at cap=2 => 2 pages");
     }
 
-    // ---- mapping -----------------------------------------------------------------------------
-
     @Test
     void mapsMessageIntoEmailRawItemWithHeadersAndBody() {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
@@ -170,7 +161,6 @@ class GmailConnectorTest {
 
     @Test
     void reIndexesFromStoredTextWithoutFetching() {
-        // Bodies are inline in Mongo, so there is no staged copy to lose.
         assertEquals(ReindexMode.REINDEX_ONLY, connector.defaultReindexMode());
     }
 
@@ -198,7 +188,6 @@ class GmailConnectorTest {
                 "a 404 is the only signal Gmail gives that a message is gone");
     }
 
-    /** The entity the walk would have produced — all fetchOne reads is externalId. */
     private static Entity entityFor(RawItem item) {
         return TestData.ingestedText("ent_" + item.externalId(), "kn_gmail", item.externalId(),
                 item.text());

@@ -9,7 +9,6 @@ import io.personalassistant.testsupport.FakeEmbeddingProvider;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/** The query-vector cache: a repeated query costs no embedding call, and a disabled cache costs one each. */
 class QueryEmbedderTest {
 
     private static final Retriever NOTHING = (query, vector, limit) -> List.<SearchHit>of();

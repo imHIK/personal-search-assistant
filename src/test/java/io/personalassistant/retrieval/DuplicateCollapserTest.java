@@ -6,12 +6,11 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Grouping rules, and the properties that stop collapsing from hiding a real result. */
 class DuplicateCollapserTest {
 
     private final DuplicateCollapser collapser = new DuplicateCollapser(5, 0.85, 100, 0.5);
 
-    /** Hits share a title unless a test is about titles: the text layers only group under agreeing titles. */
+    /** Shared by default: the text layers only group hits whose titles agree. */
     private static final String TITLE = "Quarterly report";
 
     private static SearchHit hit(String chunkId, String title, String text, double score,
@@ -75,8 +74,6 @@ class DuplicateCollapserTest {
 
     @Test
     void twoDifferentRolesAtTheSameCompanyAreNotCollapsed() {
-        // The failure mode that rules out embedding cosine: these are semantically very close, but
-        // hiding one is worse than showing both.
         List<SearchHit> out = collapser.collapse(List.of(
                 hit("a", "Senior Backend Engineer working on billing systems in Go and Postgres", 1.0),
                 hit("b", "Senior Frontend Engineer working on the design system in React and CSS", 0.9)));
@@ -84,10 +81,6 @@ class DuplicateCollapserTest {
         Assertions.assertEquals(List.of("a", "b"), ids(out));
     }
 
-    /**
-     * Every posting of one company carries the same "About us". When that is the passage two different
-     * roles matched on, text alone called them one thing and hid a real result.
-     */
     @Test
     void identicalBoilerplateUnderUnrelatedTitlesIsNotCollapsed() {
         String aboutUs = "Acme is a financial infrastructure platform for businesses of every size worldwide";
@@ -110,7 +103,6 @@ class DuplicateCollapserTest {
 
     @Test
     void comparesTheWholeResultNotJustItsBestChunk() {
-        // Two items whose best passages agree but whose further matches do not are not the same item.
         SearchHit a = hit("a", "Shared opening passage about the team and its mission", 1.0)
                 .withMoreMatches(1.0, List.of(new SearchHit.Match("a_1", 1, "Requirements: Go and Postgres", "s", 0.8)));
         SearchHit b = hit("b", "Shared opening passage about the team and its mission", 0.9)
@@ -121,8 +113,6 @@ class DuplicateCollapserTest {
 
     @Test
     void keepsTheHigherRankedSourceButAtTheGroupsPosition() {
-        // A posting found on an aggregator first and the company's own board second should keep the
-        // canonical listing — without that listing being dragged down to the aggregator's rank.
         Map<String, Object> aggregator = Map.of("dedupeKey", "acme|engineer|london", "sourceRank", 10);
         Map<String, Object> direct = Map.of("dedupeKey", "acme|engineer|london", "sourceRank", 100);
         List<SearchHit> out = collapser.collapse(List.of(
@@ -165,7 +155,6 @@ class DuplicateCollapserTest {
 
     @Test
     void hitsWithNoTextAreNotAllTreatedAsTheSameThing() {
-        // Blank text must not become a grouping key of its own, or every text-less hit collapses to one.
         List<SearchHit> out = collapser.collapse(List.of(
                 hit("a", "", 1.0), hit("b", "", 0.9), hit("c", null, 0.8)));
 

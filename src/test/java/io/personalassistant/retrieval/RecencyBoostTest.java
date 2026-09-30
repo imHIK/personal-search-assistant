@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/** Freshness may break a near-tie; it must never overrule relevance. */
 class RecencyBoostTest {
 
     private static final Instant NOW = Instant.parse("2026-09-15T00:00:00Z");

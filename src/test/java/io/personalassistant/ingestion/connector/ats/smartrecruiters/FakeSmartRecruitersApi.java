@@ -9,26 +9,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Scriptable {@link SmartRecruitersApi} for platform tests — no network.
- *
- * <p>Models the two-call shape faithfully, including the paging envelope, because the platform's whole
- * design turns on it: the listing has no description and every surviving posting costs a second call.
- */
 public class FakeSmartRecruitersApi implements SmartRecruitersApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** company -> ordered postings, each as the listing summary it should appear as. */
     private final Map<String, List<Map<String, Object>>> listings = new HashMap<>();
     /** "company/id" -> the detail document. */
     private final Map<String, Map<String, Object>> details = new HashMap<>();
     private final Map<String, RuntimeException> detailFailures = new HashMap<>();
 
-    /** Test observability: how many detail calls were made, and for which ids. */
     public final List<String> detailCalls = new ArrayList<>();
 
-    /** Add one posting: a listing summary plus the description its detail call returns. */
     public FakeSmartRecruitersApi withPosting(String company, String id, String title,
                                               String fullLocation, String description) {
         Map<String, Object> location = new LinkedHashMap<>();
@@ -57,7 +48,6 @@ public class FakeSmartRecruitersApi implements SmartRecruitersApi {
         return this;
     }
 
-    /** Make one posting's detail call fail, to exercise the skip-one-not-the-board path. */
     public FakeSmartRecruitersApi failDetail(String company, String id, RuntimeException failure) {
         detailFailures.put(company + "/" + id, failure);
         return this;

@@ -10,11 +10,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The background tier: indexing and search charge one counter at two ceilings, so the gap between them
- * is a reserve no backfill can spend. Driven through the real in-memory limiter, because the tier is
- * only as good as the counter being genuinely shared.
- */
 class RateLimitPoliciesTest {
 
     private static final Instant T0 = Instant.parse("2026-01-01T00:00:00Z");
@@ -73,36 +68,29 @@ class RateLimitPoliciesTest {
                 "searches share the counter, so the reserve is the gap, not a fresh 4");
     }
 
-    /**
-     * Searches can push the count past the background ceiling, and the background call must then be
-     * told when the count drops back <em>under its own ceiling</em> — not when the oldest admission
-     * ages out, which still leaves the window full for it. Getting that wrong defers an entity once per
-     * surplus admission, towards {@code max-deferrals} and a dead letter.
-     */
     @Test
     void aBackgroundRetryAtWaitsOutTheSurplusSearchesSpent() {
         RateLimit background = policies.forEmbedding("gemini", RateLimitMode.WAIT);
         RateLimit search = policies.forEmbedding("gemini", RateLimitMode.FAIL_FAST);
 
-        limiter.acquire(background);                 // T0
+        limiter.acquire(background);
         clock.advance(Duration.ofSeconds(1));
-        limiter.acquire(background);                 // T0+1s
+        limiter.acquire(background);
         clock.advance(Duration.ofSeconds(1));
-        limiter.acquire(search);                     // T0+2s
+        limiter.acquire(search);
         clock.advance(Duration.ofSeconds(1));
-        limiter.acquire(search);                     // T0+3s — four in the window, two over indexing's
+        limiter.acquire(search);
 
         RateLimitedException deferred = assertThrows(RateLimitedException.class,
                 () -> limiter.acquire(background));
 
-        // Count 4 against a ceiling of 2: it must fall to 1, i.e. the admission at T0+2s must age out.
+        // Four in the window against the background ceiling of 2: it must fall to 1, so the T0+2s admission
+        // must age out.
         assertEquals(T0.plusSeconds(62), deferred.retryAt());
     }
 
     @Test
     void aLowerCeilingCreatingTheWindowDoesNotCapAHigherOne() {
-        // The in-memory ring buffer is sized on first use; a background call arriving first must not
-        // shrink what the search ceiling may later record.
         RateLimit background = policies.forEmbedding("gemini", RateLimitMode.WAIT);
         RateLimit search = policies.forEmbedding("gemini", RateLimitMode.FAIL_FAST);
 

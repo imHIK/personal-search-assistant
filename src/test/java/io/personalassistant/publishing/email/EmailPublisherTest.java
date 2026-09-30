@@ -25,13 +25,8 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The EMAIL publisher against a fake Gmail API: target rules, the RFC 2822 message it sends, the send-scope
- * check, and how Gmail's failures are classified.
- */
 class EmailPublisherTest {
 
-    /** Records sends and scripts tokeninfo and failures. */
     private static final class FakeGmail implements GmailSendApi {
         final List<String> raws = new ArrayList<>();
         final List<String> bearers = new ArrayList<>();
