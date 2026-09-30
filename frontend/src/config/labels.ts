@@ -377,6 +377,7 @@ export const labels = {
     removeConfirm: 'Delete this digest?',
     removeBody: 'Its history of past runs is deleted with it. This cannot be undone.',
     runFailed: 'This run failed',
+    taskFailed: 'The task could not run, so only results are shown.',
     createFailed: 'Could not create the digest',
     saveFailed: 'Could not save the digest',
     save: 'Save changes',
@@ -401,6 +402,7 @@ export const labels = {
     runsEvery: 'Runs',
     taskLabel: 'Then',
     taskNone: 'Just lists what is new',
+    useLlmOff: 'LLM off',
     // A digest naming a task that cannot be resolved must not be described as naming none — that
     // reads as a working digest and hides the reason its runs carry no task output.
     taskMissing: 'Task unavailable',
@@ -440,6 +442,7 @@ export const labels = {
     taskFieldHint: 'An instruction the assistant runs over everything the digest finds.',
     taskFieldNone: 'Nothing — just show me what is new',
     taskManage: 'Write your own',
+    useLlm: 'Use LLM',
     topK: 'How many results',
     onePerDocument: 'One result per document',
     onePerDocumentHint: 'Otherwise several passages from the same file can each take a slot',

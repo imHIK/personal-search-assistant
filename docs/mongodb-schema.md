@@ -309,6 +309,8 @@ A saved search plus a schedule, and one document per execution. Documented in
   three are absent on runs written before they existed and read back as `items.size()`, `0` and `0`.
 - `digests.channelIds` lists the publishing channels each run is sent to (absent on older documents,
   read as empty). Indexed, because deleting a channel is refused while a digest names it.
+- `digests.useLlm` switches the digest's task off while keeping `taskId`. **Absent reads as `true`**:
+  every digest stored before the switch existed ran its task, so a missing field must not turn that off.
 - `digests.historyResetAt` bounds the newness read: runs before it are ignored when working out what
   has already been reported, so the seen-set can be cleared without deleting the history that is also
   the audit trail.
@@ -318,6 +320,8 @@ A saved search plus a schedule, and one document per execution. Documented in
 - A **failed** run is still written, carrying `error` and no items. That is what makes a digest that has
   been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
   anything later.
+- `taskError` records a task that failed after the search succeeded. That run keeps its items, so they
+  count as reported like any other run's. Absent on older runs, read as null.
 - History is unbounded — see [L8](./limitations.md).
 
 ---

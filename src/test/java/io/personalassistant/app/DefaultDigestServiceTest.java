@@ -81,6 +81,12 @@ class DefaultDigestServiceTest {
         return svc;
     }
 
+    private static Digest withoutLlm(Digest d) {
+        return new Digest(d.id(), d.name(), d.query(), d.knowledgeIds(), d.filters(), d.window(), d.schedule(),
+                d.taskId(), false, d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(), d.onlyNew(),
+                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt(), d.channelIds());
+    }
+
     private Digest digest(String window, String taskId, boolean onlyNew, int topK) {
         return new Digest(null, "New postings", "engineer", List.of(), Map.of(), window,
                 SyncSchedule.ofInterval(Duration.ofDays(1)), taskId, topK, false, null, onlyNew,
@@ -186,6 +192,52 @@ class DefaultDigestServiceTest {
         DigestRun run = svc.run(created.id());
 
         Assertions.assertTrue(agent.taskIds.isEmpty(), "an empty batch must not spend an LLM call");
+        Assertions.assertNull(run.taskOutput());
+    }
+
+    @Test
+    void withTheLlmOffTheTaskIsSkippedButRemembered() {
+        StubSearchAgent agent = new StubSearchAgent("scored");
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(withoutLlm(digest("1d", "job-fit", true, 10)));
+        search.result = List.of(hit("ent_a"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertTrue(agent.taskIds.isEmpty());
+        Assertions.assertNull(run.taskOutput());
+        Assertions.assertEquals(1, run.items().size());
+        Digest stored = repository.findById(created.id()).orElseThrow();
+        Assertions.assertFalse(stored.useLlm());
+        Assertions.assertEquals("job-fit", stored.taskId());
+    }
+
+    @Test
+    void aPatchTurnsTheLlmBackOn() {
+        StubSearchAgent agent = new StubSearchAgent("scored");
+        DefaultDigestService svc = service(agent);
+        Digest created = svc.create(withoutLlm(digest("1d", "job-fit", true, 10)));
+        search.result = List.of(hit("ent_a"));
+
+        Digest edited = svc.update(created.id(), new DigestPatch(null, null, null, null, null, null, null,
+                Patched.of(true), null, null, null, null, null, null));
+        svc.run(created.id());
+
+        Assertions.assertTrue(edited.useLlm());
+        Assertions.assertEquals(List.of("job-fit"), agent.taskIds);
+    }
+
+    @Test
+    void aFailedTaskKeepsTheResultsAndRecordsWhy() {
+        DefaultDigestService svc = service(StubSearchAgent.throwing(new IllegalStateException("LLM API 429")));
+        Digest created = svc.create(digest("1d", "job-fit", true, 10));
+        search.result = List.of(hit("ent_a"), hit("ent_b"));
+
+        DigestRun run = svc.run(created.id());
+
+        Assertions.assertNull(run.error());
+        Assertions.assertEquals("LLM API 429", run.taskError());
+        Assertions.assertEquals(2, run.items().size());
         Assertions.assertNull(run.taskOutput());
     }
 
@@ -524,7 +576,7 @@ class DefaultDigestServiceTest {
     }
 
     private static DigestPatch sendTo(List<String> channelIds) {
-        return new DigestPatch(null, null, null, null, null, null, null, null, null, null, null, null,
+        return new DigestPatch(null, null, null, null, null, null, null, null, null, null, null, null, null,
                 Patched.of(channelIds));
     }
 

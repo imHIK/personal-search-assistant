@@ -372,7 +372,8 @@ tasks are user-written and a digest can be pointed at any of them.
 
 **Impact:** Low today, and grows with use.
 
-**Workaround:** Pause the digest, lower `maxSources`, or point the task at a cheaper profile.
+**Workaround:** Set the digest's `useLlm` to `false` (the task is kept for when it goes back on), lower
+`maxSources`, or point the task at a cheaper profile.
 
 ---
 

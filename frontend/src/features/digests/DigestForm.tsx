@@ -48,6 +48,7 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
   const [window, setWindow] = useState(initial?.window ?? '')
   const [interval, setInterval] = useState(digestIntervalValue(initial?.interval ?? null))
   const [taskId, setTaskId] = useState(initial?.taskId ?? '')
+  const [useLlm, setUseLlm] = useState(initial?.useLlm ?? true)
   const [topK, setTopK] = useState(initial?.topK ?? 10)
   const [onePerDocument, setOnePerDocument] = useState((initial?.maxChunksPerEntity ?? 1) === 1)
   const [collapseDuplicates, setCollapseDuplicates] = useState(initial?.collapseDuplicates ?? true)
@@ -107,6 +108,7 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
       window: window || null,
       interval,
       taskId: taskId || null,
+      useLlm,
       topK,
       maxChunksPerEntity: onePerDocument ? 1 : null,
       collapseDuplicates,
@@ -183,6 +185,7 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
               id="digest-task"
               value={taskId}
               onChange={(event) => setTaskId(event.target.value)}
+              disabled={!useLlm}
               className="h-9 flex-1 text-[13px]"
             >
               <option value="">{labels.digests.taskFieldNone}</option>
@@ -199,6 +202,7 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
               {labels.digests.taskManage}
             </Link>
           </div>
+          <Toggle checked={useLlm} onCheckedChange={setUseLlm} label={labels.digests.useLlm} className="pt-2" />
         </Field>
 
         <div className="flex flex-wrap items-end gap-4">

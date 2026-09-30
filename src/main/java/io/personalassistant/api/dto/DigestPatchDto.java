@@ -37,6 +37,7 @@ public record DigestPatchDto(JsonNode body) {
                 window(patch),
                 schedule(patch),
                 patch.text("taskId"),
+                patch.bool("useLlm"),
                 patch.integer("topK"),
                 patch.bool("collapseDuplicates"),
                 patch.integer("maxChunksPerEntity"),

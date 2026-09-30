@@ -19,8 +19,8 @@ import java.util.Map;
  * field and leaves the history alone is the fix; {@link DigestService#resetHistory} is there for when
  * clearing it is what you actually meant.
  *
- * <p>{@code collapseDuplicates}, {@code onlyNew}, {@code enabled} and {@code topK} have no "off" to
- * clear to, so a null there means the field's default rather than an unset primitive.
+ * <p>{@code collapseDuplicates}, {@code onlyNew}, {@code enabled}, {@code useLlm} and {@code topK} have
+ * no "off" to clear to, so a null there means the field's default rather than an unset primitive.
  */
 public record DigestPatch(
         Patched<String> name,
@@ -30,6 +30,7 @@ public record DigestPatch(
         Patched<String> window,
         Patched<SyncSchedule> schedule,
         Patched<String> taskId,
+        Patched<Boolean> useLlm,
         Patched<Integer> topK,
         Patched<Boolean> collapseDuplicates,
         Patched<Integer> maxChunksPerEntity,
@@ -46,6 +47,7 @@ public record DigestPatch(
         window = Patched.orAbsent(window);
         schedule = Patched.orAbsent(schedule);
         taskId = Patched.orAbsent(taskId);
+        useLlm = Patched.orAbsent(useLlm);
         topK = Patched.orAbsent(topK);
         collapseDuplicates = Patched.orAbsent(collapseDuplicates);
         maxChunksPerEntity = Patched.orAbsent(maxChunksPerEntity);
@@ -60,7 +62,7 @@ public record DigestPatch(
                        Patched<SyncSchedule> schedule, Patched<String> taskId, Patched<Integer> topK,
                        Patched<Boolean> collapseDuplicates, Patched<Integer> maxChunksPerEntity,
                        Patched<Boolean> onlyNew, Patched<Boolean> enabled) {
-        this(name, query, knowledgeIds, filters, window, schedule, taskId, topK,
+        this(name, query, knowledgeIds, filters, window, schedule, taskId, null, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, null);
     }
 
@@ -83,6 +85,7 @@ public record DigestPatch(
                 window.orElse(existing.window()),
                 schedule.orElse(existing.schedule()),
                 taskId.orElse(existing.taskId()),
+                flag(useLlm.orElse(existing.useLlm()), true),
                 // A cleared topK is the default, not zero: the field has no "off".
                 topKOr(existing.topK()),
                 flag(collapseDuplicates.orElse(existing.collapseDuplicates()), false),

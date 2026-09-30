@@ -20,6 +20,7 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
   "window": null,                     // how far back a run looks; null = no time bound (the default)
   "interval": "1d",                   // or "cron"; resolved by the same ScheduleResolver as ingestion
   "taskId": "job-fit",                // a prompt-catalogue task over the results; null = results only
+  "useLlm": true,                     // false skips the task without forgetting it; default true
   "topK": 10,
   "collapseDuplicates": true,
   "maxChunksPerEntity": 1,
@@ -64,8 +65,10 @@ candidates. Without over-fetching, a digest whose top results are all familiar r
 new items sit just below the cut.
 
 **3. Optionally run a task.** Any task in the library — bundled or user-written, see
-[`tasks.md`](./tasks.md) — via `SearchAgent.runTaskWithSources`. An empty result set skips the call
-rather than spending it on a prompt with no sources.
+[`tasks.md`](./tasks.md) — via `SearchAgent.runTask`. An empty result set skips the call rather than
+spending it on a prompt with no sources, and `useLlm: false` skips it while keeping `taskId`, so the
+task comes back when the switch does. The task is the only LLM call a digest makes; with no task, or
+with the switch off, a run never reaches the LLM.
 
 ## Annotations: joining a reply back to the results
 
@@ -119,10 +122,15 @@ sends people to rewrite a query that was never the problem.
 
 ## Failures are recorded, not thrown
 
-A search or task failure is stored on the run as `error` and the run is saved anyway. A scheduled job
-that throws leaves no trace a user will ever see; "this digest has been broken for a week" has to be
-visible in the history, and the console shows a failed run rather than an empty one. A failed run
-records no items, so it also cannot poison the already-seen set.
+A search failure is stored on the run as `error` and the run is saved anyway. A scheduled job that
+throws leaves no trace a user will ever see; "this digest has been broken for a week" has to be visible
+in the history, and the console shows a failed run rather than an empty one. A failed run records no
+items, so it also cannot poison the already-seen set.
+
+A **task** failure is different: the search already succeeded, so the run keeps its items and records
+why the task failed as `taskError`, the way a search keeps its hits and reports `answerError`. Those
+items were delivered, so they count as reported; **reset history** replays them if you want them
+scored.
 
 ## Scheduling
 
@@ -201,7 +209,7 @@ queued once per channel when it is worth a message:
 
 | run | sent? |
 |---|---|
-| found items | yes — the items with their annotations, and the task's reply as a summary when it annotated nothing |
+| found items | yes — the items with their annotations, and the task's reply as a summary when it annotated nothing. A `taskError` goes in the intro |
 | failed | yes — a short "*name* failed" notice carrying the error |
 | quiet (nothing new) | no |
 

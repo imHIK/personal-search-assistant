@@ -67,6 +67,18 @@ class DigestMessagesTest {
     }
 
     @Test
+    void aFailedTaskIsExplainedAboveTheResults() {
+        DigestRun run = new DigestRun("run_1", "dig_1", Instant.now(), List.of(item("a", Map.of())), null,
+                1, 0, 0, null, "LLM API 429: quota exhausted");
+
+        PublishMessage message = DigestMessages.forRun(digest(true), run, null);
+
+        Assertions.assertEquals("New roles — 1 new result", message.title());
+        Assertions.assertTrue(message.intro().contains("LLM API 429: quota exhausted"), message.intro());
+        Assertions.assertEquals(1, message.items().size());
+    }
+
+    @Test
     void aFailedRunSaysWhy() {
         PublishMessage message = DigestMessages.forRun(digest(true), run(List.of(), null, "OpenSearch is down"), null);
 

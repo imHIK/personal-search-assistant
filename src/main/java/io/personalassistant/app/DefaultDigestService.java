@@ -91,7 +91,8 @@ public class DefaultDigestService implements DigestService {
         Digest stored = new Digest(
                 digest.id() == null || digest.id().isBlank() ? Ids.digest() : digest.id(),
                 digest.name(), digest.query(), digest.knowledgeIds(),
-                digest.filters(), digest.window(), digest.schedule(), digest.taskId(), digest.topK(),
+                digest.filters(), digest.window(), digest.schedule(), digest.taskId(), digest.useLlm(),
+                digest.topK(),
                 digest.collapseDuplicates(), digest.maxChunksPerEntity(), digest.onlyNew(),
                 digest.enabled(),
                 // Left null so the first run happens on the next tick rather than one whole interval
@@ -174,19 +175,26 @@ public class DefaultDigestService implements DigestService {
 
             List<DigestRun.Item> items = project(fresh);
             String taskOutput = null;
-            if (digest.taskId() != null && !fresh.isEmpty()) {
-                SearchAgent.TaskResult result = agent.runTask(digest.taskId(), digest.toQuery(), fresh);
-                taskOutput = result.reply();
-                items = annotate(digest, items, result);
+            String taskError = null;
+            if (digest.useLlm() && digest.taskId() != null && !fresh.isEmpty()) {
+                try {
+                    SearchAgent.TaskResult result = agent.runTask(digest.taskId(), digest.toQuery(), fresh);
+                    taskOutput = result.reply();
+                    items = annotate(digest, items, result);
+                } catch (RuntimeException e) {
+                    // The results are real and already found; a failed task costs only its annotations.
+                    taskError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    LOG.log(Level.WARNING, "Digest " + id + ": task " + digest.taskId() + " failed", e);
+                }
             }
             return record(digest, now, items, taskOutput, candidates, suppressed,
-                    outsideWindow(digest, candidates), null);
+                    outsideWindow(digest, candidates), null, taskError);
         } catch (RuntimeException e) {
             // A scheduled job that throws leaves no trace a user will ever see. Recording the failure
             // as a run is what makes "this digest has been broken for a week" visible in the console.
             LOG.log(Level.WARNING, "Digest " + id + " failed", e);
             return record(digest, now, List.of(), null, 0, 0, 0,
-                    e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), null);
         }
     }
 
@@ -375,9 +383,9 @@ public class DefaultDigestService implements DigestService {
 
     private DigestRun record(Digest digest, Instant ranAt, List<DigestRun.Item> items,
                              String taskOutput, int candidates, int suppressed, int outsideWindow,
-                             String error) {
-        DigestRun saved = digests.saveRun(new DigestRun(Ids.digestRun(), digest.id(), ranAt, items, taskOutput,
-                candidates, suppressed, outsideWindow, error));
+                             String error, String taskError) {
+        DigestRun saved = digests.saveRun(new DigestRun(Ids.digestRun(), digest.id(), ranAt, items,
+                taskOutput, candidates, suppressed, outsideWindow, error, taskError));
         publish(digest, saved);
         return saved;
     }

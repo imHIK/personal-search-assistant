@@ -29,6 +29,7 @@ import java.util.Map;
  * @param schedule     when it runs, as a cron or interval — resolved by the same
  *                     {@code ScheduleResolver} the ingestion schedulers use
  * @param taskId       a prompt-catalogue task to run over the results, or null for results only
+ * @param useLlm       false skips the task without forgetting which one it is
  * @param topK         results to keep
  * @param collapseDuplicates group near-identical results
  * @param maxChunksPerEntity cap chunks per document; 1 gives one result per document
@@ -56,6 +57,7 @@ public record Digest(
         String window,
         SyncSchedule schedule,
         String taskId,
+        boolean useLlm,
         int topK,
         boolean collapseDuplicates,
         Integer maxChunksPerEntity,
@@ -75,7 +77,7 @@ public record Digest(
                   Map<String, Object> filters, String window, SyncSchedule schedule, String taskId,
                   int topK, boolean collapseDuplicates, Integer maxChunksPerEntity, boolean onlyNew,
                   boolean enabled, Instant nextRunAt, Instant createdAt, Instant updatedAt) {
-        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, topK,
+        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, true, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
                 updatedAt, null, List.of());
     }
@@ -86,7 +88,7 @@ public record Digest(
                   int topK, boolean collapseDuplicates, Integer maxChunksPerEntity, boolean onlyNew,
                   boolean enabled, Instant nextRunAt, Instant createdAt, Instant updatedAt,
                   Instant historyResetAt) {
-        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, topK,
+        this(id, name, query, knowledgeIds, filters, window, schedule, taskId, true, topK,
                 collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
                 updatedAt, historyResetAt, List.of());
     }
@@ -124,28 +126,28 @@ public record Digest(
     }
 
     public Digest withNextRunAt(Instant next) {
-        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
-                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, next,
-                createdAt, updatedAt, historyResetAt, channelIds);
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule, taskId, useLlm,
+                topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, next, createdAt,
+                updatedAt, historyResetAt, channelIds);
     }
 
     public Digest withEnabled(boolean nowEnabled, Instant updatedAt) {
-        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
-                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, nowEnabled, nextRunAt,
-                createdAt, updatedAt, historyResetAt, channelIds);
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule, taskId, useLlm,
+                topK, collapseDuplicates, maxChunksPerEntity, onlyNew, nowEnabled, nextRunAt, createdAt,
+                updatedAt, historyResetAt, channelIds);
     }
 
     /** The same digest, marked as edited at {@code at}. */
     public Digest withTouched(Instant at) {
-        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
-                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
-                createdAt, at, historyResetAt, channelIds);
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule, taskId, useLlm,
+                topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
+                at, historyResetAt, channelIds);
     }
 
     /** Start the already-seen set again from {@code at}, keeping every recorded run. */
     public Digest withHistoryResetAt(Instant at) {
-        return new Digest(id, name, query, knowledgeIds, filters, window, schedule,
-                taskId, topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt,
-                createdAt, at, at, channelIds);
+        return new Digest(id, name, query, knowledgeIds, filters, window, schedule, taskId, useLlm,
+                topK, collapseDuplicates, maxChunksPerEntity, onlyNew, enabled, nextRunAt, createdAt,
+                at, at, channelIds);
     }
 }

@@ -294,9 +294,9 @@ function SummaryStrip({ digest }: { digest: Digest }) {
     {
       icon: Sparkles,
       label: labels.digests.taskLabel,
-      value: digest.taskId
-        ? (task?.name ?? labels.digests.taskMissing)
-        : labels.digests.taskNone,
+      value: !digest.taskId
+        ? labels.digests.taskNone
+        : `${task?.name ?? labels.digests.taskMissing}${digest.useLlm ? '' : ` · ${labels.digests.useLlmOff}`}`,
     },
     {
       icon: Send,

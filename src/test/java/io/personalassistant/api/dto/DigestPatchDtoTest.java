@@ -64,6 +64,14 @@ class DigestPatchDtoTest {
     }
 
     @Test
+    void useLlmIsKeptWhenAbsentSetWhenSentAndDefaultsOnWhenCleared() {
+        Assertions.assertTrue(patch("{\"name\": \"Renamed\"}").applyTo(existing()).useLlm());
+        Digest off = patch("{\"useLlm\": false}").applyTo(existing());
+        Assertions.assertFalse(off.useLlm());
+        Assertions.assertTrue(patch("{\"useLlm\": null}").applyTo(off).useLlm());
+    }
+
+    @Test
     void anEmptyBodyChangesNothing() {
         Digest before = existing();
         Digest edited = patch("{}").applyTo(before);

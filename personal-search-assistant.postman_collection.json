@@ -482,7 +482,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"backend engineer java\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
+              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"backend engineer java\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"useLlm\": true,\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -490,7 +490,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "digests"]
             },
-            "description": "A digest needs a query; a blank one is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use. cron is UTC, 5-field or Quartz 6-field; an unparseable one is a 400.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
+            "description": "A digest needs a query; a blank one is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use. cron is UTC, 5-field or Quartz 6-field; an unparseable one is a 400.\n\ntaskId names a task to run over the results — a bundled one from config/prompts.json (job-fit scores postings) or one of your own from the Tasks API — or leave it null for results only. useLlm false skips that task without forgetting it; a task failure keeps the run's items and sets taskError on the run.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
           }
         },
         {
@@ -523,7 +523,7 @@
               "path": ["api", "digests", ":id"],
               "variable": [{ "key": "id", "value": "{{digestId}}" }]
             },
-            "description": "The only editable field. A paused digest is never scheduled but can still be run by hand — that is the difference between pausing and deleting.\n\nFuller editing is delete-and-recreate."
+            "description": "PATCH edits any field: an absent key is unchanged, null clears it (booleans and topK go back to their default). {\"enabled\": false} pauses — a paused digest is never scheduled but can still be run by hand, which is the difference between pausing and deleting. {\"useLlm\": false} skips the digest's task without forgetting taskId; {\"useLlm\": true} turns it back on."
           }
         },
         {

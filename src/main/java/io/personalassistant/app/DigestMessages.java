@@ -55,7 +55,8 @@ final class DigestMessages {
         int count = items.size();
         String title = digest.name() + " — " + count + (digest.onlyNew() ? " new" : "")
                 + (count == 1 ? " result" : " results");
-        return new PublishMessage(title, null, items, link, annotated ? null : run.taskOutput());
+        String intro = run.taskError() == null ? null : "The task could not run: " + run.taskError();
+        return new PublishMessage(title, intro, items, link, annotated ? null : run.taskOutput());
     }
 
     /**

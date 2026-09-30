@@ -36,6 +36,7 @@ import java.util.Map;
  *                   between "your query matches nothing" and "widen the look-back"
  * @param error      why the run failed, or null. A failed run is still recorded: a digest that has been
  *                   silently erroring for a week should be visible as such rather than just quiet
+ * @param taskError  why the task failed while the search succeeded, or null. The items are kept
  */
 public record DigestRun(
         String id,
@@ -46,7 +47,8 @@ public record DigestRun(
         int candidates,
         int suppressed,
         int outsideWindow,
-        String error) {
+        String error,
+        String taskError) {
 
     public DigestRun {
         items = items == null ? List.of() : List.copyOf(items);
@@ -64,7 +66,7 @@ public record DigestRun(
     /** Runs recorded before the counters existed, and tests that do not care about them. */
     public DigestRun(String id, String digestId, Instant ranAt, List<Item> items, String taskOutput,
                      String error) {
-        this(id, digestId, ranAt, items, taskOutput, items == null ? 0 : items.size(), 0, 0, error);
+        this(id, digestId, ranAt, items, taskOutput, items == null ? 0 : items.size(), 0, 0, error, null);
     }
 
     /**

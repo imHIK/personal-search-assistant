@@ -14,6 +14,7 @@ import java.util.Map;
  * @param window   look-back window, e.g. {@code "1d"}; null for no time bound
  * @param interval how often it runs, e.g. {@code "1d"}; cron wins if both are set
  * @param taskId   a prompt-catalogue task to run over the results, or null for results only
+ * @param useLlm   false skips the task without forgetting it. Defaults true
  * @param onlyNew  drop results an earlier run already reported. Defaults true — that is what makes a
  *                 digest a digest rather than a repeated search
  * @param channelIds publishing channels each run that finds something or fails is sent to; null or
@@ -31,6 +32,7 @@ public record DigestDto(
         String cron,
         String interval,
         String taskId,
+        Boolean useLlm,
         Integer topK,
         Boolean collapseDuplicates,
         Integer maxChunksPerEntity,
@@ -57,6 +59,7 @@ public record DigestDto(
                 DigestPatchDto.checkedWindow(window),
                 schedule(),
                 taskId,
+                useLlm == null || useLlm,
                 topK == null ? Digest.DEFAULT_TOP_K : topK,
                 collapseDuplicates != null && collapseDuplicates,
                 maxChunksPerEntity,
@@ -88,8 +91,8 @@ public record DigestDto(
         return new DigestDto(d.id(), d.name(), d.query(), d.knowledgeIds(),
                 d.filters(), d.window(), d.schedule().cron(),
                 d.schedule().interval() == null ? null : d.schedule().interval().toString(),
-                d.taskId(), d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(), d.onlyNew(),
-                d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt(),
+                d.taskId(), d.useLlm(), d.topK(), d.collapseDuplicates(), d.maxChunksPerEntity(),
+                d.onlyNew(), d.enabled(), d.nextRunAt(), d.createdAt(), d.updatedAt(), d.historyResetAt(),
                 d.channelIds());
     }
 }

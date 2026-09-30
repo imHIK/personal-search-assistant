@@ -360,6 +360,8 @@ export interface Digest {
   interval: string | null
   /** A prompt-catalogue task run over the results, or null for results only. */
   taskId: string | null
+  /** False skips the task without forgetting it. */
+  useLlm: boolean
   topK: number
   collapseDuplicates: boolean
   maxChunksPerEntity: number | null
@@ -424,6 +426,8 @@ export interface DigestRun {
   outsideWindow: number
   /** Why the run failed. A failed run is still recorded, so a broken digest is visible. */
   error: string | null
+  /** The task failed while the search succeeded; the items are kept. */
+  taskError: string | null
 }
 
 /** What a candidate company name resolves to, before it is committed to a knowledge. */

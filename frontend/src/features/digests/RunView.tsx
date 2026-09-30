@@ -130,6 +130,16 @@ export function RunBody({
 
   return (
     <div className="space-y-3">
+      {run.taskError && (
+        <div className="flex gap-2">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[var(--tone-wait)]" aria-hidden />
+          <div className="min-w-0">
+            <p className="text-xs text-[var(--text-muted)]">{labels.digests.taskFailed}</p>
+            <p className="text-[11px] leading-relaxed text-[var(--text-subtle)]">{run.taskError}</p>
+          </div>
+        </div>
+      )}
+
       {run.taskOutput && !annotated && (
         <section className="rounded-lg border border-[var(--accent)]/25 bg-[var(--accent-subtle)]/40 p-3">
           <p className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--accent)]">

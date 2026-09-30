@@ -32,7 +32,8 @@ public record DigestRunDto(
         int candidates,
         int suppressed,
         int outsideWindow,
-        String error) {
+        String error,
+        String taskError) {
 
     /**
      * @param annotations what the digest's task said about this item, keyed by whatever the task asked
@@ -49,6 +50,6 @@ public record DigestRunDto(
                     item.score(), item.snippet(), item.annotations()));
         }
         return new DigestRunDto(run.id(), run.digestId(), run.ranAt(), items, run.taskOutput(),
-                run.candidates(), run.suppressed(), run.outsideWindow(), run.error());
+                run.candidates(), run.suppressed(), run.outsideWindow(), run.error(), run.taskError());
     }
 }

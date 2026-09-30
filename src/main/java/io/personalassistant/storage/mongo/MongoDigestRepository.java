@@ -176,6 +176,7 @@ public class MongoDigestRepository implements DigestRepository {
                         .append("interval", d.schedule().interval() == null
                                 ? null : d.schedule().interval().toString()))
                 .append("taskId", d.taskId())
+                .append("useLlm", d.useLlm())
                 .append("topK", d.topK())
                 .append("collapseDuplicates", d.collapseDuplicates())
                 .append("maxChunksPerEntity", d.maxChunksPerEntity())
@@ -203,6 +204,8 @@ public class MongoDigestRepository implements DigestRepository {
                         : interval == null ? SyncSchedule.NONE
                                 : SyncSchedule.ofInterval(java.time.Duration.parse(interval)),
                 d.getString("taskId"),
+                // Missing on digests stored before the switch existed, which all used their task.
+                !Boolean.FALSE.equals(d.getBoolean("useLlm")),
                 intValue(d.get("topK")),
                 Boolean.TRUE.equals(d.getBoolean("collapseDuplicates")),
                 d.get("maxChunksPerEntity") instanceof Number n ? n.intValue() : null,
@@ -235,7 +238,8 @@ public class MongoDigestRepository implements DigestRepository {
                 .append("candidates", run.candidates())
                 .append("suppressed", run.suppressed())
                 .append("outsideWindow", run.outsideWindow())
-                .append("error", run.error());
+                .append("error", run.error())
+                .append("taskError", run.taskError());
     }
 
     private DigestRun fromRunDoc(Document d) {
@@ -266,7 +270,8 @@ public class MongoDigestRepository implements DigestRepository {
                 d.get("suppressed") instanceof Number n ? n.intValue() : 0,
                 // Absent on every run written before the window diagnostic existed.
                 d.get("outsideWindow") instanceof Number n ? n.intValue() : 0,
-                d.getString("error"));
+                d.getString("error"),
+                d.getString("taskError"));
     }
 
     private static List<String> stringList(Object value) {
