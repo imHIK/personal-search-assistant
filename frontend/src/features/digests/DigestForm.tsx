@@ -202,8 +202,9 @@ export function DigestForm({ initial, onSubmit, onCancel, pending, submitLabel }
               {labels.digests.taskManage}
             </Link>
           </div>
-          <Toggle checked={useLlm} onCheckedChange={setUseLlm} label={labels.digests.useLlm} className="pt-2" />
         </Field>
+
+        <Toggle checked={useLlm} onCheckedChange={setUseLlm} label={labels.digests.useLlm} className="-mt-2" />
 
         <div className="flex flex-wrap items-end gap-4">
           <label className="space-y-1">
