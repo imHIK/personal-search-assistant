@@ -120,7 +120,7 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
 
 - Logging is `java.util.logging.Logger`: `private static final Logger LOG = Logger.getLogger(X.class.getName())`.
   Not SLF4J, not JBoss `Log`.
-- Records for all DTOs and domain model, with `@param` Javadoc on components.
+- Records for all DTOs and domain model.
 - Constructor injection with `@Inject` on the constructor + `private final` fields — but `@ConfigProperty`
   fields are **package-private on purpose** so unit tests can set them directly (`runner.embedBatch = 64;`).
 - **A text config property that may legitimately be unset is `Optional<String>`, read through
@@ -131,7 +131,12 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
   `app.scheduler.default-interval=1d`) stay plain `String` with a non-empty `defaultValue`.
 - Explicit single-type imports, no wildcards; static imports first, then one alphabetical block
   (Spotless enforces this). 4-space indent, ~110 col.
-- Javadoc explains *why* — rationale, trade-offs, invariants. Match that density.
+- **Comments are the exception.** Write one only when deleting it would lead a competent reader into a
+  mistake: a non-obvious invariant or ordering constraint, a workaround for an external quirk, a deliberate
+  choice that looks like a bug, a tool directive, or an interface contract the signature can't express
+  (idempotent, fenced, never throws). One or two lines. No class essays, no `@param`/`@return` that
+  restates the name, no history ("used to…"), no roadmap, no restating the code. Design rationale belongs
+  in `docs/*.md`.
 
 ## Testing
 
