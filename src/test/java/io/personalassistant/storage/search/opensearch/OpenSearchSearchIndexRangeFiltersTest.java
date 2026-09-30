@@ -38,19 +38,19 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void bothBoundsAreCarried() {
-        JsonNode bounds = filtersFor(Map.of("metadata.compMin",
-                new java.util.LinkedHashMap<>(Map.of("gte", 150000, "lte", 250000))))
-                .get(0).get("range").get("metadata.compMin");
+        JsonNode bounds = filtersFor(Map.of("metadata.sourceRank",
+                new java.util.LinkedHashMap<>(Map.of("gte", 10, "lte", 100))))
+                .get(0).get("range").get("metadata.sourceRank");
 
-        assertEquals(150000, bounds.get("gte").asInt());
-        assertEquals(250000, bounds.get("lte").asInt());
+        assertEquals(10, bounds.get("gte").asInt());
+        assertEquals(100, bounds.get("lte").asInt());
     }
 
     @Test
     void numericBoundsStayNumbersRatherThanStrings() {
-        // A quoted number against a long field makes the comparison lexicographic, so "9" > "150000".
-        JsonNode gte = filtersFor(Map.of("metadata.compMin", Map.of("gte", 150000L)))
-                .get(0).get("range").get("metadata.compMin").get("gte");
+        // A quoted number against a numeric field makes the comparison lexicographic, so "9" > "100".
+        JsonNode gte = filtersFor(Map.of("metadata.sourceRank", Map.of("gte", 100L)))
+                .get(0).get("range").get("metadata.sourceRank").get("gte");
 
         assertTrue(gte.isNumber(), "numeric bound must not be serialised as a string: " + gte);
     }

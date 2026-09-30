@@ -19,10 +19,8 @@ import java.util.OptionalInt;
  * Ashby job-board connector. One iterable per board name (the {@code <name>} in
  * {@code jobs.ashbyhq.com/<name>}); the posting API returns the whole board in one call.
  *
- * <p>Ashby is the richest of the three sources: it states {@code isRemote} structurally rather than
- * leaving it to prose, and with {@code includeCompensation=true} it publishes real pay bands. Both are
- * preferred over the inferred values from {@code AtsNormalization} whenever present — a stated fact
- * always beats a guess.
+ * <p>Ashby states {@code isRemote} structurally rather than leaving it to prose, which is preferred over
+ * the value inferred by {@code AtsNormalization} whenever present — a stated fact always beats a guess.
  */
 @ApplicationScoped
 public class AshbyPlatform implements BoardPlatform {
@@ -105,7 +103,6 @@ public class AshbyPlatform implements BoardPlatform {
         putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         Instant postedAt = AtsNormalization.instantOrNull(publishedAt);
         putIfPresent(metadata, "postedAt", postedAt);
-        applyCompensation(metadata, job, descriptionText);
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);
@@ -130,30 +127,6 @@ public class AshbyPlatform implements BoardPlatform {
                 // beats the knowledge-level window entirely (see RetentionSweeper).
                 AtsNormalization.instantOrNull(job.path("closedAt").asText(null)),
                 false);
-    }
-
-    /** Structured pay bands when Ashby publishes them, else the conservative text scrape. */
-    private static void applyCompensation(Map<String, Object> metadata, JsonNode job, String descriptionText) {
-        JsonNode summary = job.path("compensation").path("summaryComponents");
-        for (JsonNode component : summary) {
-            if (!"Salary".equalsIgnoreCase(component.path("compensationType").asText(""))) {
-                continue;
-            }
-            JsonNode min = component.path("minValue");
-            JsonNode max = component.path("maxValue");
-            if (min.isNumber() && max.isNumber()) {
-                metadata.put("compMin", min.asLong());
-                metadata.put("compMax", max.asLong());
-                putIfPresent(metadata, "compCurrency", nullableText(component.path("currencyCode")));
-                return;
-            }
-        }
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
     }
 
     private static String firstNonBlank(String a, String b) {

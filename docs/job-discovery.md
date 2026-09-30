@@ -13,7 +13,7 @@ One connector, one prompt, and one row of config. That is the whole of it:
 | `job-fit` prompt and task | `config/prompts.json` | Config, not code |
 | The daily digest itself | one row in `digests` | Data, not code |
 | Ageing closed postings out | retention — [`knowledge-lifecycle.md`](./knowledge-lifecycle.md) §4b | Generic |
-| Filtering by company / remote / pay / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
+| Filtering by company / remote / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | One result per posting | results are one per entity on every search — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | Collapsing the same role from two boards | duplicate collapsing | Generic |
 | Scoring the shortlist and delivering it | [`digests.md`](./digests.md) | Generic |
@@ -112,25 +112,10 @@ often no direct apply link — and the big ones are closed to new users. Adzuna'
 live and free, but it does not reach Naukri's inventory either. With five platforms in play the direct
 route now has both the better data and the breadth, so Adzuna stays deferred; see `ROADMAP.md`.
 
-## Compensation: expect it to be absent
+## Compensation is not extracted
 
-`metadata.compMin`/`compMax` parse Indian notation — Indian digit grouping (`₹15,00,000`), `LPA`,
-lakh and crore — as well as the western forms. In practice that will almost never fire on these
-boards.
-
-Of **211 India-located postings** sampled across the platforms, **0** stated pay in any
-form. US postings do (**9** of 1,426 sampled parsed a real band, and the true rate is higher — the
-sample truncated long descriptions and comp usually sits at the end), because pay-transparency law in
-several US states requires it. India has no such requirement.
-
-The practical consequence: **a filter on `metadata.compMin` excludes nearly every Indian role**, since
-a posting with no stated pay has no value to compare. Filter on company, location, seniority or
-posted-date instead, and treat comp as a bonus when it happens to be there.
-
-> **A comp filter without a currency filter is meaningless.** `compMin`/`compMax` are plain numbers in
-> the index, so `compMin >= 150000` reads as USD on one posting and INR on the next — a filter that
-> looks precise and is not. `metadata.compCurrency` is recorded alongside whenever a range is parsed;
-> pair the two, e.g. `{"metadata.compCurrency": "INR", "metadata.compMin": {"gte": 1500000}}`.
+Of **211 India-located postings** sampled across the platforms, **0** stated pay in any form, so pay
+is not parsed and there is no pay filter. It is still in the posting text the `job-fit` task reads.
 
 ## Things to know before trusting the output
 
@@ -143,11 +128,10 @@ posted-date instead, and treat comp as a bonus when it happens to be there.
   that does not fit them drops the tail silently, since `AnswerPromptBuilder` stops at the budget. That
   one request is ~20k tokens, which is why `lite` is on Gemini rather than Groq — see
   [providers.md](./providers.md#llm-profiles-per-role-model-selection).
-- **Seniority, remoteness and pay are only as good as the posting.** The normalisers return null rather
+- **Seniority and remoteness are only as good as the posting.** The normalisers return null rather
   than guessing, so a filter on `metadata.seniority` silently excludes every posting whose title states
-  no level — which is many of them, and a filter on comp excludes nearly every Indian one. Prefer
-  filters on facts boards state structurally (`metadata.company`, `metadata.location`, Ashby's
-  `remote` and pay bands).
+  no level — which is many of them. Prefer filters on facts boards state structurally
+  (`metadata.company`, `metadata.location`, Ashby's `remote`).
 - **A closed posting lingers** until its retention window elapses; it stops appearing in *digests*
   immediately, since the window is a day. See [L2b](./limitations.md).
 

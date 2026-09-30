@@ -220,12 +220,6 @@ public class WorkdayPlatform implements BoardPlatform {
         putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         // postedOn is relative prose ("Posted Today"), so startDate is the only usable date.
         putIfPresent(metadata, "postedAt", AtsNormalization.instantOrNull(startDate + "T00:00:00Z"));
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);

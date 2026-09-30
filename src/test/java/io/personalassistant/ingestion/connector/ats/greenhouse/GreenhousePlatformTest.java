@@ -99,16 +99,6 @@ class GreenhousePlatformTest {
     }
 
     @Test
-    void extractsAnExplicitSalaryRangeButNotAYearsOfExperienceRange() {
-        List<RawItem> items = grab();
-
-        Assertions.assertEquals(150_000L, items.get(0).metadata().get("compMin"));
-        Assertions.assertEquals(190_000L, items.get(0).metadata().get("compMax"));
-        Assertions.assertNull(items.get(1).metadata().get("compMin"),
-                "'2 - 5 years experience' must not be read as compensation");
-    }
-
-    @Test
     void greenhouseStatesNoCloseDateSoEntityExpiryIsLeftToTheKnowledgeWindow() {
         Assertions.assertNull(grab().get(0).expiresAt());
     }

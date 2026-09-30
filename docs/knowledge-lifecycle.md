@@ -392,9 +392,8 @@ code you write for a new integration is a `SourceConnector` (plus a `SourceType`
 
 ### The connector contract (what you implement)
 
-Written out in full below to show the whole surface. In practice most sources don't implement `grab`
-by hand: extend **`TokenWindowGrabber`** for token-paged APIs (as Gmail and Drive do) or
-**`TimeWindowGrabber`** for keyset APIs that resume by `(timestamp, id)` with no page token.
+Written out in full below to show the whole surface. In practice token-paged sources don't implement
+`grab` by hand: they extend **`TokenWindowGrabber`**, as Gmail and Drive do.
 
 ```java
 @ApplicationScoped

@@ -31,15 +31,6 @@ class AshbyPlatformTest {
     }
 
     @Test
-    void prefersStructuredCompensationOverScrapingTheDescription() {
-        RawItem engineer = grab().get(0);
-
-        Assertions.assertEquals(160_000L, engineer.metadata().get("compMin"));
-        Assertions.assertEquals(200_000L, engineer.metadata().get("compMax"));
-        Assertions.assertEquals("USD", engineer.metadata().get("compCurrency"));
-    }
-
-    @Test
     void prefersTheStatedRemoteFlagOverInferringItFromProse() {
         List<RawItem> items = grab();
 

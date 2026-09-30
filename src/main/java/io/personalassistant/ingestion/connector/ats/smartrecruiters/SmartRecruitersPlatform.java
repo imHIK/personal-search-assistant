@@ -159,12 +159,6 @@ public class SmartRecruitersPlatform implements BoardPlatform {
         putIfPresent(metadata, "team", nullableText(detail.path("department").path("label")));
         putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(companyName, title, location));
         putIfPresent(metadata, "postedAt", AtsNormalization.instantOrNull(releasedDate));
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);

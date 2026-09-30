@@ -27,9 +27,8 @@ import java.util.Set;
  * connector just returns the next page + updated cursor + whether more remain. It never branches on a
  * direction; the framework tracks that on the {@link io.personalassistant.domain.model.Cursor} row and
  * uses it only to seed the window and to pick the resting status (backfill drains to {@code EXHAUSTED},
- * incremental parks {@code IDLE}). Rather than implement {@link #grab} by hand, most sources extend a
- * ready-made base: {@link TokenWindowGrabber} for token-paged APIs (Gmail, Drive), or
- * {@link TimeWindowGrabber} for keyset APIs that resume by {@code (timestamp, id)} with no page token.
+ * incremental parks {@code IDLE}). Token-paged APIs (Gmail, Drive) extend {@link TokenWindowGrabber}
+ * rather than implement {@link #grab} by hand.
  *
  * <p>Connectors get real freedom here: discover whatever iterables make sense (or a single one),
  * paginate however the source works, declare which directions they support, and decide what

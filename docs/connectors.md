@@ -389,8 +389,7 @@ Per-platform quirks:
 - **Lever** — publishes **no update timestamp**, only `createdAt`. A checksum from `createdAt` alone
   would never move, so an edited posting would be skipped forever (an invariant-3 violation). The
   checksum hashes the body too.
-- **Ashby** — the richest: states `isRemote` structurally, publishes real pay bands with
-  `includeCompensation`, and is the only one that may carry a close date, which becomes
+- **Ashby** — states `isRemote` structurally, and is the only one that may carry a close date, which becomes
   `Entity.expiresAt` and beats the knowledge-level retention window. It publishes **`publishedAt` and
   no `updatedAt`**; reading the absent field made the checksum a constant, so an edited posting was
   never re-indexed — an invariant-3 violation that survived because the test fixture invented the

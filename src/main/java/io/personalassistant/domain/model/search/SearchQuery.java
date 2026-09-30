@@ -12,7 +12,7 @@ import java.util.Map;
  *                     field ("sourceType", "uri") or a nested metadata field ("metadata.author").
  *                     A scalar value is an exact term match. A {@code Map} value carrying any of
  *                     {@code gte}/{@code gt}/{@code lte}/{@code lt} becomes a range instead, which is
- *                     how "posted in the last week" or "pays at least X" are expressed
+ *                     how "posted in the last week" is expressed
  * @param topK         number of final results to return
  * @param mode         retrieval strategy
  * @param answer       whether to run the agent and synthesize a grounded answer

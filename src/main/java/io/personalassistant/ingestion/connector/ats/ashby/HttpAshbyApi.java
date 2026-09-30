@@ -36,9 +36,7 @@ public class HttpAshbyApi implements AshbyApi {
 
     @Override
     public JsonNode listJobs(String boardName) {
-        // includeCompensation asks Ashby for structured pay bands, which are far more reliable than
-        // scraping a range out of the description prose.
-        String url = baseUrl + "/" + encode(boardName) + "?includeCompensation=true";
+        String url = baseUrl + "/" + encode(boardName);
         return http.getJson(url, timeoutSeconds, rateLimit());
     }
 

@@ -6,8 +6,8 @@ import type { Blob, SourceType } from '@/api/types'
  * so no component ever branches on a field name or a SourceType.
  *
  * A spec's `kind` is what turns a control's value into a filter value. The backend reads a scalar
- * as an exact term and a `{ gte, lte }` map as a range, which is what lets "posted this week" and
- * "pays at least" exist at all — they are not expressible as terms.
+ * as an exact term and a `{ gte, lte }` map as a range, which is what lets "posted this week" exist at
+ * all — it is not expressible as a term.
  *
  * To offer a new filter: append an object. To offer it only for certain sources, list them in
  * `sourceTypes`; a spec with none is offered everywhere.
@@ -89,15 +89,6 @@ export const searchFilters: SearchFilterSpec[] = [
       { value: '7', label: 'Last week' },
       { value: '30', label: 'Last month' },
     ],
-    sourceTypes: jobBoards,
-  },
-  {
-    id: 'pay',
-    field: 'metadata.compMin',
-    kind: 'min',
-    label: 'Pays at least',
-    hint: 'Only postings that state a pay range can match.',
-    placeholder: '150000',
     sourceTypes: jobBoards,
   },
 ]

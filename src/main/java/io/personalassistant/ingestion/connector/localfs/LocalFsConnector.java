@@ -33,9 +33,8 @@ import java.util.stream.Stream;
  * immediate sub-directory (walked recursively) plus a {@code root} iterable for the files directly
  * under the root — so large trees page independently with no overlap.
  *
- * <p>Unlike the cloud connectors it does <em>not</em> extend a shared grabber base
- * ({@code TokenWindowGrabber}/{@code TimeWindowGrabber}): a filesystem has no continuation token and no
- * server-side time filter, so it implements {@link SourceConnector} directly and reads the walk's sense
+ * <p>Unlike the cloud connectors it does <em>not</em> extend {@code TokenWindowGrabber}: a filesystem has
+ * no continuation token and no server-side time filter, so it implements {@link SourceConnector} directly and reads the walk's sense
  * (forward vs. backfill) from the seed {@link TimeWindow}'s shape.
  *
  * <h2>Why pagination is direction-specific</h2>

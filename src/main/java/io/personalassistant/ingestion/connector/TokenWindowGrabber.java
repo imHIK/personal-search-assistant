@@ -35,12 +35,8 @@ import java.util.List;
  * <p>Because both walks fully drain their window before advancing, the order the source returns rows in
  * is a free, source-native choice — Gmail can stay newest-first, Drive can order by the window's sense.
  *
- * <h2>Choosing this base vs. {@link TimeWindowGrabber}</h2>
- * Use this base when the source's <em>only</em> continuation handle is an opaque token (it cannot
- * express "give me rows after {@code (timestamp, id)}"). Use {@link TimeWindowGrabber} instead when the
- * source supports keyset queries over a unique, orderable id — that path resumes purely by timestamp,
- * carries no token, and so is immune to token expiry. Sources that fit neither (e.g. a filesystem walk)
- * implement {@link SourceConnector} directly.
+ * <p>For sources whose continuation handle is an opaque page token. Sources that fit no such base (e.g.
+ * a filesystem walk) implement {@link SourceConnector} directly.
  */
 public abstract class TokenWindowGrabber implements SourceConnector {
 

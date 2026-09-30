@@ -55,7 +55,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §2/§4 **Cursor** (first-class) | `domain.model.Cursor` + `enums.CursorStatus`, `enums.CursorDirection` |
 | §4 **Cursor position** (source-defined) | `domain.model.CursorPosition` — free-form, multi-field pagination state the connector owns |
 | §2 **Iterable** | `ingestion.connector.SourceIterable` |
-| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabContext`, `GrabResult`, and the `TokenWindowGrabber` / `TimeWindowGrabber` bases |
+| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabContext`, `GrabResult`, and the `TokenWindowGrabber` base |
 | §2/§7 **PermitService** | `common.concurrency.PermitService` + `InMemoryPermitService`, `Permit`, `ScopeLimit` |
 | §3 Knowledge object + lifecycle | `app.DefaultKnowledgeService` (`add`: verify → anchor=now → discover → cursors → ACTIVE) |
 | §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / SUSPENDED / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
@@ -344,9 +344,7 @@ can work the way its source does:
   and get their credentials from a reusable `Connection` rather than from the knowledge. See
   [`connectors.md`](./connectors.md).
 
-Rather than implement `grab` by hand, most sources extend a ready-made base: **`TokenWindowGrabber`**
-for token-paged APIs (Gmail, Drive) or **`TimeWindowGrabber`** for keyset APIs that resume by
-`(timestamp, id)` with no page token.
+Token-paged APIs (Gmail, Drive) extend **`TokenWindowGrabber`** rather than implement `grab` by hand.
 
 Implement those plus `type()` and `verify()`, annotate `@ApplicationScoped`, and add the enum
 constant to `SourceType`. Nothing else changes — the ingestion loop, cursors, permits, indexing and

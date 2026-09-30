@@ -34,9 +34,9 @@ public class OpenSearchIndexInitializer {
      * Explicit types for the metadata facets that filters compare on. {@code metadata} stays a dynamic
      * object — carrying arbitrary connector facets is the whole point of it — but the fields a range
      * filter targets cannot be left to dynamic inference, because inference is decided by whichever
-     * document happens to be indexed first. A posting whose {@code compMin} is absent, or one board
-     * emitting it as a string, would type the field as {@code text} for the life of the index, and every
-     * later numeric comparison would silently be lexicographic or match nothing at all.
+     * document happens to be indexed first. One board emitting {@code sourceRank} as a string would type
+     * the field as {@code text} for the life of the index, and every later numeric comparison would
+     * silently be lexicographic or match nothing at all.
      *
      * <p>Adding sub-fields to an existing object mapping is an <em>additive</em> change, which OpenSearch
      * accepts in place — no alias flip, no re-index, invariant 5 untouched (the embedding width does not
@@ -56,11 +56,8 @@ public class OpenSearchIndexInitializer {
               "dedupeKey":   { "type": "keyword" },
               "applyUrl":    { "type": "keyword" },
               "team":        { "type": "keyword" },
-              "compCurrency":{ "type": "keyword" },
               "remote":      { "type": "boolean" },
               "sourceRank":  { "type": "integer" },
-              "compMin":     { "type": "long" },
-              "compMax":     { "type": "long" },
               "postedAt":    { "type": "date" }
             }""";
 

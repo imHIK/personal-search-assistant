@@ -38,11 +38,11 @@ warning and continues if OpenSearch is unreachable). `dimension` is interpolated
 > **Typed `metadata` sub-fields, applied additively.** `metadata` stays a dynamic object — carrying
 > arbitrary connector facets is the point of it — but the fields a *filter* compares on cannot be left
 > to dynamic inference, because inference is settled by whichever document is indexed first. One board
-> emitting `compMin` as a string, or the first posting simply not having it, would fix the field as
-> `text` for the life of the index and make every later numeric comparison lexicographic or empty.
-> `company`, `location`, `board`, `seniority`, `dedupeKey`, `applyUrl`, `team` and `compCurrency` are
-> `keyword`; `remote` is `boolean`; `sourceRank` is `integer`; `compMin`/`compMax` are `long`;
-> `postedAt` is `date`.
+> emitting `sourceRank` as a string would fix the field as `text` for the life of the index and make
+> every later numeric comparison lexicographic or empty. `company`, `location`, `board`, `seniority`,
+> `dedupeKey`, `applyUrl` and `team` are `keyword`; `remote` is `boolean`; `sourceRank` is `integer`;
+> `postedAt` is `date`. Indexes created before pay parsing was removed still carry `compMin`/`compMax`
+> (`long`) and `compCurrency` (`keyword`); nothing writes or reads them any more.
 >
 > Adding sub-fields to an existing object mapping is **additive**, which OpenSearch accepts in place, so
 > `ensureMetadataMapping()` re-sends them on every boot (idempotent) and an index created before these

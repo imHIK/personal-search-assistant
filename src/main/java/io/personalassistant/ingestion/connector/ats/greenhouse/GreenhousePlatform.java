@@ -100,14 +100,6 @@ public class GreenhousePlatform implements BoardPlatform {
         putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         Instant postedAt = AtsNormalization.instantOrNull(job.path("first_published").asText(null));
         putIfPresent(metadata, "postedAt", postedAt);
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            // Always recorded with the range: compMin/compMax are plain numbers in the index, so a
-            // corpus mixing INR and USD makes a bare numeric filter mean two things at once.
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);
