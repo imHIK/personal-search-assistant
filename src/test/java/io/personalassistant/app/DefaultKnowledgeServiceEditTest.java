@@ -9,6 +9,7 @@ import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.RawItem;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.EntityStatus;
@@ -25,6 +26,7 @@ import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryDiscoveryStatusRepository;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
@@ -42,6 +44,7 @@ class DefaultKnowledgeServiceEditTest {
     private InMemoryCursorRepository cursors;
     private InMemoryEntityRepository entities;
     private RecordingSearchIndex index;
+    private final InMemoryTaskRepository tasks = new InMemoryTaskRepository();
     private InMemoryDiscoveryStatusRepository discovery;
     private StubConnector connector;
     private DefaultKnowledgeService service;
@@ -60,7 +63,7 @@ class DefaultKnowledgeServiceEditTest {
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         service = new DefaultKnowledgeService(knowledge, cursors, entities, registry, connections,
-                index, discovery, new RefetchPolicy(registry));
+                index, discovery, new RefetchPolicy(registry), tasks);
 
         runner = new IngestionRunner(registry, entities, cursors);
         runner.batchesPerLease = 50;
@@ -187,6 +190,43 @@ class DefaultKnowledgeServiceEditTest {
         var stored = entities.findById("ent_x").orElseThrow();
         assertEquals(EntityStatus.INDEXED, stored.status(), "existing entity stays indexed");
         assertFalse(stored.needsReindex(), "a chunking change must NOT flag a re-chunk of past entities");
+    }
+
+    private Task metadataTask(String id, Task.Output output) {
+        Instant at = Instant.now();
+        return tasks.save(new Task(id, "Facts", "", Task.Mode.SIMPLE, "Extract.", output,
+                List.of(new Task.Field("yoe", Task.FieldType.NUMBER, "", true)), null, null, "lite",
+                Task.SourceText.ENTITY, 0, 0, at, at));
+    }
+
+    @Test
+    void anEnrichmentTaskIsAConfigEditThatMapsItsFieldsAndReindexesNothing() {
+        Knowledge kn = add(Map.of());
+        entities.upsert(TestData.ingestedText("ent_y", kn.id(), "doc", "hello"));
+        entities.seedIndexed("ent_y", 1, "model", Instant.now());
+        metadataTask("task_meta", Task.Output.METADATA);
+
+        Knowledge updated = service.update(kn.id(), KnowledgePatch.builder().enrichTaskId("task_meta").build());
+
+        assertEquals("task_meta", updated.config().enrichment().taskId());
+        assertEquals(Task.FieldType.NUMBER, index.mappedMetadata.get("yoe"));
+        assertFalse(entities.findById("ent_y").orElseThrow().needsReindex(), "opt in via reindex, as chunking");
+    }
+
+    @Test
+    void anEnrichmentTaskMustExistBeAMetadataTaskAndFitTheIndex() {
+        Knowledge kn = add(Map.of());
+        metadataTask("task_summary", Task.Output.PER_ITEM);
+        metadataTask("task_meta", Task.Output.METADATA);
+
+        assertThrows(IllegalArgumentException.class, () -> service.update(kn.id(),
+                KnowledgePatch.builder().enrichTaskId("task_missing").build()));
+        assertThrows(IllegalArgumentException.class, () -> service.update(kn.id(),
+                KnowledgePatch.builder().enrichTaskId("task_summary").build()));
+        index.mappingFailure = new IllegalArgumentException("mapper [metadata.yoe] cannot be changed");
+        assertThrows(IllegalArgumentException.class, () -> service.update(kn.id(),
+                KnowledgePatch.builder().enrichTaskId("task_meta").build()));
+        assertEquals(null, knowledge.findById(kn.id()).orElseThrow().config().enrichment().taskId());
     }
 
     @Test

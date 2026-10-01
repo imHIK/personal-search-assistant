@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.personalassistant.domain.model.Chunk;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.storage.search.SearchIndex;
@@ -26,6 +27,7 @@ import org.apache.http.util.EntityUtils;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.opensearch.client.Request;
 import org.opensearch.client.Response;
+import org.opensearch.client.ResponseException;
 import org.opensearch.client.RestClient;
 
 @ApplicationScoped
@@ -212,6 +214,44 @@ public class OpenSearchSearchIndex implements SearchIndex {
         request.addParameter("conflicts", "proceed");
         request.setJsonEntity(write(body));
         execute(request);
+    }
+
+    @Override
+    public void ensureMetadataFields(Map<String, Task.FieldType> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return;
+        }
+        ObjectNode properties = mapper.createObjectNode();
+        fields.forEach((name, type) -> properties.putObject(name).put("type", switch (type) {
+            case NUMBER -> "double";
+            case BOOLEAN -> "boolean";
+            // A list is a multi-valued keyword: OpenSearch has no array type, any field takes many values.
+            case TEXT, LIST -> "keyword";
+        }));
+        ObjectNode body = mapper.createObjectNode();
+        body.putObject("properties").putObject("metadata").put("type", "object").set("properties", properties);
+        Request request = new Request("PUT", "/" + alias + "/_mapping");
+        request.setJsonEntity(write(body));
+        try {
+            client.performRequest(request);
+        } catch (ResponseException e) {
+            if (e.getResponse().getStatusLine().getStatusCode() == 400) {
+                throw new IllegalArgumentException("A field is already indexed with a different type: "
+                        + reason(e), e);
+            }
+            throw new UncheckedIOException("OpenSearch refused the metadata mapping", e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("OpenSearch request failed", e);
+        }
+    }
+
+    private String reason(ResponseException e) {
+        try {
+            JsonNode error = mapper.readTree(EntityUtils.toString(e.getResponse().getEntity())).path("error");
+            return error.path("reason").asText(e.getMessage());
+        } catch (IOException | RuntimeException unreadable) {
+            return e.getMessage();
+        }
     }
 
     private static final List<String> RANGE_OPS = List.of("gte", "gt", "lte", "lt");

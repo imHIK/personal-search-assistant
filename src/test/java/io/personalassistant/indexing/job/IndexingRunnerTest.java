@@ -7,16 +7,23 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.common.fields.FieldSets;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
+import io.personalassistant.indexing.enrichment.EntityEnrichment;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.PlainTextParserRegistry;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleChunkingRegistry;
+import io.personalassistant.testsupport.StubMetadataEnricher;
 import io.personalassistant.testsupport.TestData;
 import io.personalassistant.testsupport.WholeTextChunkingStrategy;
 import java.io.IOException;
@@ -24,6 +31,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,6 +45,8 @@ class IndexingRunnerTest {
     private InMemoryEntityRepository entities;
     private InMemoryKnowledgeRepository knowledge;
     private RecordingSearchIndex index;
+    private InMemoryTaskRepository tasks;
+    private StubMetadataEnricher enricher;
     private IndexingRunner runner;
 
     @BeforeEach
@@ -43,6 +54,8 @@ class IndexingRunnerTest {
         entities = new InMemoryEntityRepository();
         knowledge = new InMemoryKnowledgeRepository();
         index = new RecordingSearchIndex();
+        tasks = new InMemoryTaskRepository();
+        enricher = new StubMetadataEnricher();
         runner = runnerWith(new FakeEmbeddingProvider(8));
 
         knowledge.save(TestData.knowledge("kn_1", SourceType.LOCAL_FS, Instant.now(), java.util.Map.of()));
@@ -51,7 +64,7 @@ class IndexingRunnerTest {
     private IndexingRunner runnerWith(FakeEmbeddingProvider embeddings) {
         IndexingRunner r = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
-                embeddings, index, FieldSets.bundled());
+                embeddings, index, FieldSets.bundled(), new EntityEnrichment(tasks, enricher, index));
         r.embedBatch = 64;
         r.retryLimit = 2;
         r.backoffSeconds = 30;
@@ -284,5 +297,107 @@ class IndexingRunnerTest {
         assertEquals(0, revived.retry().count(), "a revived entity gets a fresh retry budget");
         assertNull(revived.index().error());
         assertEquals(1, entities.claimForIndexing(10, "any-worker", LEASE).size());
+    }
+
+    private Task metadataTask(String id) {
+        Instant at = Instant.parse("2026-09-01T00:00:00Z");
+        return tasks.save(new Task(id, "Posting facts", "", Task.Mode.SIMPLE, "Extract facts.",
+                Task.Output.METADATA, List.of(new Task.Field("yoe", Task.FieldType.NUMBER, "", true),
+                        new Task.Field("title", Task.FieldType.TEXT, "", true)),
+                null, null, "lite", Task.SourceText.ENTITY, 0, 0, at, at));
+    }
+
+    private void enrichWith(String taskId) {
+        Knowledge kn = knowledge.findById("kn_1").orElseThrow();
+        Knowledge.Config c = kn.config();
+        knowledge.save(kn.withEdits(kn.name(), kn.connectorDetails(), kn.inputs(),
+                new Knowledge.Config(c.scheduleSettings(), c.webhookSettings(), c.backfill(), c.chunking(),
+                        c.retention(), new Knowledge.EnrichmentSettings(taskId)), Instant.now()));
+    }
+
+    @Test
+    void enrichedFieldsReachTheChunksAndAreStoredApartFromMetadata() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L, "title", "a guess");
+        entities.upsert(TestData.ingestedText("ent_e1", "kn_1", "doc", "five years of Java"));
+
+        runner.indexEntity(claim("ent_e1"), WORKER);
+
+        Map<String, Object> chunkMeta = index.indexed.get(0).metadata();
+        assertEquals(5L, chunkMeta.get("yoe"));
+        assertEquals("doc", chunkMeta.get("title"), "a connector value wins a clash");
+        Entity stored = entities.findById("ent_e1").orElseThrow();
+        assertEquals(EntityStatus.INDEXED, stored.status());
+        assertEquals(5L, stored.enriched().get("yoe"));
+        assertFalse(stored.metadata().containsKey("yoe"), "metadata stays the connector's");
+        assertEquals("task_meta", stored.enrichment().taskId());
+        assertEquals(stored.checksum(), stored.enrichment().checksum());
+        assertEquals(Task.FieldType.NUMBER, index.mappedMetadata.get("yoe"));
+    }
+
+    @Test
+    void aCurrentEnrichmentIsNotRecomputedOnReindex() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        entities.upsert(TestData.ingestedText("ent_e2", "kn_1", "doc", "text"));
+        runner.indexEntity(claim("ent_e2"), WORKER);
+
+        entities.flagNeedsReindex("ent_e2");
+        runner.indexEntity(claim("ent_e2"), WORKER);
+
+        assertEquals(1, enricher.calls.size(), "unchanged task and checksum: no second LLM call");
+        assertEquals(5L, index.indexed.get(1).metadata().get("yoe"), "kept values still reach the chunks");
+    }
+
+    @Test
+    void anEnrichmentFailureStillIndexesAndRecordsTheError() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.failure = new IllegalStateException("The model's reply was not a JSON object");
+        entities.upsert(TestData.ingestedText("ent_e3", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e3"), WORKER);
+
+        Entity stored = entities.findById("ent_e3").orElseThrow();
+        assertEquals(EntityStatus.INDEXED, stored.status());
+        assertTrue(stored.enrichment().error().contains("JSON"), stored.enrichment().error());
+
+        enricher.failure = null;
+        enricher.reply = Map.of("yoe", 2L);
+        entities.flagNeedsReindex("ent_e3");
+        runner.indexEntity(claim("ent_e3"), WORKER);
+        assertEquals(2L, entities.findById("ent_e3").orElseThrow().enriched().get("yoe"),
+                "an errored enrichment is retried on the next pass");
+    }
+
+    @Test
+    void aRateLimitedEnrichmentDefersTheWholePass() {
+        enrichWith(metadataTask("task_meta").id());
+        Instant reopensAt = Instant.now().plusSeconds(600);
+        enricher.failure = new RateLimitedException(RateLimitKey.connection("conn_llm"), reopensAt);
+        entities.upsert(TestData.ingestedText("ent_e4", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e4"), WORKER);
+
+        Entity stored = entities.findById("ent_e4").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, stored.status());
+        assertEquals(reopensAt, stored.retry().nextAttemptAt());
+        assertTrue(index.indexed.isEmpty(), "nothing is indexed half-enriched");
+    }
+
+    @Test
+    void removingTheTaskClearsStoredValuesOnTheNextPass() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        entities.upsert(TestData.ingestedText("ent_e5", "kn_1", "doc", "text"));
+        runner.indexEntity(claim("ent_e5"), WORKER);
+
+        enrichWith(null);
+        entities.flagNeedsReindex("ent_e5");
+        runner.indexEntity(claim("ent_e5"), WORKER);
+
+        Entity stored = entities.findById("ent_e5").orElseThrow();
+        assertTrue(stored.enriched().isEmpty());
+        assertNull(stored.enrichment());
+        assertNull(index.indexed.get(1).metadata().get("yoe"));
     }
 }

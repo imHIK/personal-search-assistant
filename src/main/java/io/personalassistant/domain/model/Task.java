@@ -2,8 +2,10 @@ package io.personalassistant.domain.model;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * A user-written LLM task stored in Mongo; bundled ones live in {@code config/prompts.json}. In SIMPLE mode
@@ -39,24 +41,35 @@ public record Task(
 
     public enum Mode { SIMPLE, RAW }
 
-    public enum Output { SUMMARY, PER_ITEM }
+    /** METADATA runs on one entity at indexing time and its reply becomes that entity's enriched fields. */
+    public enum Output { SUMMARY, PER_ITEM, METADATA }
 
     /** Mirrors TaskSpec.SourceText by name: the domain does not depend on the agent adapter. */
     public enum SourceText { CHUNK, ENTITY }
 
-    public enum FieldType { NUMBER, TEXT }
+    /** BOOLEAN and LIST are METADATA only. */
+    public enum FieldType { NUMBER, TEXT, BOOLEAN, LIST }
 
     /**
      * @param name must not be {@code source}, which the framework owns
      * @param type NUMBER renders as a score badge, TEXT as a line
      * @param optional a null reply omits the field from the item
+     * @param values TEXT and LIST only: the allowed values. A reply outside them is dropped, so the field
+     *               stays filterable on a closed set
      */
-    public record Field(String name, FieldType type, String description, boolean optional) {
+    public record Field(String name, FieldType type, String description, boolean optional,
+                        List<String> values) {
 
         public Field {
             name = name == null ? "" : name.trim();
             description = description == null ? "" : description.trim();
             type = type == null ? FieldType.TEXT : type;
+            values = values == null ? List.of() : values.stream()
+                    .filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
+        }
+
+        public Field(String name, FieldType type, String description, boolean optional) {
+            this(name, type, description, optional, List.of());
         }
     }
 
@@ -67,6 +80,7 @@ public record Task(
 
     public static final String PER_ITEM_PROMPT = "user-task-per-item";
     public static final String SUMMARY_PROMPT = "user-task-summary";
+    public static final String METADATA_PROMPT = "user-task-metadata";
 
     public static final int DEFAULT_CONTEXT_CHARS = 24000;
 
@@ -97,10 +111,24 @@ public record Task(
         return mode == Mode.SIMPLE && output == Output.PER_ITEM;
     }
 
+    /** What a metadata task's fields are indexed as; insertion-ordered like the fields. */
+    public Map<String, FieldType> fieldTypes() {
+        Map<String, FieldType> out = new LinkedHashMap<>();
+        fields.forEach(f -> out.put(f.name(), f.type()));
+        return out;
+    }
+
+    public boolean metadata() {
+        return mode == Mode.SIMPLE && output == Output.METADATA;
+    }
+
     /** The shipped wrapper for a SIMPLE task; the task's own id for RAW. */
     public String promptId() {
         if (mode != Mode.SIMPLE) {
             return id;
+        }
+        if (metadata()) {
+            return METADATA_PROMPT;
         }
         return perItem() ? PER_ITEM_PROMPT : SUMMARY_PROMPT;
     }
@@ -110,13 +138,12 @@ public record Task(
      * cannot drift.
      */
     public String outputContract() {
-        StringBuilder example = new StringBuilder("{\"" + ITEMS_ARRAY + "\": [{\"" + SOURCE_FIELD + "\": 1");
+        StringBuilder example = new StringBuilder();
         StringBuilder detail = new StringBuilder();
         for (Field field : fields) {
-            example.append(", \"").append(field.name()).append("\": ")
-                    .append(field.type() == FieldType.NUMBER ? "0" : "\"...\"");
-            detail.append("- ").append(field.name()).append(": ")
-                    .append(field.type() == FieldType.NUMBER ? "a number" : "text");
+            example.append(example.isEmpty() ? "" : ", ")
+                    .append('"').append(field.name()).append("\": ").append(exampleValue(field.type()));
+            detail.append("- ").append(field.name()).append(": ").append(typeName(field));
             if (field.optional()) {
                 detail.append(", or null if there is none");
             }
@@ -125,12 +152,39 @@ public record Task(
             }
             detail.append('\n');
         }
-        example.append("}]}");
 
-        return "Reply with JSON only, in exactly this shape:\n" + example + "\n\n"
+        if (metadata()) {
+            return "Reply with JSON only, in exactly this shape:\n{" + example + "}\n\n"
+                    + "Record:\n" + detail;
+        }
+        return "Reply with JSON only, in exactly this shape:\n"
+                + "{\"" + ITEMS_ARRAY + "\": [{\"" + SOURCE_FIELD + "\": 1, " + example + "}]}\n\n"
                 + "\"" + SOURCE_FIELD + "\" is the bracketed number of the result you are describing. "
                 + "Include every result exactly once.\n\n"
                 + "For each result, record:\n" + detail;
+    }
+
+    private static String exampleValue(FieldType type) {
+        return switch (type) {
+            case NUMBER -> "0";
+            case BOOLEAN -> "true";
+            case LIST -> "[\"...\"]";
+            case TEXT -> "\"...\"";
+        };
+    }
+
+    private static String typeName(Field field) {
+        String name = switch (field.type()) {
+            case NUMBER -> "a number";
+            case BOOLEAN -> "true or false";
+            case LIST -> "a list of short text values";
+            case TEXT -> "text";
+        };
+        if (field.values().isEmpty()) {
+            return name;
+        }
+        String allowed = "\"" + String.join("\", \"", field.values()) + "\"";
+        return name + (field.type() == FieldType.LIST ? ", each one of " : ", one of ") + allowed;
     }
 
     /** Checked on save: a placeholder typo would otherwise fail a scheduled run hours later. */
@@ -146,9 +200,10 @@ public record Task(
             // The wrapper substitutes the instruction verbatim, so a {{...}} in it would reach the model
             // literally or collide with a framework variable.
             checkNoPlaceholders(instruction, "instruction", problems);
-            if (output == Output.PER_ITEM) {
+            if (output == Output.PER_ITEM || output == Output.METADATA) {
                 if (fields.isEmpty()) {
-                    problems.add("notes on each result need at least one field");
+                    problems.add(output == Output.METADATA ? "metadata needs at least one field"
+                            : "notes on each result need at least one field");
                 }
                 List<String> seen = new ArrayList<>();
                 for (Field field : fields) {
@@ -164,9 +219,20 @@ public record Task(
                         problems.add(where + " is listed twice");
                     }
                     checkNoPlaceholders(field.description(), where, problems);
+                    if (output != Output.METADATA
+                            && (field.type() == FieldType.BOOLEAN || field.type() == FieldType.LIST)) {
+                        problems.add(where + ": " + field.type() + " fields are for metadata tasks only");
+                    }
+                    if (!field.values().isEmpty() && field.type() != FieldType.TEXT
+                            && field.type() != FieldType.LIST) {
+                        problems.add(where + ": allowed values apply to TEXT and LIST fields only");
+                    }
                 }
             }
         } else {
+            if (output == Output.METADATA) {
+                problems.add("metadata tasks must be SIMPLE: the reply shape is generated from the fields");
+            }
             if (system == null || system.isBlank()) {
                 problems.add("a raw task needs a system message");
             }

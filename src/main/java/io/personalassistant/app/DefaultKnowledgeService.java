@@ -8,6 +8,7 @@ import io.personalassistant.domain.model.CursorPosition;
 import io.personalassistant.domain.model.DiscoveryStatus;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.enums.CursorDirection;
 import io.personalassistant.domain.model.enums.CursorStatus;
 import io.personalassistant.domain.model.enums.DiscoveryTrigger;
@@ -25,6 +26,7 @@ import io.personalassistant.storage.repository.CursorRepository;
 import io.personalassistant.storage.repository.DiscoveryStatusRepository;
 import io.personalassistant.storage.repository.EntityRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
+import io.personalassistant.storage.repository.TaskRepository;
 import io.personalassistant.storage.search.SearchIndex;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -56,13 +58,14 @@ public class DefaultKnowledgeService implements KnowledgeService {
     private final SearchIndex index;
     private final DiscoveryStatusRepository discoveryStatus;
     private final RefetchPolicy refetchPolicy;
+    private final TaskRepository tasks;
 
     @Inject
     public DefaultKnowledgeService(KnowledgeRepository knowledge, CursorRepository cursors,
                                    EntityRepository entities, ConnectorRegistry connectors,
                                    ConnectionResolver connections, SearchIndex index,
                                    DiscoveryStatusRepository discoveryStatus,
-                                   RefetchPolicy refetchPolicy) {
+                                   RefetchPolicy refetchPolicy, TaskRepository tasks) {
         this.knowledge = knowledge;
         this.cursors = cursors;
         this.entities = entities;
@@ -71,6 +74,23 @@ public class DefaultKnowledgeService implements KnowledgeService {
         this.index = index;
         this.discoveryStatus = discoveryStatus;
         this.refetchPolicy = refetchPolicy;
+        this.tasks = tasks;
+    }
+
+    /**
+     * Also maps the task's fields in the index, so a type clash with an existing field is a 400 now rather
+     * than rejected chunks later.
+     */
+    private void requireMetadataTask(String taskId) {
+        if (taskId == null) {
+            return;
+        }
+        Task task = tasks.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("No task \"" + taskId + "\""));
+        if (!task.metadata()) {
+            throw new IllegalArgumentException("Task \"" + task.name() + "\" is not a metadata task");
+        }
+        index.ensureMetadataFields(task.fieldTypes());
     }
 
     private void verifyConnectionIfRequired(SourceConnector connector, Knowledge kn) {
@@ -88,6 +108,7 @@ public class DefaultKnowledgeService implements KnowledgeService {
         if (config.scheduleSettings() != null) {
             ScheduleResolver.requireValidCron(config.scheduleSettings().cron());
         }
+        requireMetadataTask(config.enrichment().taskId());
         Knowledge draft = new Knowledge(
                 Ids.knowledge(),
                 request.name(),
@@ -145,6 +166,9 @@ public class DefaultKnowledgeService implements KnowledgeService {
         if (patch.schedule().cron().present()) {
             ScheduleResolver.requireValidCron(patch.schedule().cron().value());
         }
+        if (patch.enrichTaskId().present()) {
+            requireMetadataTask(patch.enrichTaskId().value());
+        }
 
         boolean authChanged = patch.auth().present() && patch.auth().value() != null
                 && !patch.auth().value().equals(current.connectorDetails().auth());
@@ -195,7 +219,11 @@ public class DefaultKnowledgeService implements KnowledgeService {
         Knowledge.Retention retention = new Knowledge.Retention(
                 patch.retentionPeriod().orElse(cur.retention().period()));
 
-        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking, retention);
+        Knowledge.EnrichmentSettings enrichment = new Knowledge.EnrichmentSettings(
+                patch.enrichTaskId().orElse(cur.enrichment().taskId()));
+
+        Knowledge.Config config = new Knowledge.Config(schedule, webhook, backfill, chunking, retention,
+                enrichment);
 
         return current.withEdits(orCurrent(patch.name(), current.name()), cd,
                 orCurrent(patch.inputs(), current.inputs()), config, now);

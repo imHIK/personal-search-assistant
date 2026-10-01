@@ -5,7 +5,7 @@ import type { Knowledge, PatchKnowledgeBody } from '@/api/types'
 import { SchemaForm, type FormValues } from '@/components/SchemaForm'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Field, Input } from '@/components/ui/Input'
+import { Field, Input, Select } from '@/components/ui/Input'
 import { ErrorState } from '@/components/ui/States'
 import { Toggle } from '@/components/ui/Toggle'
 import { connectorFor } from '@/config/connectors'
@@ -13,7 +13,8 @@ import { normalizeDuration, schedulePresetFor } from '@/config/constants'
 import { features } from '@/config/features'
 import { initialValues } from '@/config/fields'
 import { labels } from '@/config/labels'
-import { usePatchKnowledge } from '@/hooks/queries'
+import { taskOutputFor } from '@/config/tasks'
+import { usePatchKnowledge, useTasks } from '@/hooks/queries'
 import { ChunkingFields } from './ChunkingFields'
 import { RetentionField } from './RetentionField'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
@@ -45,6 +46,9 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
   const [retention, setRetention] = useState(() =>
     normalizeDuration(knowledge.config.retention.period),
   )
+  const [enrichTaskId, setEnrichTaskId] = useState(knowledge.config.enrichment?.taskId ?? '')
+  const { data: tasks } = useTasks()
+  const metadataTasks = (tasks ?? []).filter((t) => t.output && taskOutputFor(t.output).metadata)
 
   const save = (body: PatchKnowledgeBody, message: string) =>
     patch.mutate(body, {
@@ -180,6 +184,43 @@ export function SettingsTab({ knowledge }: { knowledge: Knowledge }) {
               loading={patch.isPending}
               // An empty window sends null, which clears back to inherit.
               onClick={() => save({ retentionPeriod: retention || null }, labels.settings.saved)}
+            >
+              {labels.settings.save}
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{labels.settings.enrichment}</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <Field
+            label={labels.settings.enrichTask}
+            hint={metadataTasks.length > 0 ? labels.settings.enrichHint : labels.settings.enrichNoTasks}
+            htmlFor="enrich-task"
+          >
+            <Select
+              id="enrich-task"
+              value={enrichTaskId}
+              onChange={(event) => setEnrichTaskId(event.target.value)}
+            >
+              <option value="">{labels.settings.enrichNone}</option>
+              {metadataTasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              size="sm"
+              loading={patch.isPending}
+              // Empty sends null, which stops enriching; stored values clear on the next re-index.
+              onClick={() => save({ enrichTaskId: enrichTaskId || null }, labels.settings.saved)}
             >
               {labels.settings.save}
             </Button>

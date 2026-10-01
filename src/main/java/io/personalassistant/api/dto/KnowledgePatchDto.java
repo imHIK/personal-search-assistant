@@ -37,6 +37,7 @@ public record KnowledgePatchDto(JsonNode body) {
                         patch.integer("chunkingMaxSize"),
                         patch.integer("chunkingOverlap"),
                         patch.strings("chunkingSeparators")),
-                patch.text("retentionPeriod"));
+                patch.text("retentionPeriod"),
+                patch.text("enrichTaskId"));
     }
 }

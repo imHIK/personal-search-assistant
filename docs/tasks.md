@@ -40,8 +40,8 @@ through to a built-in that happens to share its name.
   "name": "Score backend roles",
   "mode": "SIMPLE",                  // or RAW
   "instruction": "Score how well each posting fits a senior backend role.",
-  "output": "PER_ITEM",              // or SUMMARY
-  "fields": [                        // PER_ITEM only
+  "output": "PER_ITEM",              // or SUMMARY, or METADATA (see below)
+  "fields": [                        // PER_ITEM and METADATA only
     { "name": "fit",     "type": "NUMBER", "description": "0-10", "optional": false },
     { "name": "reason",  "type": "TEXT",   "description": "one sentence", "optional": false },
     { "name": "concern", "type": "TEXT",   "description": "biggest downside", "optional": true }
@@ -57,10 +57,59 @@ through to a built-in that happens to share its name.
 `PER_ITEM` is exactly what makes the reply JSON and the results annotatable. Storing them separately
 would allow a task that asks for per-item fields in prose — a shape nothing can parse.
 
+## METADATA tasks: enrichment at indexing time
+
+`"output": "METADATA"` turns a SIMPLE task into an **enrichment**: instead of running over a digest's
+results, it runs over **one entity** while that entity is indexed, and its reply becomes the entity's
+`enriched` fields. A knowledge opts in by naming the task in `enrichTaskId`
+(`PATCH /api/knowledge/{id}`); the first use is pulling `yoe`, `skills` and the like out of job
+postings, but nothing about it is job-specific.
+
+```jsonc
+{
+  "name": "Posting facts",
+  "mode": "SIMPLE",
+  "output": "METADATA",
+  "instruction": "Extract the facts a job seeker filters on.",
+  "fields": [
+    { "name": "yoe",    "type": "NUMBER",  "description": "minimum years required", "optional": true },
+    { "name": "skills", "type": "LIST",    "description": "required technologies", "optional": true,
+      "values": ["Java", "Go", "Kotlin", "Python"] },
+    { "name": "visa",   "type": "BOOLEAN", "description": "sponsorship offered",    "optional": true },
+    { "name": "level",  "type": "TEXT",    "optional": true, "values": ["Junior", "Mid", "Senior", "Staff"] }
+  ],
+  "llmProfile": "lite",
+  "contextChars": 24000
+}
+```
+
+- **Field types.** `BOOLEAN` and `LIST` (a list of short strings) exist for METADATA only. `values`, on a
+  `TEXT` or `LIST` field, is a closed set: the prompt says "one of", a case-insensitive reply maps to
+  the declared spelling, and anything outside it is dropped — which is what keeps the field filterable.
+- **The reply** is one JSON object, no `items` array and no `source` index (`Task.outputContract`
+  generates it from the fields). It is coerced field by field (`DefaultMetadataEnricher.coerce`): a
+  number written as `"5+ years"` reads as 5, `"yes"` as true, a comma-separated string as a list;
+  undeclared keys are dropped. A **required** field with no usable value fails the enrichment, so mark a
+  field `optional` whenever a posting may simply not say.
+- **The wrapper** is `user-task-metadata`, with the same fence-is-data and no-outside-facts clauses,
+  plus "reply null rather than guess".
+- **The text** is the entity's *parsed* text (not raw HTML), title first, cut to `contextChars`; for a
+  METADATA task `0` means the 24000 default, not unbounded, because one long document would otherwise
+  exceed any model's context.
+- **The call waits** for the LLM's rate-limit window (`RateLimitMode.WAIT`) unless the profile says
+  otherwise; past `app.ratelimit.max-wait-seconds` the whole indexing pass defers, like an embedding
+  limit.
+- **A digest cannot run one** (`usableInDigest` is false, and a digest naming one is a 400), and a task a
+  knowledge enriches with cannot be deleted or switched away from METADATA (409). Its `usedBy` lists
+  those knowledges.
+
+Where the values live, when they are recomputed and how they reach search is in
+[`indexing-implementation.md`](./indexing-implementation.md#enrichment-indexingrunner--entityenrichment).
+
 ## SIMPLE renders through a shipped wrapper
 
 A `SIMPLE` task supplies only its instruction and the shape of the reply. Those are substituted into
-`user-task-per-item` or `user-task-summary` — ordinary catalogue prompts, boot-validated like any
+`user-task-per-item`, `user-task-summary` or `user-task-metadata` — ordinary catalogue prompts, boot-validated like any
 other — through the existing `{{variable}}` mechanism, as `{{instruction}}` and `{{outputContract}}`.
 
 The wrapper carries the clauses that must not be optional:
@@ -102,7 +151,9 @@ surface hours later as a failed run. So `POST`/`PATCH /api/tasks` rejects with *
 
 - `{{…}}` in a SIMPLE instruction or field description — it is inserted verbatim
 - a field named `source` — reserved: it is how a reply is matched back to a result
-- a field name outside `[a-zA-Z][a-zA-Z0-9_]*`, or a per-item task with no fields
+- a field name outside `[a-zA-Z][a-zA-Z0-9_]*`, or a per-item or metadata task with no fields
+- a `BOOLEAN`/`LIST` field outside a METADATA task, `values` on a `NUMBER`/`BOOLEAN` field, or a RAW
+  METADATA task
 - a RAW task whose `user` message lacks `{{sources}}` — the model would be handed the instruction with
   nothing to apply it to and would answer from its own knowledge, while the run looked successful
 - a RAW prompt that fails a dry render against the known variable set
@@ -118,7 +169,7 @@ guarantee, and honouring a supplied id would put it in the caller's hands.
 | `GET /api/tasks/{id}` | one task |
 | `POST /api/tasks` | create; `?duplicateOf=` returns an editable copy **without saving it** |
 | `PATCH /api/tasks/{id}` | edit; `409` on a bundled task. **Absent** = unchanged, **`null`** = clear — a patch of one field leaves the rest alone, including `mode`, `output` and `llmProfile` |
-| `DELETE /api/tasks/{id}` | `409` on a bundled task, or when a digest still names it |
+| `DELETE /api/tasks/{id}` | `409` on a bundled task, or when a digest or a knowledge's `enrichTaskId` still names it |
 | `GET /api/llm-profiles` | configured profile names, for the model picker |
 
 Deleting a task a digest still points at is refused, naming the digests — otherwise those digests
@@ -127,7 +178,9 @@ would fail every scheduled run with "no such task", recorded but visible only to
 ## Cost
 
 A digest's task runs on **every** scheduled run. A daily digest over ten results is a daily cost, which
-is why `llmProfile` is offered per task and why `job-fit` ships on the cheap `lite` profile. Nothing
+is why `llmProfile` is offered per task and why `job-fit` ships on the cheap `lite` profile. A METADATA
+task costs one call per entity whose content (checksum) or task version changed — a re-index of
+unchanged items calls nothing. Nothing
 measures or caps spend — see [L10](./limitations.md).
 
 ## Adding a bundled task

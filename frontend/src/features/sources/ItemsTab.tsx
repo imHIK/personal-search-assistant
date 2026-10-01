@@ -257,6 +257,7 @@ function ItemRow({
 
         <div className="flex shrink-0 items-center gap-1.5">
           {item.error && <ItemError error={item.error} />}
+          {!item.error && item.enrichmentError && <ItemError error={item.enrichmentError} />}
           <StateBadge state={presented} size="sm" />
           <Button
             variant="ghost"

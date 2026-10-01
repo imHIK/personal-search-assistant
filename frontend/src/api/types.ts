@@ -56,6 +56,8 @@ export interface KnowledgeConfig {
   backfill: { enabled: boolean }
   chunking: ChunkingSettings
   retention: RetentionSettings
+  /** A METADATA task run on each entity while it is indexed. */
+  enrichment: { taskId: string | null }
 }
 
 export interface ConnectorDetails {
@@ -107,6 +109,8 @@ export interface CreateKnowledgeBody {
    * inherit.
    */
   retentionPeriod?: string | null
+  /** A METADATA task id; on PATCH an explicit null stops enriching. */
+  enrichTaskId?: string | null
 }
 
 /**
@@ -138,6 +142,8 @@ export interface EntityItem {
   createdAt: string
   /** Moves with indexing bookkeeping, so it is not a content date. The listing sorts on it. */
   updatedAt: string
+  /** The metadata task failed on it; the entity is indexed without fresh values. */
+  enrichmentError?: string | null
 }
 
 export interface EntityPage {
@@ -354,11 +360,12 @@ export interface CompanyLookup {
 
 export type TaskMode = 'SIMPLE' | 'RAW'
 
-export type TaskOutput = 'SUMMARY' | 'PER_ITEM'
+export type TaskOutput = 'SUMMARY' | 'PER_ITEM' | 'METADATA'
 
 export type TaskSourceText = 'CHUNK' | 'ENTITY'
 
-export type TaskFieldType = 'NUMBER' | 'TEXT'
+/** BOOLEAN and LIST are for METADATA tasks only. */
+export type TaskFieldType = 'NUMBER' | 'TEXT' | 'BOOLEAN' | 'LIST'
 
 export interface TaskField {
   name: string
@@ -366,6 +373,8 @@ export interface TaskField {
   description: string
   /** When true the model may answer null, and the field is then simply not shown. */
   optional: boolean
+  /** TEXT and LIST only: the allowed values; a reply outside them is dropped. */
+  values?: string[]
 }
 
 export interface Task {

@@ -23,6 +23,6 @@ public class WholeTextChunkingStrategy implements ChunkingStrategy {
         }
         return List.of(new Chunk(Ids.chunk(entity.id(), 0), entity.id(), entity.knowledgeId(),
                 entity.iterableId(), sourceType, 0, text, Math.max(1, text.length() / 4), null,
-                entity.title(), entity.uri(), Map.of()));
+                entity.title(), entity.uri(), entity.metadata() == null ? Map.of() : entity.metadata()));
     }
 }

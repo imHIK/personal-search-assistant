@@ -26,7 +26,8 @@ public record KnowledgeDto(
         Integer chunkingMaxSize,
         Integer chunkingOverlap,
         List<String> chunkingSeparators,
-        String retentionPeriod) {
+        String retentionPeriod,
+        String enrichTaskId) {
 
     public KnowledgeService.NewKnowledge toRequest() {
         Knowledge.Config defaults = Knowledge.Config.defaults();
@@ -39,7 +40,8 @@ public record KnowledgeDto(
                 new Knowledge.Backfill(backfillEnabled != null ? backfillEnabled : defaults.backfill().enabled()),
                 new Knowledge.ChunkingSettings(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators),
                 // Null inherits the connector default, then the global one, which is unset: never expire.
-                new Knowledge.Retention(retentionPeriod));
+                new Knowledge.Retention(retentionPeriod),
+                new Knowledge.EnrichmentSettings(enrichTaskId));
         return new KnowledgeService.NewKnowledge(name, SourceType.valueOf(type), connectionId, auth, inputs, config);
     }
 }

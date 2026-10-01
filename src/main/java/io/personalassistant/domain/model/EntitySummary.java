@@ -9,6 +9,7 @@ import java.time.Instant;
  *
  * @param createdAt never moves: the honest answer to when this arrived
  * @param updatedAt last write from either stage; not a content date
+ * @param enrichmentError the last metadata-task run failed; the entity is still indexed
  */
 public record EntitySummary(
         String id,
@@ -24,4 +25,5 @@ public record EntitySummary(
         int retryCount,
         boolean needsReindex,
         Instant createdAt,
-        Instant updatedAt) {}
+        Instant updatedAt,
+        String enrichmentError) {}

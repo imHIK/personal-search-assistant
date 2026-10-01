@@ -27,7 +27,8 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
             int retryCount,
             boolean needsReindex,
             Instant createdAt,
-            Instant updatedAt) {}
+            Instant updatedAt,
+            String enrichmentError) {}
 
     public static EntityPageDto from(KnowledgeService.EntityPage page) {
         List<Item> items = page.items().stream().map(EntityPageDto::toItem).toList();
@@ -52,6 +53,7 @@ public record EntityPageDto(List<Item> items, long total, int limit, int offset)
                 e.retryCount(),
                 e.needsReindex(),
                 e.createdAt(),
-                e.updatedAt());
+                e.updatedAt(),
+                e.enrichmentError());
     }
 }

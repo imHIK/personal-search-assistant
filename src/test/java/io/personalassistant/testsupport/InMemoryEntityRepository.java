@@ -1,5 +1,6 @@
 package io.personalassistant.testsupport;
 
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
@@ -32,7 +33,10 @@ public class InMemoryEntityRepository implements EntityRepository {
         Entity stored = new Entity(id, entity.knowledgeId(), entity.iterableId(), entity.entityType(),
                 entity.externalId(), entity.raw(), entity.content(), entity.metadata(), entity.checksum(),
                 EntityStatus.INGESTED, false, false, index, null, Entity.Retry.zero(),
-                createdAt, entity.updatedAt(), entity.expiresAt(), entity.lastSeenGeneration());
+                createdAt, entity.updatedAt(), entity.expiresAt(), entity.lastSeenGeneration(),
+                existing.map(Entity::enriched).orElse(Map.of()),
+                existing.map(Entity::enrichment).orElse(null),
+                existing.map(Entity::custom).orElse(Map.of()));
         store.put(id, stored);
         return stored;
     }
@@ -103,9 +107,28 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     @Override
-    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt) {
-        return fenced(id, owner, e -> rebuild(e, EntityStatus.INDEXED, false,
-                new Entity.IndexInfo(chunkCount, embeddingModel, indexedAt, null), null, Entity.Retry.zero()));
+    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt,
+                               EnrichmentOutcome enrichment) {
+        return fenced(id, owner, e -> withEnrichment(rebuild(e, EntityStatus.INDEXED, false,
+                new Entity.IndexInfo(chunkCount, embeddingModel, indexedAt, null), null, Entity.Retry.zero()),
+                enrichment));
+    }
+
+    private static Entity withEnrichment(Entity e, EnrichmentOutcome outcome) {
+        Map<String, Object> values = switch (outcome.kind()) {
+            case KEEP, ERROR -> e.enriched();
+            case CLEAR -> Map.of();
+            case SET -> outcome.values();
+        };
+        Entity.Enrichment stamp = switch (outcome.kind()) {
+            case KEEP -> e.enrichment();
+            case CLEAR -> null;
+            case SET, ERROR -> outcome.stamp();
+        };
+        return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
+                e.raw(), e.content(), e.metadata(), e.checksum(), e.status(), e.needsReindex(),
+                e.needsRefetch(), e.index(), e.lease(), e.retry(), e.createdAt(), e.updatedAt(),
+                e.expiresAt(), e.lastSeenGeneration(), values, stamp, e.custom());
     }
 
     @Override
@@ -270,7 +293,8 @@ public class InMemoryEntityRepository implements EntityRepository {
                 e.title(), e.uri(), e.checksum(),
                 e.index() == null ? Entity.IndexInfo.empty() : e.index(),
                 e.retry() == null ? 0 : e.retry().count(),
-                e.needsReindex(), e.createdAt(), e.updatedAt());
+                e.needsReindex(), e.createdAt(), e.updatedAt(),
+                e.enrichment() == null ? null : e.enrichment().error());
     }
 
     @Override
@@ -361,6 +385,7 @@ public class InMemoryEntityRepository implements EntityRepository {
                                   Entity.Retry retry) {
         return new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
                 e.raw(), e.content(), e.metadata(), e.checksum(), status, needsReindex, needsRefetch,
-                index, lease, retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration());
+                index, lease, retry, e.createdAt(), Instant.now(), e.expiresAt(), e.lastSeenGeneration(),
+                e.enriched(), e.enrichment(), e.custom());
     }
 }

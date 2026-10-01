@@ -1,5 +1,6 @@
 package io.personalassistant.storage.repository;
 
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
@@ -40,7 +41,14 @@ public interface EntityRepository {
      * Clears the retry streak. Fenced: false means the lease was lost, and the caller must stop touching the
      * entity.
      */
-    boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt);
+    default boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel,
+                                Instant indexedAt) {
+        return markIndexed(id, owner, chunkCount, embeddingModel, indexedAt, EnrichmentOutcome.keep());
+    }
+
+    /** Also writes the enrichment outcome, in the same fenced update. */
+    boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt,
+                        EnrichmentOutcome enrichment);
 
     /** An idempotent terminal state. Fenced. */
     boolean markDeletionComplete(String id, String owner, Instant cleanedAt);

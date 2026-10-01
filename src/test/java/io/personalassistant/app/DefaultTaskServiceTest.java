@@ -3,11 +3,16 @@ package io.personalassistant.app;
 import io.personalassistant.agent.prompt.PromptCatalog;
 import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.domain.model.Digest;
+import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.SyncSchedule;
 import io.personalassistant.domain.model.Task;
+import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.domain.service.TaskService;
 import io.personalassistant.testsupport.InMemoryDigestRepository;
+import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
 import io.personalassistant.testsupport.InMemoryTaskRepository;
+import io.personalassistant.testsupport.RecordingSearchIndex;
+import io.personalassistant.testsupport.TestData;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -20,10 +25,12 @@ class DefaultTaskServiceTest {
     private final InMemoryTaskRepository tasks = new InMemoryTaskRepository();
     private final InMemoryDigestRepository digests = new InMemoryDigestRepository();
     private final TaskLibrary library = new TaskLibrary(PromptCatalog.bundled(), tasks);
+    private final InMemoryKnowledgeRepository knowledge = new InMemoryKnowledgeRepository();
+    private final RecordingSearchIndex index = new RecordingSearchIndex();
     private final DefaultTaskService service = service();
 
     private DefaultTaskService service() {
-        DefaultTaskService svc = new DefaultTaskService(tasks, library, digests);
+        DefaultTaskService svc = new DefaultTaskService(tasks, library, digests, knowledge, index);
         svc.answerTaskId = "answer";
         return svc;
     }
@@ -61,6 +68,26 @@ class DefaultTaskServiceTest {
 
         Assertions.assertTrue(refused.getMessage().contains("New roles"),
                 "the refusal names what to detach first");
+    }
+
+    @Test
+    void aTaskEnrichingAKnowledgeCannotBeDeletedOrStopBeingAMetadataTask() {
+        Task created = service.create(new Task(null, "Facts", "", Task.Mode.SIMPLE, "Extract.",
+                Task.Output.METADATA, List.of(new Task.Field("yoe", Task.FieldType.NUMBER, "", true)),
+                null, null, "lite", Task.SourceText.ENTITY, 0, 0, null, null));
+        Knowledge kn = TestData.knowledge("kn_1", SourceType.JOB_BOARDS, java.time.Instant.now(), Map.of());
+        Knowledge.Config c = kn.config();
+        knowledge.save(kn.withEdits(kn.name(), kn.connectorDetails(), kn.inputs(),
+                new Knowledge.Config(c.scheduleSettings(), c.webhookSettings(), c.backfill(), c.chunking(),
+                        c.retention(), new Knowledge.EnrichmentSettings(created.id())),
+                java.time.Instant.now()));
+
+        Assertions.assertThrows(IllegalStateException.class, () -> service.delete(created.id()));
+        Assertions.assertThrows(IllegalStateException.class, () -> service.update(created.id(),
+                new Task(null, null, null, null, null, Task.Output.PER_ITEM, null, null, null, null, null,
+                        0, 0, null, null)));
+        Assertions.assertEquals(List.of(kn.name()), service.get(created.id()).usedBy());
+        Assertions.assertFalse(service.get(created.id()).usableInDigest(), "a digest cannot run it");
     }
 
     @Test

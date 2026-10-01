@@ -18,7 +18,8 @@ public record KnowledgePatch(
         WebhookPatch webhook,
         Patched<Boolean> backfillEnabled,
         ChunkingPatch chunking,
-        Patched<String> retentionPeriod) {
+        Patched<String> retentionPeriod,
+        Patched<String> enrichTaskId) {
 
     public KnowledgePatch {
         name = Patched.orAbsent(name);
@@ -30,6 +31,7 @@ public record KnowledgePatch(
         backfillEnabled = Patched.orAbsent(backfillEnabled);
         chunking = chunking == null ? ChunkingPatch.empty() : chunking;
         retentionPeriod = Patched.orAbsent(retentionPeriod);
+        enrichTaskId = Patched.orAbsent(enrichTaskId);
     }
 
     public record SchedulePatch(Patched<String> cron, Patched<String> interval,
@@ -101,6 +103,7 @@ public record KnowledgePatch(
         private Patched<Integer> chunkingOverlap = Patched.absent();
         private Patched<List<String>> chunkingSeparators = Patched.absent();
         private Patched<String> retentionPeriod = Patched.absent();
+        private Patched<String> enrichTaskId = Patched.absent();
 
         public Builder name(String v) {
             this.name = v == null ? Patched.absent() : Patched.of(v);
@@ -177,13 +180,18 @@ public record KnowledgePatch(
             return this;
         }
 
+        public Builder enrichTaskId(String v) {
+            this.enrichTaskId = v == null ? Patched.absent() : Patched.of(v);
+            return this;
+        }
+
         public KnowledgePatch build() {
             return new KnowledgePatch(name, type, auth, inputs,
                     new SchedulePatch(cron, interval, scheduleEnabled),
                     new WebhookPatch(webhookEnabled, webhookSecret),
                     backfillEnabled,
                     new ChunkingPatch(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators),
-                    retentionPeriod);
+                    retentionPeriod, enrichTaskId);
         }
     }
 }

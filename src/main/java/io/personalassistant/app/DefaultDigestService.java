@@ -10,6 +10,7 @@ import io.personalassistant.domain.model.Digest;
 import io.personalassistant.domain.model.DigestRun;
 import io.personalassistant.domain.model.PublishMessage;
 import io.personalassistant.domain.model.SyncSchedule;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.domain.model.search.SearchResponse;
@@ -72,6 +73,7 @@ public class DefaultDigestService implements DigestService {
     @Override
     public Digest create(Digest digest) {
         requireChannels(digest.channelIds());
+        requireDigestTask(digest.taskId());
         requireValidSchedule(digest.schedule());
         Instant now = Instant.now();
         Digest stored = new Digest(
@@ -115,12 +117,20 @@ public class DefaultDigestService implements DigestService {
         if (patch.channelIds().present()) {
             requireChannels(merged.channelIds());
         }
+        requireDigestTask(merged.taskId());
         // Only a schedule this edit sends is checked: a cron stored before validation existed must not block
         // the edit that replaces it.
         if (patch.schedule().present()) {
             requireValidSchedule(merged.schedule());
         }
         return digests.save(merged);
+    }
+
+    private void requireDigestTask(String taskId) {
+        if (library.userTask(taskId).filter(Task::metadata).isPresent()) {
+            throw new IllegalArgumentException("A metadata task enriches entities while they are indexed; "
+                    + "a digest cannot run it");
+        }
     }
 
     private static void requireValidSchedule(SyncSchedule schedule) {

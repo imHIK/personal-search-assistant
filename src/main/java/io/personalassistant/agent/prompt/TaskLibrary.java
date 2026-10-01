@@ -55,7 +55,7 @@ public class TaskLibrary {
                 task.maxSources(),
                 task.sourceText() == Task.SourceText.ENTITY
                         ? TaskSpec.SourceText.ENTITY : TaskSpec.SourceText.CHUNK,
-                task.perItem() ? LlmProvider.ResponseFormat.JSON_OBJECT
+                task.perItem() || task.metadata() ? LlmProvider.ResponseFormat.JSON_OBJECT
                         : LlmProvider.ResponseFormat.TEXT,
                 task.perItem() ? Task.ITEMS_ARRAY : null);
 
@@ -68,7 +68,7 @@ public class TaskLibrary {
 
         Map<String, String> variables = new LinkedHashMap<>();
         variables.put("instruction", task.instruction() == null ? "" : task.instruction());
-        if (task.perItem()) {
+        if (task.perItem() || task.metadata()) {
             variables.put("outputContract", task.outputContract());
         }
         return new ResolvedTask(spec, catalog.prompt(task.promptId()), variables);
@@ -102,8 +102,9 @@ public class TaskLibrary {
             return new Entry(spec.id(), name, description, true, usableInDigest, null);
         }
 
+        /** A metadata task describes one entity, not a batch of results, so a digest cannot run it. */
         static Entry user(Task task) {
-            return new Entry(task.id(), task.name(), task.description(), false, true, task);
+            return new Entry(task.id(), task.name(), task.description(), false, !task.metadata(), task);
         }
     }
 }

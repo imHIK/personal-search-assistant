@@ -66,7 +66,8 @@ public class MongoTaskRepository implements TaskRepository {
             fields.add(new Document("name", field.name())
                     .append("type", BsonSupport.enumName(field.type()))
                     .append("description", field.description())
-                    .append("optional", field.optional()));
+                    .append("optional", field.optional())
+                    .append("values", field.values()));
         }
         return new Document("_id", t.id())
                 .append("name", t.name())
@@ -94,7 +95,9 @@ public class MongoTaskRepository implements TaskRepository {
                             f.getString("name"),
                             BsonSupport.enumOf(Task.FieldType.class, f.get("type")),
                             f.getString("description"),
-                            Boolean.TRUE.equals(f.getBoolean("optional"))));
+                            Boolean.TRUE.equals(f.getBoolean("optional")),
+                            f.get("values") instanceof List<?> values
+                                    ? values.stream().map(String::valueOf).toList() : List.of()));
                 }
             }
         }

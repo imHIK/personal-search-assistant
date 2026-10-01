@@ -4,10 +4,14 @@ import io.personalassistant.agent.prompt.PromptTemplate;
 import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.common.id.Ids;
 import io.personalassistant.domain.model.Digest;
+import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.Task;
+import io.personalassistant.domain.model.enums.KnowledgeStatus;
 import io.personalassistant.domain.service.TaskService;
 import io.personalassistant.storage.repository.DigestRepository;
+import io.personalassistant.storage.repository.KnowledgeRepository;
 import io.personalassistant.storage.repository.TaskRepository;
+import io.personalassistant.storage.search.SearchIndex;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Instant;
@@ -23,15 +27,20 @@ public class DefaultTaskService implements TaskService {
     private final TaskRepository tasks;
     private final TaskLibrary library;
     private final DigestRepository digests;
+    private final KnowledgeRepository knowledge;
+    private final SearchIndex index;
 
     @ConfigProperty(name = "app.agent.task", defaultValue = "answer")
     String answerTaskId;
 
     @Inject
-    public DefaultTaskService(TaskRepository tasks, TaskLibrary library, DigestRepository digests) {
+    public DefaultTaskService(TaskRepository tasks, TaskLibrary library, DigestRepository digests,
+                              KnowledgeRepository knowledge, SearchIndex index) {
         this.tasks = tasks;
         this.library = library;
         this.digests = digests;
+        this.knowledge = knowledge;
+        this.index = index;
     }
 
     @Override
@@ -80,7 +89,16 @@ public class DefaultTaskService implements TaskService {
                 patch.maxSources() <= 0 ? existing.maxSources() : patch.maxSources(),
                 existing.createdAt(),
                 Instant.now());
-        return tasks.save(validated(merged));
+        Task checked = validated(merged);
+        List<String> enriching = knowledgeEnrichingWith(id);
+        if (!enriching.isEmpty()) {
+            if (!checked.metadata()) {
+                throw new IllegalStateException("Still enriching " + String.join(", ", enriching)
+                        + "; it must stay a metadata task");
+            }
+            index.ensureMetadataFields(checked.fieldTypes());
+        }
+        return tasks.save(checked);
     }
 
     @Override
@@ -108,7 +126,8 @@ public class DefaultTaskService implements TaskService {
     @Override
     public void delete(String id) {
         requireUserTask(id);
-        List<String> used = digestsUsing(id);
+        List<String> used = new ArrayList<>(digestsUsing(id));
+        used.addAll(knowledgeEnrichingWith(id));
         if (!used.isEmpty()) {
             // Refused, naming the digests: deleting it would fail their every run with "no such task".
             throw new IllegalStateException(
@@ -154,7 +173,20 @@ public class DefaultTaskService implements TaskService {
     }
 
     private List<String> usedBy(String id) {
-        return id.equals(answerTaskId) ? List.of("search") : List.of();
+        if (id.equals(answerTaskId)) {
+            return List.of("search");
+        }
+        return knowledgeEnrichingWith(id);
+    }
+
+    private List<String> knowledgeEnrichingWith(String taskId) {
+        List<String> names = new ArrayList<>();
+        for (Knowledge kn : knowledge.findAll()) {
+            if (kn.status() != KnowledgeStatus.DELETED && taskId.equals(kn.config().enrichment().taskId())) {
+                names.add(kn.name());
+            }
+        }
+        return names;
     }
 
     private List<String> digestsUsing(String taskId) {

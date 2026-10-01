@@ -15,8 +15,8 @@ import java.util.List;
  * @param builtIn outbound only; true for everything shipped in {@code config/prompts.json}
  * @param mode {@code SIMPLE} builds the prompt from instruction and fields; {@code RAW} carries system and
  *             user verbatim
- * @param output {@code SUMMARY} or {@code PER_ITEM}, SIMPLE only. PER_ITEM makes the reply JSON and the
- *               results annotatable
+ * @param output {@code SUMMARY}, {@code PER_ITEM} or {@code METADATA}, SIMPLE only. PER_ITEM makes the reply
+ *               JSON and the results annotatable; METADATA enriches each entity of a knowledge that names it
  */
 public record TaskDto(
         String id,
@@ -41,8 +41,10 @@ public record TaskDto(
     /**
      * @param type {@code NUMBER} renders as a score badge, {@code TEXT} as a line
      * @param optional the model may reply null, and the field is then not shown
+     * @param values TEXT and LIST only: the allowed values
      */
-    public record FieldDto(String name, String type, String description, Boolean optional) {}
+    public record FieldDto(String name, String type, String description, Boolean optional,
+                           List<String> values) {}
 
     /** @throws IllegalArgumentException on an unknown enum name */
     public Task toDomain() {
@@ -52,7 +54,8 @@ public record TaskDto(
                 domainFields.add(new Task.Field(field.name(),
                         enumOrNull(Task.FieldType.class, field.type()),
                         field.description(),
-                        Boolean.TRUE.equals(field.optional())));
+                        Boolean.TRUE.equals(field.optional()),
+                        field.values()));
             }
         }
         return new Task(id, name, description,
@@ -146,7 +149,8 @@ public record TaskDto(
                     field.text("name").value(),
                     enumOrNull(Task.FieldType.class, field.text("type").value()),
                     field.text("description").value(),
-                    Boolean.TRUE.equals(field.bool("optional").value())));
+                    Boolean.TRUE.equals(field.bool("optional").value()),
+                    field.strings("values").value()));
         }
         return out;
     }
@@ -155,7 +159,7 @@ public record TaskDto(
         List<FieldDto> out = new ArrayList<>(task.fields().size());
         for (Task.Field field : task.fields()) {
             out.add(new FieldDto(field.name(), field.type().name(), field.description(),
-                    field.optional()));
+                    field.optional(), field.values()));
         }
         return out;
     }

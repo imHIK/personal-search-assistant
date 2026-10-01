@@ -20,6 +20,7 @@ import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Updates;
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
@@ -180,13 +181,42 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     @Override
-    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt) {
+    public boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt,
+                               EnrichmentOutcome enrichment) {
         var result = collection().updateOne(ownedBy(id, owner),
-                indexedUpdate(chunkCount, embeddingModel, indexedAt));
+                indexedUpdate(chunkCount, embeddingModel, indexedAt, enrichment));
         return result.getMatchedCount() > 0;
     }
 
     Bson indexedUpdate(int chunkCount, String embeddingModel, Instant indexedAt) {
+        return indexedUpdate(chunkCount, embeddingModel, indexedAt, EnrichmentOutcome.keep());
+    }
+
+    Bson indexedUpdate(int chunkCount, String embeddingModel, Instant indexedAt, EnrichmentOutcome enrichment) {
+        List<Bson> updates = new ArrayList<>(enrichmentUpdates(enrichment));
+        updates.add(indexedFields(chunkCount, embeddingModel, indexedAt));
+        return Updates.combine(updates);
+    }
+
+    private static List<Bson> enrichmentUpdates(EnrichmentOutcome outcome) {
+        return switch (outcome.kind()) {
+            case KEEP -> List.of();
+            case CLEAR -> List.of(Updates.unset("enriched"), Updates.unset("enrichment"));
+            case SET -> List.of(Updates.set("enriched", BsonSupport.toBsonMap(outcome.values())),
+                    Updates.set("enrichment", enrichmentDoc(outcome.stamp())));
+            case ERROR -> List.of(Updates.set("enrichment", enrichmentDoc(outcome.stamp())));
+        };
+    }
+
+    private static Document enrichmentDoc(Entity.Enrichment e) {
+        return new Document("taskId", e.taskId())
+                .append("taskVersion", BsonSupport.date(e.taskVersion()))
+                .append("checksum", e.checksum())
+                .append("at", BsonSupport.date(e.at()))
+                .append("error", e.error());
+    }
+
+    private static Bson indexedFields(int chunkCount, String embeddingModel, Instant indexedAt) {
         return Updates.combine(
                 Updates.set("status", EntityStatus.INDEXED.name()),
                 Updates.set("needsReindex", false),
@@ -391,7 +421,7 @@ public class MongoEntityRepository implements EntityRepository {
                 // raw and content are the bulk of a document, and a listing never reads them.
                 .projection(Projections.include("knowledgeId", "iterableId", "externalId", "entityType",
                         "status", "metadata.title", "metadata.uri", "checksum", "index", "retry.count",
-                        "needsReindex", "createdAt", "updatedAt"))
+                        "needsReindex", "createdAt", "updatedAt", "enrichment.error"))
                 // _id is the tiebreak, so entities touched in the same millisecond cannot swap places between
                 // pages.
                 .sort(orderBy(descending("updatedAt"), ascending("_id")))
@@ -480,13 +510,23 @@ public class MongoEntityRepository implements EntityRepository {
                 BsonSupport.instant(d.get("createdAt")),
                 BsonSupport.instant(d.get("updatedAt")),
                 BsonSupport.instant(d.get("expiresAt")),
-                longValue(d.get("lastSeenGeneration")));
+                longValue(d.get("lastSeenGeneration")),
+                BsonSupport.toPlainMap(d.get("enriched")),
+                enrichmentOf(BsonSupport.sub(d, "enrichment")),
+                BsonSupport.toPlainMap(d.get("custom")));
+    }
+
+    private static Entity.Enrichment enrichmentOf(Document e) {
+        return e == null ? null : new Entity.Enrichment(e.getString("taskId"),
+                BsonSupport.instant(e.get("taskVersion")), e.getString("checksum"),
+                BsonSupport.instant(e.get("at")), e.getString("error"));
     }
 
     private EntitySummary toSummary(Document d) {
         Document metadata = BsonSupport.sub(d, "metadata");
         Document idx = BsonSupport.sub(d, "index");
         Document retry = BsonSupport.sub(d, "retry");
+        Document enrichment = BsonSupport.sub(d, "enrichment");
         return new EntitySummary(
                 d.getString("_id"),
                 d.getString("knowledgeId"),
@@ -503,7 +543,8 @@ public class MongoEntityRepository implements EntityRepository {
                 retry == null ? 0 : intValue(retry.get("count")),
                 Boolean.TRUE.equals(d.getBoolean("needsReindex")),
                 BsonSupport.instant(d.get("createdAt")),
-                BsonSupport.instant(d.get("updatedAt")));
+                BsonSupport.instant(d.get("updatedAt")),
+                enrichment == null ? null : enrichment.getString("error"));
     }
 
     private static int intValue(Object o) {

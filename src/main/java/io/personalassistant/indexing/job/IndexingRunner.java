@@ -16,6 +16,7 @@ import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
 import io.personalassistant.indexing.chunking.ChunkingStrategy;
 import io.personalassistant.indexing.chunking.ChunkingStrategyRegistry;
 import io.personalassistant.indexing.embedding.EmbeddingProvider;
+import io.personalassistant.indexing.enrichment.EntityEnrichment;
 import io.personalassistant.indexing.parser.ParserRegistry;
 import io.personalassistant.storage.repository.EntityRepository;
 import io.personalassistant.storage.repository.KnowledgeRepository;
@@ -50,6 +51,7 @@ public class IndexingRunner {
     private final ChunkingSpecResolver chunkingSpecs;
     private final EmbeddingProvider embeddings;
     private final SearchIndex index;
+    private final EntityEnrichment enrichment;
 
     @ConfigProperty(name = "app.indexing.embed-batch", defaultValue = "15")
     int embedBatch;
@@ -73,7 +75,8 @@ public class IndexingRunner {
     public IndexingRunner(EntityRepository entities, KnowledgeRepository knowledge,
                           ParserRegistry parsers, ChunkingStrategyRegistry chunking,
                           ChunkingSpecResolver chunkingSpecs,
-                          EmbeddingProvider embeddings, SearchIndex index, FieldSets fieldSets) {
+                          EmbeddingProvider embeddings, SearchIndex index, FieldSets fieldSets,
+                          EntityEnrichment enrichment) {
         this.entities = entities;
         this.knowledge = knowledge;
         this.parsers = parsers;
@@ -82,6 +85,7 @@ public class IndexingRunner {
         this.embeddings = embeddings;
         this.index = index;
         this.fieldSets = fieldSets;
+        this.enrichment = enrichment;
     }
 
     /** @param owner every terminal write is fenced on it, so a run whose lease lapsed records nothing */
@@ -95,11 +99,15 @@ public class IndexingRunner {
             SourceType sourceType = kn.get().connectorDetails().type();
 
             Extracted extracted = extract(entity);
+            // Before chunking, so the enriched fields ride on every chunk and search filters reach them.
+            EntityEnrichment.Result enriched = enrichment.resolve(kn.get(), entity, extracted.parsed().text());
+            Entity toChunk = enriched.values().isEmpty() ? entity
+                    : entity.withMetadata(Entity.mergeEnriched(entity.metadata(), enriched.values()));
             // Resolved on every pass: a chunking change applies to the next entity indexed; nothing is
             // re-chunked.
             ChunkingSpec spec = chunkingSpecs.resolve(kn.get());
             ChunkingStrategy strategy = chunking.get(spec.strategy(), extracted.contentType());
-            List<Chunk> chunks = strategy.chunk(entity, sourceType, extracted.parsed(), spec);
+            List<Chunk> chunks = strategy.chunk(toChunk, sourceType, extracted.parsed(), spec);
             List<Chunk> embedded = embed(chunks, fieldSets.resolve(FieldSets.EMBED_CONTEXT, sourceType));
 
             // Idempotent replace: drop the old chunks, then write the fresh set keyed by chunkId.
@@ -109,7 +117,8 @@ public class IndexingRunner {
             // The OpenSearch write precedes this fenced one, so a lost lease leaves chunks the new owner will
             // overwrite; the ids are entityId_ordinal, so that is benign. Just stop: deleting them would
             // corrupt the new owner's run.
-            if (!entities.markIndexed(entity.id(), owner, embedded.size(), embeddings.model(), Instant.now())) {
+            if (!entities.markIndexed(entity.id(), owner, embedded.size(), embeddings.model(), Instant.now(),
+                    enriched.outcome())) {
                 LOG.warning("Lost the indexing lease on entity " + entity.id()
                         + " before markIndexed; leaving it to the new owner");
             }

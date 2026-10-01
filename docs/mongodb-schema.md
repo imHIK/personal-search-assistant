@@ -31,7 +31,8 @@ One document per connected, configured source instance (a folder, a mailbox, a D
     "webhookSettings":  { "enabled": false, "secret": null },
     "backfill":         { "enabled": true },
     "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null },
-    "retention":        { "period": null }             // null = never expire (see below)
+    "retention":        { "period": null },            // null = never expire (see below)
+    "enrichment":       { "taskId": null }             // a METADATA task run at indexing time
   },
   "anchor": "2026-06-20T10:00:00Z",   // the forward/backward boundary — NEVER moves
   "nextSyncDueAt": "2026-06-20T11:00:00Z",
@@ -62,6 +63,10 @@ Indexes: `{ status: 1 }`, `{ "connectorDetails.type": 1 }`, `{ "connectorDetails
 > `config.chunking` is *inherit-by-default*: null fields fall through to `app.chunking.*`. Changing
 > it is a direct update — new chunks use the new spec, already-indexed chunks are left alone until
 > an explicit `POST /api/index/entities/{id}/reindex`.
+>
+> `config.enrichment.taskId` (set as `enrichTaskId`) behaves the same way: it must name a user task
+> with `output: METADATA`, and existing entities are enriched only when re-indexed. See
+> [`indexing-implementation.md`](./indexing-implementation.md#enrichment-indexingrunner--entityenrichment).
 
 ---
 
@@ -95,10 +100,21 @@ One document per ingested item (a file, an email, a message).
   "retry": { "count": 0, "nextAttemptAt": null },
   "lastSeenGeneration": 3,                          // vs knowledge.syncGeneration → staleness mark
   "expiresAt": null,                                // source-declared end date, or null
+  "enriched": { "yoe": 5, "skills": ["Java", "Go"] },  // a METADATA task's reply — indexer-owned
+  "enrichment": {                                   // what produced `enriched`
+    "taskId": "task_…", "taskVersion": "…",         //   the task and its updatedAt
+    "checksum": "…", "at": "…",                     //   the content it read, and when
+    "error": null                                   //   set when the last attempt failed
+  },
   "createdAt": "…",
   "updatedAt": "…"
 }
 ```
+
+> **`enriched` is not inside `metadata` on purpose.** `upsert` replaces `metadata` wholesale on every
+> re-ingest, so LLM-produced values there would be lost each time and re-bought from the model.
+> `enriched` and `enrichment` are indexer-owned like `index.*`, written only by the fenced
+> `markIndexed`; the chunks receive `metadata ∪ enriched`.
 
 Indexes:
 - `{ knowledgeId: 1, externalId: 1 }` **unique** — this is what makes upsert dedupe work.

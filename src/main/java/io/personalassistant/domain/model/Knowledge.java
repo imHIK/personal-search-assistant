@@ -79,11 +79,18 @@ public record Knowledge(
             WebhookSettings webhookSettings,
             Backfill backfill,
             ChunkingSettings chunking,
-            Retention retention) {
+            Retention retention,
+            EnrichmentSettings enrichment) {
 
         public Config {
             chunking = chunking == null ? ChunkingSettings.inherit() : chunking;
             retention = retention == null ? Retention.inherit() : retention;
+            enrichment = enrichment == null ? EnrichmentSettings.none() : enrichment;
+        }
+
+        public Config(ScheduleSettings scheduleSettings, WebhookSettings webhookSettings,
+                      Backfill backfill, ChunkingSettings chunking, Retention retention) {
+            this(scheduleSettings, webhookSettings, backfill, chunking, retention, EnrichmentSettings.none());
         }
 
         public Config(ScheduleSettings scheduleSettings, WebhookSettings webhookSettings,
@@ -176,6 +183,23 @@ public record Knowledge(
 
         public Duration custom() {
             return Durations.parse(period);
+        }
+    }
+
+    /**
+     * A METADATA task run on each entity at indexing time. Changing it re-enriches nothing until a re-index:
+     * like chunking, it applies to entities indexed afterwards.
+     */
+    public record EnrichmentSettings(String taskId) {
+
+        public EnrichmentSettings {
+            if (taskId != null && taskId.isBlank()) {
+                taskId = null;
+            }
+        }
+
+        public static EnrichmentSettings none() {
+            return new EnrichmentSettings(null);
         }
     }
 

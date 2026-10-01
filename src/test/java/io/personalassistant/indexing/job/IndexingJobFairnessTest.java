@@ -8,13 +8,16 @@ import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
+import io.personalassistant.indexing.enrichment.EntityEnrichment;
 import io.personalassistant.testsupport.AlwaysGrantPermitService;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.PlainTextParserRegistry;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleChunkingRegistry;
+import io.personalassistant.testsupport.StubMetadataEnricher;
 import io.personalassistant.testsupport.TestData;
 import io.personalassistant.testsupport.WholeTextChunkingStrategy;
 import java.time.Instant;
@@ -45,7 +48,8 @@ class IndexingJobFairnessTest {
 
         IndexingRunner runner = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
-                new FakeEmbeddingProvider(8), index, FieldSets.bundled());
+                new FakeEmbeddingProvider(8), index, FieldSets.bundled(),
+                new EntityEnrichment(new InMemoryTaskRepository(), new StubMetadataEnricher(), index));
         runner.embedBatch = 64;
         runner.retryLimit = 2;
         runner.backoffSeconds = 30;

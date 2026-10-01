@@ -21,6 +21,7 @@ import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryDiscoveryStatusRepository;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
@@ -51,7 +52,8 @@ class DefaultKnowledgeServiceListingTest {
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors, entities,
-                registry, connections, index, discovery, new RefetchPolicy(registry));
+                registry, connections, index, discovery, new RefetchPolicy(registry),
+                new InMemoryTaskRepository());
     }
 
     private Knowledge storedKnowledge(String id) {

@@ -1,9 +1,11 @@
 package io.personalassistant.storage.search;
 
 import io.personalassistant.domain.model.Chunk;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import java.util.List;
+import java.util.Map;
 
 /** Chunks live only here; the document id is the chunk id, so re-indexing overwrites. */
 public interface SearchIndex {
@@ -20,4 +22,12 @@ public interface SearchIndex {
 
     /** Matches on both ids, since iterable ids are unique only within a knowledge. */
     void deleteByIterable(String knowledgeId, String iterableId);
+
+    /**
+     * Additive and idempotent: maps each {@code metadata.<field>} before the first document fixes its type
+     * dynamically.
+     *
+     * @throws IllegalArgumentException if a field is already mapped with a conflicting type
+     */
+    void ensureMetadataFields(Map<String, Task.FieldType> fields);
 }

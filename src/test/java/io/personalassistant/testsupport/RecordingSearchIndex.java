@@ -1,11 +1,14 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Chunk;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.storage.search.SearchIndex;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class RecordingSearchIndex implements SearchIndex {
 
@@ -17,6 +20,8 @@ public class RecordingSearchIndex implements SearchIndex {
     public List<SearchHit> lexicalResult = List.of();
     public List<SearchHit> vectorResult = List.of();
     public RuntimeException indexChunksFailure;
+    public final Map<String, Task.FieldType> mappedMetadata = new LinkedHashMap<>();
+    public RuntimeException mappingFailure;
 
     @Override
     public void indexChunks(List<Chunk> chunks) {
@@ -49,5 +54,13 @@ public class RecordingSearchIndex implements SearchIndex {
     @Override
     public void deleteByIterable(String knowledgeId, String iterableId) {
         deletedIterables.add(knowledgeId + "/" + iterableId);
+    }
+
+    @Override
+    public void ensureMetadataFields(Map<String, Task.FieldType> fields) {
+        if (mappingFailure != null) {
+            throw mappingFailure;
+        }
+        mappedMetadata.putAll(fields);
     }
 }

@@ -50,6 +50,12 @@ warning and continues if OpenSearch is unreachable). `dimension` is interpolated
 > embedding width does not move. A field that has *already* been indexed with a conflicting dynamic type
 > is the one case this cannot fix; the failure is logged, and correcting it genuinely does need a new
 > physical index.
+>
+> **Enriched fields are typed the same way, per task.** A METADATA task's fields reach chunks as
+> top-level `metadata.<field>`, and `SearchIndex.ensureMetadataFields` puts them additively on the alias
+> before their first value lands: `NUMBER`→`double`, `BOOLEAN`→`boolean`, `TEXT`/`LIST`→`keyword` (a list
+> is just a multi-valued keyword). Here a conflict is **not** only logged: pointing a knowledge at the
+> task, or editing a task in use, answers **400** naming the clash, before any chunk is written.
 
 ```jsonc
 PUT /chunks_v3_768

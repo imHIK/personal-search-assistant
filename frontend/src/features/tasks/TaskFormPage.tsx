@@ -17,6 +17,7 @@ import {
   llmProfileLabel,
   suggestedScoringFields,
   taskFieldTypes,
+  taskOutputFor,
   taskOutputs,
   taskSourceTexts,
   TASK_DEFAULT_CONTEXT_CHARS,
@@ -87,6 +88,9 @@ function Editor({
     name.trim() !== '' &&
     (raw ? system.trim() !== '' && user.includes('{{sources}}') : instruction.trim() !== '')
 
+  const outputSpec = taskOutputFor(output)
+  const fieldTypes = taskFieldTypes.filter((t) => outputSpec.metadata || !t.metadataOnly)
+
   const setField = (index: number, patch: Partial<TaskField>) =>
     setFields((current) => current.map((f, i) => (i === index ? { ...f, ...patch } : f)))
 
@@ -100,7 +104,7 @@ function Editor({
       mode: raw ? 'RAW' : 'SIMPLE',
       instruction: raw ? null : instruction.trim(),
       output: raw ? null : output,
-      fields: raw || output !== 'PER_ITEM' ? [] : fields,
+      fields: raw || !outputSpec.fields ? [] : fields,
       system: raw ? system : null,
       user: raw ? user : null,
       llmProfile,
@@ -213,7 +217,7 @@ function Editor({
                         checked={output === option.value}
                         onChange={() => {
                           setOutput(option.value)
-                          if (option.value === 'PER_ITEM' && fields.length === 0) {
+                          if (option.fields && !option.metadata && fields.length === 0) {
                             setFields(suggestedScoringFields)
                           }
                         }}
@@ -230,7 +234,7 @@ function Editor({
                 </div>
               </Field>
 
-              {output === 'PER_ITEM' && (
+              {outputSpec.fields && (
                 <Field label={labels.tasks.fieldsLabel} hint={labels.tasks.fieldsHint}>
                   <div className="space-y-2">
                     {fields.map((field, index) => (
@@ -251,7 +255,7 @@ function Editor({
                           }
                           className="h-8 w-28 text-[12px]"
                         >
-                          {taskFieldTypes.map((option) => (
+                          {fieldTypes.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -263,6 +267,21 @@ function Editor({
                           placeholder={labels.tasks.fieldDescription}
                           className="h-8 min-w-40 flex-1 text-[12px]"
                         />
+                        {outputSpec.metadata &&
+                          taskFieldTypes.find((t) => t.value === field.type)?.values && (
+                            <Input
+                              value={(field.values ?? []).join(', ')}
+                              onChange={(event) =>
+                                setField(index, {
+                                  values: event.target.value
+                                    .split(',')
+                                    .map((v) => v.trimStart()),
+                                })
+                              }
+                              placeholder={labels.tasks.fieldValues}
+                              className="h-8 w-full text-[12px]"
+                            />
+                          )}
                         <label className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
                           <input
                             type="checkbox"
@@ -300,7 +319,7 @@ function Editor({
                         <Plus />
                         {labels.tasks.addField}
                       </Button>
-                      {fields.length === 0 && (
+                      {fields.length === 0 && !outputSpec.metadata && (
                         <Button
                           type="button"
                           variant="ghost"

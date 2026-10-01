@@ -119,7 +119,8 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                                 .append("maxSize", cfg.chunking().maxSize())
                                 .append("overlap", cfg.chunking().overlap())
                                 .append("separators", cfg.chunking().separators()))
-                        .append("retention", new Document("period", cfg.retention().period())))
+                        .append("retention", new Document("period", cfg.retention().period()))
+                        .append("enrichment", new Document("taskId", cfg.enrichment().taskId())))
                 .append("anchor", BsonSupport.date(k.anchor()))
                 .append("nextSyncDueAt", BsonSupport.date(k.nextSyncDueAt()))
                 .append("status", BsonSupport.enumName(k.status()))
@@ -140,6 +141,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         Document back = BsonSupport.sub(cfg, "backfill");
         Document chunk = BsonSupport.sub(cfg, "chunking");
         Document retention = BsonSupport.sub(cfg, "retention");
+        Document enrichment = BsonSupport.sub(cfg, "enrichment");
         Document stats = BsonSupport.sub(d, "stats");
         return new Knowledge(
                 d.getString("_id"),
@@ -165,7 +167,9 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                                         intOrNull(chunk.get("overlap")),
                                         stringList(chunk.get("separators"))),
                         retention == null ? Knowledge.Retention.inherit()
-                                : new Knowledge.Retention(retention.getString("period"))),
+                                : new Knowledge.Retention(retention.getString("period")),
+                        enrichment == null ? Knowledge.EnrichmentSettings.none()
+                                : new Knowledge.EnrichmentSettings(enrichment.getString("taskId"))),
                 BsonSupport.instant(d.get("anchor")),
                 BsonSupport.instant(d.get("nextSyncDueAt")),
                 BsonSupport.enumOf(KnowledgeStatus.class, d.get("status")),

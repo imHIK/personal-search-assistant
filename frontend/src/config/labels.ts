@@ -262,6 +262,12 @@ export const labels = {
       inherited
         ? `Empty inherits the connector default (${inherited}).`
         : 'Empty inherits the server default; unset means entities never expire.',
+    enrichment: 'Enrichment',
+    enrichTask: 'Metadata task',
+    enrichNone: 'None',
+    enrichHint:
+      'Runs on each item while it is indexed. Items already indexed pick it up when the source is re-indexed.',
+    enrichNoTasks: 'No metadata tasks yet — create one under Tasks with the Metadata output.',
     name: 'Name',
     connector: 'Connected via',
     connectorFixed: 'Cannot be changed after creation.',
@@ -526,6 +532,7 @@ export const labels = {
     fieldType: 'Type',
     fieldDescription: 'What to put here',
     fieldOptional: 'May be left out',
+    fieldValues: 'Allowed values, comma-separated (empty: any)',
     addField: 'Add a field',
     removeField: 'Remove',
     useSuggested: 'Use score, reason and concern',

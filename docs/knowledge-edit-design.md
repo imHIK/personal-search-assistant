@@ -56,6 +56,7 @@ None of these change what is fetched or how an item is identified, so they are a
 | `scheduleSettings.enabled` true→false | Write the field. The scheduler simply stops arming; in-flight cursors finish naturally. |
 | `backfill.enabled` true→false | Write the field. Stops *future* backward work; already-fetched history is left untouched. |
 | `chunking.*` (strategy / size / overlap / separators) | Write the field. A **direct update**: entities indexed afterwards use the new chunking; chunks already in the index are left untouched (no re-chunk). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) §2.3. |
+| `enrichment.taskId` (`enrichTaskId`) | Validate that it names a METADATA task (400 otherwise), map its fields in OpenSearch (400 on a type clash), then write the field. A **direct update** like chunking: entities indexed afterwards are enriched, already-indexed ones only on a re-index; `null` stops enriching and the stored values clear on each entity's next pass. See [`indexing-implementation.md`](./indexing-implementation.md#enrichment-indexingrunner--entityenrichment). |
 
 > `backfill.enabled` **false→true** is *not* in this table — turning backfill on means "go walk
 > history now", which requires creating backward cursors for the existing iterables. That is a
@@ -242,8 +243,8 @@ the one caller that needs the third state builds the record directly.
 > This is not a nicety. `cron: null` is how the console moves a source off a custom schedule and back
 > onto a preset interval; read as "leave it", the stored cron survived and went on winning over the
 > new interval, so a source could be put onto a custom schedule and never taken off it — answering 200
-> every time. The same held for every chunking override and for `retentionPeriod`: settable, never
-> removable. `name`, `auth`, `inputs` and `type` have no empty state and reject an explicit null with a
+> every time. The same held for every chunking override and for `retentionPeriod` (and holds for `enrichTaskId`):
+> settable, never removable. `name`, `auth`, `inputs` and `type` have no empty state and reject an explicit null with a
 > 400; clearing a map means sending `{}`, which is expressible and means something different.
 
 ---

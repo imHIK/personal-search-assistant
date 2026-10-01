@@ -11,6 +11,7 @@
     { "key": "entityStatus", "value": "INDEXED" },
     { "key": "digestId", "value": "dig_123" },
     { "key": "connectionId", "value": "con_123" },
+    { "key": "taskId", "value": "task_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
     { "key": "googleRefreshToken", "value": "" },
@@ -140,6 +141,39 @@
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
             "description": "Partial edit with patch semantics, in THREE states: a field that is ABSENT is left unchanged, a field present as JSON null is CLEARED back to inherit-the-default, and anything else is set. The body is read as a tree (api.dto.PatchBody) precisely so absent and null can be told apart.\n\nThat is how the console moves a source off a custom schedule: cron: null clears it, so the preset interval starts winning again. The same holds for interval, every chunking override and retentionPeriod.\n\nname, auth, inputs and type have no empty state and reject an explicit null with a 400; clearing a map means sending {} instead.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nretentionPeriod is a config-class edit: it changes only what a later retention sweep removes, never what is ingested."
+          }
+        },
+        {
+          "name": "Set enrichment task (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enrichTaskId\": \"{{taskId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/{{knowledgeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "knowledge",
+                "{{knowledgeId}}"
+              ]
+            },
+            "description": "Points the knowledge at a METADATA task (create one under Tasks). 400 if the task does not exist, is not a METADATA task, or one of its fields is already indexed with a different type. A direct config update like chunking: existing entities are enriched only on 'Reindex a whole knowledge'. Send null to stop enriching; stored values clear on each entity's next pass."
           }
         },
         {
@@ -464,6 +498,113 @@
               "variable": [{ "key": "id", "value": "{{connectionId}}" }]
             },
             "description": "An unknown id is a 404; a connection still bound to one or more knowledges is a 409."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "item": [
+        {
+          "name": "List tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks"
+              ]
+            },
+            "description": "Bundled and user tasks. usableInDigest is false for METADATA tasks; usedBy names the digests' search use and the knowledges enriching with a task."
+          }
+        },
+        {
+          "name": "Create metadata task",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Posting facts\",\n  \"mode\": \"SIMPLE\",\n  \"output\": \"METADATA\",\n  \"instruction\": \"Extract the facts a job seeker filters on.\",\n  \"fields\": [\n    {\n      \"name\": \"yoe\",\n      \"type\": \"NUMBER\",\n      \"description\": \"minimum years of experience required\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"skills\",\n      \"type\": \"LIST\",\n      \"description\": \"required technologies\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"visa\",\n      \"type\": \"BOOLEAN\",\n      \"description\": \"visa sponsorship offered\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"level\",\n      \"type\": \"TEXT\",\n      \"optional\": true,\n      \"values\": [\n        \"Junior\",\n        \"Mid\",\n        \"Senior\",\n        \"Staff\"\n      ]\n    }\n  ],\n  \"llmProfile\": \"lite\",\n  \"contextChars\": 24000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks"
+              ]
+            },
+            "description": "A METADATA task runs on each entity of a knowledge that names it (enrichTaskId) while the entity is indexed; the reply becomes entities.enriched and reaches chunks as metadata.<field>. BOOLEAN and LIST are METADATA-only types; values is an optional closed set for TEXT/LIST. Mark a field optional when an item may not state it - a required field with no usable value fails the enrichment. Copy the returned id into the taskId variable."
+          }
+        },
+        {
+          "name": "Update task (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"instruction\": \"Extract the facts a job seeker filters on. Ignore benefits.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Absent = unchanged, null = clear. A task a knowledge enriches with must stay METADATA (409), and its fields are re-mapped in OpenSearch (400 on a type clash). Editing it bumps updatedAt, so the next re-index re-enriches."
+          }
+        },
+        {
+          "name": "Delete task",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "409 while a digest or a knowledge still uses it."
           }
         }
       ]

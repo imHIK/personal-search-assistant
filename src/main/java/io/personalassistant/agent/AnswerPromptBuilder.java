@@ -22,7 +22,7 @@ public class AnswerPromptBuilder {
     static final String TRUNCATION_MARKER = " […truncated]";
 
     /** Fence around each source's text, so document content cannot be read as instructions. */
-    private static final String FENCE = "\"\"\"";
+    static final String FENCE = "\"\"\"";
 
     /**
      * A source this short costs budget and tells the model nothing, so the rest of the budget is left

@@ -111,7 +111,8 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
   part is what fences out an indexer still running on the previous revision — see below.
 
 ### One indexing pass (`IndexingRunner.indexEntity`)
-- Extract text (Tika for files via `fileRef`, inline for text) → chunk → embed (batched).
+- Extract text (Tika for files via `fileRef`, inline for text) → **enrich** (below) → chunk → embed
+  (batched).
 - The embedded vectors are validated against the chunk list before anything is written: a provider
   that returns a short list, or a hole where two payload entries claimed the same index, fails the
   pass. A chunk indexed without a vector is accepted by OpenSearch and then invisible to semantic
@@ -124,8 +125,39 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 - Failures: retry with backoff (`status=INGESTED`, `retry.nextAttemptAt`), or terminal `FAILED`.
 - Tombstones (`status=DELETED`): `deleteByEntity` + `markDeletionComplete`.
 
+### Enrichment (`IndexingRunner` → `EntityEnrichment`)
+
+When the knowledge names a METADATA task (`config.enrichment.taskId`, see [`tasks.md`](./tasks.md)),
+the pass runs it on the parsed text before chunking:
+
+- **Stored apart from `metadata`.** Values go to `entities.enriched`, with
+  `entities.enrichment {taskId, taskVersion, checksum, at, error}` recording what produced them.
+  `metadata` is ingestion's and `upsert` replaces it wholesale; enriched values inside it would vanish
+  on every re-ingest. Both fields are **indexer-owned** and written **inside the fenced `markIndexed`**
+  (its `EnrichmentOutcome` argument: `KEEP` / `CLEAR` / `SET` / `ERROR`), so a worker that lost its
+  lease records no enrichment either. `upsert` never touches them.
+- **Recomputed only when stale.** The LLM is called when the stored stamp's `taskId`, `taskVersion`
+  (the task's `updatedAt`) or `checksum` differs from now, or the last attempt errored. Re-indexing
+  unchanged items costs no calls; new content (a changed checksum) or an edited task re-enriches.
+- **Chunks carry them.** The entity handed to the chunker has `metadata ∪ enriched`, so every chunk's
+  `metadata.<field>` holds them and search filters reach them. On a clash a non-null connector value
+  wins.
+- **Typed in OpenSearch.** `SearchIndex.ensureMetadataFields` puts `NUMBER`→`double`,
+  `BOOLEAN`→`boolean`, `TEXT`/`LIST`→`keyword` before the first value lands (dynamic mapping would let
+  the first document decide). It runs when a knowledge is pointed at the task or a task in use is edited
+  — a type clash with an existing field is a **400** there — and again, memoised per task version, on
+  the first enrichment after a restart.
+- **Failure never fails the pass.** A rate limit past the wait cap throws `RateLimitedException` and
+  the whole pass defers, as for embeddings. Anything else (bad JSON, a required field missing, the task
+  gone) indexes the entity anyway with its previous values, if any, and records `enrichment.error`; the
+  next re-index retries it. The error shows on the entity listing (`enrichmentError`).
+- **Removing the task** (`enrichTaskId: null`) clears `enriched`/`enrichment` on each entity's next
+  pass (`CLEAR`). Like chunking, setting or changing the task is a direct config update: existing
+  entities pick it up only when re-indexed (`POST /api/index/knowledge/{id}/reindex`).
+
 ### Entity lease fencing and the dead-letter state
-- `markIndexed` / `markFailed` / `markDeletionComplete` all take the claiming worker's id and are
+- `markIndexed` (including the enrichment outcome it carries) / `markFailed` / `markDeletionComplete`
+  all take the claiming worker's id and are
   **compare-and-set on `(id, lease.owner, live lease)`**, exactly like the cursor writes. They return
   `false` when the lease was lost; the runner logs and stops, leaving the entity to its new owner. No
   compensation is attempted — chunk ids are `entityId_ordinal`, so the new owner's replace overwrites

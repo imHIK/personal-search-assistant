@@ -3,7 +3,9 @@ package io.personalassistant.domain.model;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * The canonical ingested record in Mongo; OpenSearch is rebuildable from it.
@@ -17,6 +19,10 @@ import java.util.Map;
  *                  window
  * @param lastSeenGeneration the knowledge's syncGeneration when a walk last saw it; lower after a membership
  *                           re-walk means the rule no longer matches
+ * @param enriched fields a metadata task produced. Indexer-owned and kept apart from {@code metadata}, which
+ *                 upsert replaces wholesale
+ * @param enrichment what produced {@code enriched}, so a pass over unchanged content skips the LLM call
+ * @param custom user marks written through the API; neither ingestion nor the indexer touches them
  */
 public record Entity(
         String id,
@@ -37,7 +43,40 @@ public record Entity(
         Instant createdAt,
         Instant updatedAt,
         Instant expiresAt,
-        long lastSeenGeneration) {
+        long lastSeenGeneration,
+        Map<String, Object> enriched,
+        Enrichment enrichment,
+        Map<String, Object> custom) {
+
+    public Entity {
+        enriched = enriched == null ? Map.of() : enriched;
+        custom = custom == null ? Map.of() : custom;
+    }
+
+    public Entity(String id, String knowledgeId, String iterableId, EntityType entityType, String externalId,
+                  Map<String, Object> raw, Content content, Map<String, Object> metadata, String checksum,
+                  EntityStatus status, boolean needsReindex, boolean needsRefetch, IndexInfo index, Lease lease,
+                  Retry retry, Instant createdAt, Instant updatedAt, Instant expiresAt,
+                  long lastSeenGeneration) {
+        this(id, knowledgeId, iterableId, entityType, externalId, raw, content, metadata, checksum, status,
+                needsReindex, needsRefetch, index, lease, retry, createdAt, updatedAt, expiresAt,
+                lastSeenGeneration, Map.of(), null, Map.of());
+    }
+
+    /**
+     * @param taskVersion the task's updatedAt when it ran: an edited task makes the values stale
+     * @param checksum the entity's checksum when it ran: new content makes them stale
+     * @param error the last attempt failed; {@code enriched} still holds the previous values, if any
+     */
+    public record Enrichment(String taskId, Instant taskVersion, String checksum, Instant at, String error) {
+
+        public boolean isCurrentFor(String currentTaskId, Instant currentTaskVersion, String currentChecksum) {
+            return error == null
+                    && Objects.equals(taskId, currentTaskId)
+                    && Objects.equals(taskVersion, currentTaskVersion)
+                    && Objects.equals(checksum, currentChecksum);
+        }
+    }
 
     /** Inline text, or a fileRef extracted at indexing time; bytes never live in Mongo. */
     public record Content(String text, String fileRef) {
@@ -80,20 +119,39 @@ public record Entity(
     public Entity withStatus(EntityStatus newStatus, Instant updatedAt) {
         return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
                 metadata, checksum, newStatus, needsReindex, needsRefetch, index, lease, retry,
-                createdAt, updatedAt, expiresAt, lastSeenGeneration);
+                createdAt, updatedAt, expiresAt, lastSeenGeneration, enriched, enrichment, custom);
     }
 
     public Entity withLease(Lease newLease) {
         return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
                 metadata, checksum, status, needsReindex, needsRefetch, index, newLease, retry,
-                createdAt, updatedAt, expiresAt, lastSeenGeneration);
+                createdAt, updatedAt, expiresAt, lastSeenGeneration, enriched, enrichment, custom);
     }
 
     /** Leaves updatedAt alone. */
     public Entity withLastSeenGeneration(long generation) {
         return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
                 metadata, checksum, status, needsReindex, needsRefetch, index, lease, retry, createdAt,
-                updatedAt, expiresAt, generation);
+                updatedAt, expiresAt, generation, enriched, enrichment, custom);
+    }
+
+    /** For chunking: the enriched values are merged in, and a non-null connector value wins a clash. */
+    public Entity withMetadata(Map<String, Object> newMetadata) {
+        return new Entity(id, knowledgeId, iterableId, entityType, externalId, raw, content,
+                newMetadata, checksum, status, needsReindex, needsRefetch, index, lease, retry, createdAt,
+                updatedAt, expiresAt, lastSeenGeneration, enriched, enrichment, custom);
+    }
+
+    public static Map<String, Object> mergeEnriched(Map<String, Object> metadata, Map<String, Object> values) {
+        Map<String, Object> merged = new LinkedHashMap<>(metadata == null ? Map.of() : metadata);
+        if (values != null) {
+            values.forEach((key, value) -> {
+                if (merged.get(key) == null) {
+                    merged.put(key, value);
+                }
+            });
+        }
+        return merged;
     }
 
     public String title() {

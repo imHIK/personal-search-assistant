@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mongodb.MongoClientSettings;
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import org.bson.BsonDocument;
 import org.bson.conversions.Bson;
@@ -94,6 +96,33 @@ class MongoEntityRepositoryBsonTest {
                 repo.failUpdate(EntityStatus.INGESTED, "boom", 1, Instant.now())).getDocument("$set");
         assertFalse(retryable.containsKey("needsReindex"),
                 "a retryable failure leaves the flag alone; INGESTED already re-queues it");
+    }
+
+    @Test
+    void upsertNeverTouchesEnrichedValuesOrUserMarks() {
+        BsonDocument update = render(repo.upsertUpdate(anEntity()));
+
+        for (String op : List.of("$set", "$unset", "$setOnInsert")) {
+            BsonDocument fields = update.containsKey(op) ? update.getDocument(op) : new BsonDocument();
+            assertFalse(fields.keySet().stream().anyMatch(k -> k.startsWith("enrich") || k.startsWith("custom")),
+                    op + " must leave the indexer's and the user's fields alone: " + fields.keySet());
+        }
+    }
+
+    @Test
+    void enrichmentRidesOnTheFencedIndexedWrite() {
+        Entity.Enrichment stamp = new Entity.Enrichment("task_1", Instant.now(), "c1", Instant.now(), null);
+        BsonDocument set = render(repo.indexedUpdate(1, "m", Instant.now(),
+                EnrichmentOutcome.set(Map.of("yoe", 5L), stamp))).getDocument("$set");
+        assertEquals(5L, set.getDocument("enriched").getInt64("yoe").getValue());
+        assertEquals("task_1", set.getDocument("enrichment").getString("taskId").getValue());
+
+        BsonDocument error = render(repo.indexedUpdate(1, "m", Instant.now(), EnrichmentOutcome.error(stamp)));
+        assertFalse(error.getDocument("$set").containsKey("enriched"), "an error keeps the previous values");
+
+        BsonDocument clear = render(repo.indexedUpdate(1, "m", Instant.now(), EnrichmentOutcome.clear()));
+        assertTrue(clear.getDocument("$unset").containsKey("enriched"));
+        assertTrue(clear.getDocument("$unset").containsKey("enrichment"));
     }
 
     @Test

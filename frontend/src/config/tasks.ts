@@ -1,21 +1,55 @@
 import type { TaskFieldType, TaskOutput, TaskSourceText } from '@/api/types'
 
-export const taskOutputs: { value: TaskOutput; label: string; hint: string }[] = [
+/** `fields`: the output is JSON shaped by the fields; `metadata`: it runs at indexing time, not in a digest. */
+export const taskOutputs: {
+  value: TaskOutput
+  label: string
+  hint: string
+  fields: boolean
+  metadata?: boolean
+}[] = [
   {
     value: 'SUMMARY',
     label: 'One summary',
     hint: 'A single piece of writing about everything the digest found.',
+    fields: false,
   },
   {
     value: 'PER_ITEM',
     label: 'Notes on each result',
     hint: 'A short note on every result, shown beside it. Choose this to get scores you can scan.',
+    fields: true,
+  },
+  {
+    value: 'METADATA',
+    label: 'Metadata',
+    hint: 'Extracts the fields from each item while it is indexed. Pick the task in a source’s settings.',
+    fields: true,
+    metadata: true,
   },
 ]
 
-export const taskFieldTypes: { value: TaskFieldType; label: string; hint: string }[] = [
+export function taskOutputFor(output: TaskOutput) {
+  return taskOutputs.find((o) => o.value === output) ?? taskOutputs[0]
+}
+
+/** `values`: takes a list of allowed values; `metadataOnly`: offered on METADATA tasks only. */
+export const taskFieldTypes: {
+  value: TaskFieldType
+  label: string
+  hint: string
+  values?: boolean
+  metadataOnly?: boolean
+}[] = [
   { value: 'NUMBER', label: 'Number', hint: 'Shown as a badge on the result. Use 0–10 for scores.' },
-  { value: 'TEXT', label: 'Text', hint: 'Shown as a line under the result. Keep it to a sentence.' },
+  {
+    value: 'TEXT',
+    label: 'Text',
+    hint: 'Shown as a line under the result. Keep it to a sentence.',
+    values: true,
+  },
+  { value: 'BOOLEAN', label: 'Boolean', hint: 'True or false.', metadataOnly: true },
+  { value: 'LIST', label: 'List', hint: 'Several short values.', values: true, metadataOnly: true },
 ]
 
 export const taskSourceTexts: { value: TaskSourceText; label: string; hint: string }[] = [
