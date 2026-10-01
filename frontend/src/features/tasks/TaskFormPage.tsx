@@ -336,22 +336,25 @@ function Editor({
             </>
           )}
 
-          <Field label={labels.tasks.judgeBy}>
-            <Select
-              value={sourceText}
-              onChange={(event) => setSourceText(event.target.value as TaskSourceText)}
-              className="h-9 w-full max-w-sm text-[13px]"
-            >
-              {taskSourceTexts.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-            <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
-              {taskSourceTexts.find((option) => option.value === sourceText)?.hint}
-            </span>
-          </Field>
+          {/* A metadata task always reads the whole item it enriches, so there is nothing to choose. */}
+          {!(outputSpec.metadata && !raw) && (
+            <Field label={labels.tasks.judgeBy}>
+              <Select
+                value={sourceText}
+                onChange={(event) => setSourceText(event.target.value as TaskSourceText)}
+                className="h-9 w-full max-w-sm text-[13px]"
+              >
+                {taskSourceTexts.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+              <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
+                {taskSourceTexts.find((option) => option.value === sourceText)?.hint}
+              </span>
+            </Field>
+          )}
 
           <Field label={labels.tasks.quality} hint={labels.tasks.qualityHint}>
             <Select

@@ -109,8 +109,9 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
    **single-node only**. Permit TTL must be `>=` lease TTL, and lease TTL must exceed worst-case single-page time.
 8. **Field ownership on `entities`.** Ingestion (`upsert`) owns content, `metadata`, `checksum`,
    `needsRefetch` and `lastSeenGeneration`; the indexer owns `status`, `lease`, `retry`, `index.*` and
-   `enriched` / `enrichment` (written only by the fenced `markIndexed`). Writes are field-level, never
-   whole-document — a document replace from one side clobbers the other's in-flight state. `upsert`
+   `enriched` / `enrichment` (written only by the fenced `markIndexed`); the user owns `custom` (via
+   `PATCH /api/entities/{id}/custom`). Writes are field-level, never whole-document — a document
+   replace from one side clobbers the other's in-flight state. `upsert`
    additionally drops the lease so new content fences out an indexer running on the previous revision.
 9. **Retry counts are consecutive, not cumulative.** Success resets them (`markIndexed`, cursor `release`),
    so a retry limit means "n failures in a row". `FAILED` is a real dead-letter on both sides: nothing

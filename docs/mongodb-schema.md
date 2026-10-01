@@ -106,6 +106,7 @@ One document per ingested item (a file, an email, a message).
     "checksum": "…", "at": "…",                     //   the content it read, and when
     "error": null                                   //   set when the last attempt failed
   },
+  "custom": { "applied": "2026-10-01T…", "hidden": true },  // user marks — written only by the API
   "createdAt": "…",
   "updatedAt": "…"
 }
@@ -115,6 +116,10 @@ One document per ingested item (a file, an email, a message).
 > re-ingest, so LLM-produced values there would be lost each time and re-bought from the model.
 > `enriched` and `enrichment` are indexer-owned like `index.*`, written only by the fenced
 > `markIndexed`; the chunks receive `metadata ∪ enriched`.
+>
+> **`custom` belongs to the user.** `PATCH /api/entities/{id}/custom` merges keys into it field by field
+> (`custom.<key>`), so neither stage's writes reach it and it survives re-ingest and re-index. It is
+> not a terminal write, so it is not lease-fenced, and it leaves `updatedAt` alone.
 
 Indexes:
 - `{ knowledgeId: 1, externalId: 1 }` **unique** — this is what makes upsert dedupe work.
@@ -133,6 +138,10 @@ Indexes:
   between pages. Note `{ knowledgeId: 1, status: 1 }` is now a strict prefix of the second one and
   therefore redundant; `MongoIndexInitializer` only ever creates indexes (no drop path, no migration
   framework), so it is deliberately left in place rather than removed.
+- `{ entityType: 1, createdAt: -1, _id: 1 }` — the cross-knowledge browser
+  (`POST /api/entities/query`, the `/jobs` page): one entity type, newest first. Its `metadata.*` /
+  `enriched.*` / `custom.*` filters are residual on top of it, which is fine at posting volumes; the
+  facets endpoint runs a `$facet` aggregation over the same match.
 - `{ knowledgeId: 1, iterableId: 1, updatedAt: -1, _id: 1 }` — the same listing narrowed to one or
   more groups (`?iterableId=`), so picking one company on a large job-board source reads that
   company's rows instead of the whole knowledge's. Each listed row also carries `iterableId`, which

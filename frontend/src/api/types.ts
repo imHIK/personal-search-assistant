@@ -146,6 +146,63 @@ export interface EntityItem {
   enrichmentError?: string | null
 }
 
+/** One row of `POST /api/entities/query`: stored fields only, never `raw` or content. */
+export interface EntityRecord {
+  id: string
+  knowledgeId: string
+  iterableId: string | null
+  externalId: string
+  entityType: EntityType | null
+  status: EntityStatus | null
+  title: string | null
+  uri: string | null
+  metadata: Blob
+  /** What the knowledge's metadata task produced; empty without one. */
+  enriched: Blob
+  /** The user's marks, set through `PATCH /api/entities/{id}/custom`. */
+  custom: Blob
+  enrichmentError: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface EntityList {
+  items: EntityRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/**
+ * A scalar is equality, an array any-of, an object operators. Paths are `metadata.*`, `enriched.*`,
+ * `custom.*`, `createdAt` or `updatedAt`; ISO dates in a range compare as dates.
+ */
+export type EntityFilterValue =
+  | string
+  | number
+  | boolean
+  | (string | number | boolean)[]
+  | Partial<
+      Record<'eq' | 'ne' | 'gte' | 'gt' | 'lte' | 'lt', string | number | boolean> &
+        Record<'in' | 'nin', (string | number | boolean)[]> & { contains: string; exists: boolean }
+    >
+
+export interface EntityQueryBody {
+  entityTypes?: EntityType[]
+  knowledgeIds?: string[]
+  q?: string | null
+  filters?: Record<string, EntityFilterValue>
+  /** Newest first by `createdAt` when absent. */
+  sort?: { path: string; descending?: boolean }
+  limit?: number
+  offset?: number
+}
+
+export interface FacetValue {
+  value: string | number | boolean
+  count: number
+}
+
 export interface EntityPage {
   items: EntityItem[]
   total: number

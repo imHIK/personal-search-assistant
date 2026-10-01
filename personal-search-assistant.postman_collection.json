@@ -610,6 +610,115 @@
       ]
     },
     {
+      "name": "Entities",
+      "item": [
+        {
+          "name": "Query entities (job postings)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entityTypes\": [\n    \"JOB_POSTING\"\n  ],\n  \"knowledgeIds\": [],\n  \"q\": null,\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.company\": [\n      \"Stripe\",\n      \"Cisco\"\n    ],\n    \"metadata.postedAt\": {\n      \"gte\": \"2026-09-24\"\n    },\n    \"enriched.yoe\": {\n      \"lte\": 5\n    },\n    \"custom.hidden\": {\n      \"ne\": true\n    }\n  },\n  \"sort\": {\n    \"path\": \"createdAt\",\n    \"descending\": true\n  },\n  \"limit\": 25,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "query"
+              ]
+            },
+            "description": "Entities across knowledges from Mongo (not search): DELETED excluded, newest first seen by default. A filter value that is a scalar is equality, an array any-of, an object operators (eq ne in nin gte gt lte lt contains exists); ISO dates compare as dates. Paths are limited to metadata.*, enriched.*, custom.*, createdAt and updatedAt (anything else is a 400). Empty knowledgeIds means every knowledge. This is what the /jobs page calls."
+          }
+        },
+        {
+          "name": "Entity facets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/facets?entityTypes=JOB_POSTING&knowledgeIds=&fields=metadata.company,metadata.team,enriched.skills&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "facets"
+              ],
+              "query": [
+                {
+                  "key": "entityTypes",
+                  "value": "JOB_POSTING"
+                },
+                {
+                  "key": "knowledgeIds",
+                  "value": ""
+                },
+                {
+                  "key": "fields",
+                  "value": "metadata.company,metadata.team,enriched.skills"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Distinct values with counts per path, most common first; list-valued fields (enriched skills) count per element. Counted over entityTypes + knowledgeIds only. All params comma-separated."
+          }
+        },
+        {
+          "name": "Mark entity (custom PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applied\": \"2026-10-01T09:00:00Z\",\n  \"hidden\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/{{entityId}}/custom",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "{{entityId}}",
+                "custom"
+              ]
+            },
+            "description": "Merges keys into entities.custom: a value sets the key, null removes it, other keys are untouched. Values must be text, numbers or booleans. The /jobs page writes custom.applied (timestamp) and custom.hidden (true). User-owned: re-ingest and re-index never touch it. 404 on an unknown id."
+          }
+        }
+      ]
+    },
+    {
       "name": "Search",
       "item": [
         {

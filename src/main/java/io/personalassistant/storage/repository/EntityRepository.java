@@ -2,12 +2,15 @@ package io.personalassistant.storage.repository;
 
 import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityFilter;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
+import io.personalassistant.domain.model.FacetValue;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** The claim methods power the indexing queue and must be atomic. */
@@ -109,6 +112,29 @@ public interface EntityRepository {
 
     /** Must apply exactly findByKnowledge's filter, or the last page renders empty. */
     long countByKnowledge(String knowledgeId, EntityQuery query);
+
+    /**
+     * Across knowledges, without {@code raw} and {@code content}: the bulk of a document, and a browser needs
+     * neither. Ordered by the filter's sort with id as the tiebreak.
+     */
+    List<Entity> findMatching(EntityFilter filter, int limit, int offset);
+
+    /** Must apply exactly findMatching's filter. */
+    long countMatching(EntityFilter filter);
+
+    /**
+     * Distinct values of each path with their counts, most common first; a list-valued field counts each
+     * element. Nulls are left out.
+     */
+    Map<String, List<FacetValue>> facets(EntityFilter filter, List<String> paths, int limitPerPath);
+
+    /**
+     * Merges into {@code custom}: a null value removes that key. User-owned, so neither stage's lease
+     * applies.
+     *
+     * @return false if no such entity
+     */
+    boolean mergeCustom(String id, Map<String, Object> values);
 
     long countByKnowledgeAndStatus(String knowledgeId, EntityStatus status);
 

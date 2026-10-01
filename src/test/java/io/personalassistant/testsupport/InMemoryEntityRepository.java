@@ -2,8 +2,10 @@ package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityFilter;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
+import io.personalassistant.domain.model.FacetValue;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.storage.repository.EntityRepository;
 import java.time.Duration;
@@ -295,6 +297,141 @@ public class InMemoryEntityRepository implements EntityRepository {
                 e.retry() == null ? 0 : e.retry().count(),
                 e.needsReindex(), e.createdAt(), e.updatedAt(),
                 e.enrichment() == null ? null : e.enrichment().error());
+    }
+
+    @Override
+    public List<Entity> findMatching(EntityFilter filter, int limit, int offset) {
+        Comparator<Entity> order = Comparator.comparing(e -> comparable(valueAt(e, filter.sort().path())),
+                Comparator.nullsLast(Comparator.naturalOrder()));
+        if (filter.sort().descending()) {
+            order = order.reversed();
+        }
+        return store.values().stream()
+                .filter(e -> matches(e, filter))
+                .sorted(order.thenComparing(Entity::id))
+                .skip(offset)
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public long countMatching(EntityFilter filter) {
+        return store.values().stream().filter(e -> matches(e, filter)).count();
+    }
+
+    @Override
+    public Map<String, List<FacetValue>> facets(EntityFilter filter, List<String> paths, int limitPerPath) {
+        Map<String, List<FacetValue>> out = new LinkedHashMap<>();
+        for (String path : paths) {
+            Map<Object, Long> counts = new LinkedHashMap<>();
+            store.values().stream().filter(e -> matches(e, filter)).forEach(e -> {
+                Object v = valueAt(e, path);
+                List<?> elements = v instanceof List<?> list ? list : java.util.Collections.singletonList(v);
+                for (Object element : elements) {
+                    if (element != null) {
+                        counts.merge(element, 1L, Long::sum);
+                    }
+                }
+            });
+            out.put(path, counts.entrySet().stream()
+                    .sorted(Map.Entry.<Object, Long>comparingByValue().reversed())
+                    .limit(limitPerPath)
+                    .map(en -> new FacetValue(en.getKey(), en.getValue()))
+                    .toList());
+        }
+        return out;
+    }
+
+    @Override
+    public boolean mergeCustom(String id, Map<String, Object> values) {
+        Entity e = store.get(id);
+        if (e == null) {
+            return false;
+        }
+        Map<String, Object> custom = new LinkedHashMap<>(e.custom());
+        values.forEach((k, v) -> {
+            if (v == null) {
+                custom.remove(k);
+            } else {
+                custom.put(k, v);
+            }
+        });
+        store.put(id, new Entity(e.id(), e.knowledgeId(), e.iterableId(), e.entityType(), e.externalId(),
+                e.raw(), e.content(), e.metadata(), e.checksum(), e.status(), e.needsReindex(),
+                e.needsRefetch(), e.index(), e.lease(), e.retry(), e.createdAt(), e.updatedAt(),
+                e.expiresAt(), e.lastSeenGeneration(), e.enriched(), e.enrichment(), custom));
+        return true;
+    }
+
+    private static boolean matches(Entity e, EntityFilter filter) {
+        if (e.status() == EntityStatus.DELETED) {
+            return false;
+        }
+        if (!filter.entityTypes().isEmpty() && !filter.entityTypes().contains(e.entityType())) {
+            return false;
+        }
+        if (!filter.knowledgeIds().isEmpty() && !filter.knowledgeIds().contains(e.knowledgeId())) {
+            return false;
+        }
+        if (filter.text() != null) {
+            String needle = filter.text().toLowerCase();
+            boolean hit = (e.title() != null && e.title().toLowerCase().contains(needle))
+                    || e.externalId().toLowerCase().contains(needle);
+            if (!hit) {
+                return false;
+            }
+        }
+        return filter.conditions().stream().allMatch(c -> holds(valueAt(e, c.path()), c));
+    }
+
+    private static boolean holds(Object actual, EntityFilter.Condition c) {
+        List<?> values = actual instanceof List<?> list ? list : java.util.Collections.singletonList(actual);
+        return switch (c.op()) {
+            case EQ -> values.stream().anyMatch(v -> java.util.Objects.equals(v, c.value()));
+            case NE -> values.stream().noneMatch(v -> java.util.Objects.equals(v, c.value()));
+            case IN -> values.stream().anyMatch(v -> v != null && ((List<?>) c.value()).contains(v));
+            case NIN -> values.stream().noneMatch(v -> v != null && ((List<?>) c.value()).contains(v));
+            case GTE -> compare(actual, c.value()) >= 0;
+            case GT -> compare(actual, c.value()) > 0;
+            case LTE -> actual != null && compare(actual, c.value()) <= 0;
+            case LT -> actual != null && compare(actual, c.value()) < 0;
+            case CONTAINS -> actual != null
+                    && actual.toString().toLowerCase().contains(c.value().toString().toLowerCase());
+            case EXISTS -> (actual != null) == Boolean.TRUE.equals(c.value());
+        };
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static int compare(Object actual, Object bound) {
+        if (actual == null) {
+            return -1;
+        }
+        if (actual instanceof Number a && bound instanceof Number b) {
+            return Double.compare(a.doubleValue(), b.doubleValue());
+        }
+        return ((Comparable) actual).compareTo(bound);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Comparable comparable(Object value) {
+        return value instanceof Comparable c ? c : null;
+    }
+
+    private static Object valueAt(Entity e, String path) {
+        return switch (path) {
+            case "createdAt" -> e.createdAt();
+            case "updatedAt" -> e.updatedAt();
+            default -> {
+                int dot = path.indexOf('.');
+                String key = path.substring(dot + 1);
+                Map<String, Object> map = switch (path.substring(0, dot)) {
+                    case "metadata" -> e.metadata();
+                    case "enriched" -> e.enriched();
+                    default -> e.custom();
+                };
+                yield map == null ? null : map.get(key);
+            }
+        };
     }
 
     @Override

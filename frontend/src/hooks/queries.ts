@@ -4,6 +4,7 @@ import { channelsApi } from '@/api/channels'
 import { connectionsApi } from '@/api/connections'
 import { deliveriesApi } from '@/api/deliveries'
 import { digestsApi } from '@/api/digests'
+import { entitiesApi } from '@/api/entities'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
 import { tasksApi } from '@/api/tasks'
@@ -13,9 +14,13 @@ import type {
   CreateConnectionBody,
   CreateDigestBody,
   CreateKnowledgeBody,
+  Blob,
   CursorInfo,
   DeliveryStatus,
+  EntityList,
+  EntityQueryBody,
   EntityStatus,
+  EntityType,
   Knowledge,
   PatchChannelBody,
   PatchConnectionBody,
@@ -40,6 +45,10 @@ export const keys = {
   digestRuns: (id: string, limit: number, offset: number) =>
     ['digests', id, 'runs', limit, offset] as const,
   digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
+  entityQueryAll: ['entity-query'] as const,
+  entityQuery: (body: EntityQueryBody) => ['entity-query', body] as const,
+  entityFacets: (types: EntityType[], knowledgeIds: string[], fields: string[]) =>
+    ['entity-facets', types, knowledgeIds, fields] as const,
   tasks: ['tasks'] as const,
   taskOne: (id: string) => ['tasks', id] as const,
   llmProfiles: ['llm-profiles'] as const,
@@ -465,4 +474,38 @@ export function useDigestActions() {
   })
 
   return { create, setEnabled, remove, run, update, resetHistory }
+}
+
+export function useEntityQuery(body: EntityQueryBody, enabled = true) {
+  return useQuery({
+    queryKey: keys.entityQuery(body),
+    queryFn: () => entitiesApi.query(body),
+    enabled,
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useEntityFacets(types: EntityType[], knowledgeIds: string[], fields: string[]) {
+  return useQuery({
+    queryKey: keys.entityFacets(types, knowledgeIds, fields),
+    queryFn: () => entitiesApi.facets({ entityTypes: types, knowledgeIds, fields, limit: 200 }),
+    enabled: fields.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** Patches the row in every cached page at once, so a mark shows before the refetch lands. */
+export function useEntityCustom() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, values }: { id: string; values: Blob }) => entitiesApi.mergeCustom(id, values),
+    onSuccess: (updated) => {
+      client.setQueriesData<EntityList>({ queryKey: keys.entityQueryAll }, (page) =>
+        page
+          ? { ...page, items: page.items.map((item) => (item.id === updated.id ? updated : item)) }
+          : page,
+      )
+      void client.invalidateQueries({ queryKey: keys.entityQueryAll })
+    },
+  })
 }

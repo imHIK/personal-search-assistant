@@ -7,11 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.mongodb.MongoClientSettings;
 import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityFilter;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.bson.BsonDocument;
 import org.bson.conversions.Bson;
 import org.junit.jupiter.api.Test;
@@ -123,6 +125,20 @@ class MongoEntityRepositoryBsonTest {
         BsonDocument clear = render(repo.indexedUpdate(1, "m", Instant.now(), EnrichmentOutcome.clear()));
         assertTrue(clear.getDocument("$unset").containsKey("enriched"));
         assertTrue(clear.getDocument("$unset").containsKey("enrichment"));
+    }
+
+    @Test
+    void theBrowserFilterHidesTombstonesAndComparesDatesAsDates() {
+        EntityFilter filter = new EntityFilter(Set.of(EntityType.JOB_POSTING), null, null, List.of(
+                new EntityFilter.Condition("metadata.postedAt", EntityFilter.Op.GTE,
+                        Instant.parse("2026-09-01T00:00:00Z")),
+                new EntityFilter.Condition("custom.hidden", EntityFilter.Op.NE, true)), null);
+
+        String json = render(MongoEntityRepository.matchingFilter(filter)).toJson();
+
+        assertTrue(json.contains("\"status\": {\"$ne\": \"DELETED\"}"), json);
+        assertTrue(json.contains("\"metadata.postedAt\": {\"$gte\": {\"$date\""), json);
+        assertTrue(json.contains("\"custom.hidden\": {\"$ne\": true}"), json);
     }
 
     @Test

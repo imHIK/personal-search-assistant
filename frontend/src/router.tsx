@@ -7,6 +7,7 @@ import { ChannelFormPage } from '@/features/channels/ChannelFormPage'
 import { ChannelsPage } from '@/features/channels/ChannelsPage'
 import { DigestDetailPage } from '@/features/digests/DigestDetailPage'
 import { DigestsPage } from '@/features/digests/DigestsPage'
+import { JobsDashboardPage } from '@/features/jobs/JobsDashboardPage'
 import { SearchPage } from '@/features/search/SearchPage'
 import { SourceDetailPage } from '@/features/sources/SourceDetailPage'
 import { SourcesPage } from '@/features/sources/SourcesPage'
@@ -41,4 +42,6 @@ export const router = createBrowserRouter([
       { path: 'channels/:id', element: <ChannelFormPage /> },
     ],
   },
+  // Outside the Layout route on purpose: a standalone page with no nav entry.
+  { path: '/jobs', element: <JobsDashboardPage />, errorElement: <RouteError /> },
 ])

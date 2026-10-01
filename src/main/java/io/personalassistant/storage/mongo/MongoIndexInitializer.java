@@ -81,6 +81,12 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.compoundIndex(Indexes.ascending("knowledgeId", "iterableId"),
                         Indexes.descending("updatedAt"), Indexes.ascending("_id")));
 
+        // The cross-knowledge browser (POST /api/entities/query): one entity type, newest first. Metadata
+        // filters are residual on top of it.
+        db.getCollection(MongoEntityRepository.COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("entityType"),
+                        Indexes.descending("createdAt"), Indexes.ascending("_id")));
+
         // Source-declared expiry is a global scan; the window pass is always scoped to one knowledge.
         db.getCollection(MongoEntityRepository.COLLECTION)
                 .createIndex(Indexes.ascending("expiresAt"));

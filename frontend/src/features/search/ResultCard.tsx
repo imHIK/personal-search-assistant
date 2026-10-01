@@ -2,42 +2,15 @@ import { Copy, ExternalLink } from 'lucide-react'
 import { forwardRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import type { Blob, SearchHit } from '@/api/types'
+import type { SearchHit } from '@/api/types'
 import { Technical, TechnicalPanel, useTechnicalDetails } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { connectorFor, type ResultFieldSpec } from '@/config/connectors'
+import { connectorFor } from '@/config/connectors'
 import { labels } from '@/config/labels'
 import { useKnowledgeList } from '@/hooks/queries'
-import { cn, copyToClipboard, displayName, highlightSegments, relativeTime } from '@/lib/utils'
-
-function resultFacts(fields: ResultFieldSpec[] | undefined, metadata: Blob | null | undefined): string[] {
-  const facts: string[] = []
-  for (const field of fields ?? []) {
-    const value = metadata?.[field.key]
-    if (value === null || value === undefined || value === '') continue
-    switch (field.kind) {
-      case 'text':
-        if (typeof value === 'string' || typeof value === 'number') facts.push(String(value))
-        break
-      case 'flag':
-        if (value === true && field.label) facts.push(field.label)
-        break
-      case 'option': {
-        const option = field.options?.find((candidate) => candidate.value === value)
-        if (option) facts.push(option.label)
-        break
-      }
-      case 'date': {
-        const iso = typeof value === 'number' ? new Date(value).toISOString() : String(value)
-        const when = relativeTime(iso)
-        if (when) facts.push(field.label ? `${field.label} ${when}` : when)
-        break
-      }
-    }
-  }
-  return facts
-}
+import { resultFacts } from '@/lib/resultFacts'
+import { cn, copyToClipboard, displayName, highlightSegments } from '@/lib/utils'
 
 function rankLabel(rank: number | null): string {
   return rank === null ? '—' : `#${rank}`

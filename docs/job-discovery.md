@@ -17,6 +17,8 @@ One connector, one prompt, and one row of config. That is the whole of it:
 | One result per posting | results are one per entity on every search — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | Collapsing the same role from two boards | duplicate collapsing | Generic |
 | Scoring the shortlist and delivering it | [`digests.md`](./digests.md) | Generic |
+| Extracting yoe / skills / … from each posting | a METADATA task — [`tasks.md`](./tasks.md#metadata-tasks-enrichment-at-indexing-time) | Data, not code |
+| Browsing every posting, filtering, marking applied / hidden | `/api/entities` + the `/jobs` page — below | Generic API; the page is job-specific config |
 
 ## Setting it up
 
@@ -135,7 +137,40 @@ is not parsed and there is no pay filter. It is still in the posting text the `j
 - **A closed posting lingers** until its retention window elapses; it stops appearing in *digests*
   immediately, since the window is a day. See [L2b](./limitations.md).
 
+## The dashboard (`/jobs`)
+
+A standalone console page — no nav entry, no console chrome — that works as one combined careers page
+across every `JOB_BOARDS` source, so the boards need not be checked one by one. Open
+`http://localhost:8080/jobs` (or `:5173/jobs` under `frontendDev`); `SpaRoutingConfigurator` serves the
+deep link.
+
+- **It lists stored entities, not search hits.** `POST /api/entities/query` reads Mongo directly:
+  every `JOB_POSTING` that is not `DELETED`, newest **first seen** (`createdAt`) first, 25 a page.
+  There is no query text to rank by and no top-K cut-off, which is why this is not built on
+  `/api/search`.
+- **Filters** are declared in `frontend/src/config/jobDashboard.ts`: title, company / team / platform /
+  source (options from `GET /api/entities/facets`, with counts), location (substring), remote,
+  seniority, posted within, first seen within, applied, and show hidden. The state lives in the URL,
+  so a filtered view can be bookmarked.
+- **Enriched fields become filters by themselves.** The page reads the sources' `enrichTaskId`, and
+  each field of that task is a filter — `NUMBER` a min/max, `BOOLEAN` yes/no, `TEXT`/`LIST` chips from
+  the field's `values` or from facets. Adding a field to the task adds the filter; re-index the source
+  to fill it on existing postings. They also show on each row, labelled by field name.
+- **Applied and hidden are user marks in `custom`.** *Mark applied* writes `custom.applied` (a
+  timestamp) and *Hide* writes `custom.hidden: true`, through `PATCH /api/entities/{id}/custom` (a
+  `null` removes a key). `custom` is a third owner on the entity — the user — so neither ingestion nor
+  the indexer touches it, and it survives re-ingest and re-index. Hidden postings are filtered out
+  (`custom.hidden {ne: true}`) unless *Show hidden* is on. A posting removed by retention takes its
+  marks with it.
+
+The endpoints are generic — any entity type, any `metadata.*` / `enriched.*` / `custom.*` path:
+
+| Endpoint | Effect |
+|---|---|
+| `POST /api/entities/query` | `{entityTypes, knowledgeIds, q, filters, sort, limit, offset}` → `{items, total, limit, offset}`. A filter value that is a scalar is equality, an array any-of, an object operators (`eq ne in nin gte gt lte lt contains exists`); an ISO date compares as a date. Paths outside `metadata.* enriched.* custom.* createdAt updatedAt` are a 400. Items carry `metadata`, `enriched`, `custom` and `enrichmentError`, never `raw` or content |
+| `GET /api/entities/facets?entityTypes=&knowledgeIds=&fields=a,b&limit=` | distinct values with counts per path, list elements counted one by one; counted over the type and sources only, so picking a value never hides the others |
+| `PATCH /api/entities/{id}/custom` | merges keys into `custom`; values are text, numbers or booleans, `null` removes |
+
 ## Not built
 
-Aggregator APIs (Adzuna and similar), email delivery, and dismiss/applied tracking. See the
-limitations doc and `digests.md`.
+Aggregator APIs (Adzuna and similar) and email delivery. See the limitations doc and `digests.md`.

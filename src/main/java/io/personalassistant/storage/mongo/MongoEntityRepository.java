@@ -3,6 +3,7 @@ package io.personalassistant.storage.mongo;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.gt;
+import static com.mongodb.client.model.Filters.gte;
 import static com.mongodb.client.model.Filters.in;
 import static com.mongodb.client.model.Filters.lt;
 import static com.mongodb.client.model.Filters.lte;
@@ -16,14 +17,19 @@ import static com.mongodb.client.model.Sorts.orderBy;
 
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.Accumulators;
+import com.mongodb.client.model.Aggregates;
+import com.mongodb.client.model.Facet;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Updates;
 import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityFilter;
 import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
+import io.personalassistant.domain.model.FacetValue;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.storage.repository.EntityRepository;
@@ -32,7 +38,9 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import org.bson.Document;
@@ -434,6 +442,118 @@ public class MongoEntityRepository implements EntityRepository {
     @Override
     public long countByKnowledge(String knowledgeId, EntityQuery query) {
         return collection().countDocuments(listingFilter(knowledgeId, query));
+    }
+
+    @Override
+    public List<Entity> findMatching(EntityFilter filter, int limit, int offset) {
+        List<Entity> out = new ArrayList<>();
+        String sortPath = filter.sort().path();
+        Bson order = filter.sort().descending() ? descending(sortPath) : ascending(sortPath);
+        collection().find(matchingFilter(filter))
+                .projection(Projections.exclude("raw", "content"))
+                .sort(orderBy(order, ascending("_id")))
+                .skip(offset)
+                .limit(limit)
+                .forEach(d -> out.add(fromDoc(d)));
+        return out;
+    }
+
+    @Override
+    public long countMatching(EntityFilter filter) {
+        return collection().countDocuments(matchingFilter(filter));
+    }
+
+    @Override
+    public Map<String, List<FacetValue>> facets(EntityFilter filter, List<String> paths, int limitPerPath) {
+        Map<String, List<FacetValue>> out = new LinkedHashMap<>();
+        if (paths.isEmpty()) {
+            return out;
+        }
+        // $facet output names cannot contain dots, so each path is addressed by its position.
+        List<Facet> facets = new ArrayList<>();
+        for (int i = 0; i < paths.size(); i++) {
+            String field = "$" + paths.get(i);
+            facets.add(new Facet("f" + i,
+                    // A scalar unwinds to itself, so one pipeline serves list and single-valued fields.
+                    Aggregates.unwind(field),
+                    Aggregates.match(ne(paths.get(i), null)),
+                    Aggregates.group(field, Accumulators.sum("count", 1)),
+                    Aggregates.sort(orderBy(descending("count"), ascending("_id"))),
+                    Aggregates.limit(limitPerPath)));
+        }
+        Document result = collection().aggregate(List.of(Aggregates.match(matchingFilter(filter)),
+                Aggregates.facet(facets))).first();
+        for (int i = 0; i < paths.size(); i++) {
+            List<FacetValue> values = new ArrayList<>();
+            if (result != null && result.get("f" + i) instanceof List<?> rows) {
+                for (Object row : rows) {
+                    if (row instanceof Document d && d.get("_id") != null) {
+                        values.add(new FacetValue(BsonSupport.toPlainMap(Map.of("v", d.get("_id"))).get("v"),
+                                longValue(d.get("count"))));
+                    }
+                }
+            }
+            out.put(paths.get(i), values);
+        }
+        return out;
+    }
+
+    @Override
+    public boolean mergeCustom(String id, Map<String, Object> values) {
+        List<Bson> updates = new ArrayList<>();
+        values.forEach((key, value) -> updates.add(value == null
+                ? Updates.unset("custom." + key)
+                : Updates.set("custom." + key, BsonSupport.toBsonMap(Map.of("v", value)).get("v"))));
+        if (updates.isEmpty()) {
+            return collection().countDocuments(eq("_id", id)) > 0;
+        }
+        // updatedAt is left alone: a user's mark is not a content change, and the listing sorts on it.
+        return collection().updateOne(eq("_id", id), Updates.combine(updates)).getMatchedCount() > 0;
+    }
+
+    /** Shared by findMatching, countMatching and facets, so they cannot disagree. */
+    static Bson matchingFilter(EntityFilter filter) {
+        List<Bson> clauses = new ArrayList<>();
+        clauses.add(ne("status", EntityStatus.DELETED.name()));
+        if (!filter.entityTypes().isEmpty()) {
+            clauses.add(in("entityType", filter.entityTypes().stream().map(Enum::name).toList()));
+        }
+        if (!filter.knowledgeIds().isEmpty()) {
+            clauses.add(in("knowledgeId", filter.knowledgeIds()));
+        }
+        if (filter.text() != null) {
+            String quoted = Pattern.quote(filter.text());
+            clauses.add(or(regex("metadata.title", quoted, "i"), regex("externalId", quoted, "i")));
+        }
+        for (EntityFilter.Condition c : filter.conditions()) {
+            clauses.add(condition(c));
+        }
+        return and(clauses);
+    }
+
+    private static Bson condition(EntityFilter.Condition c) {
+        String path = c.path();
+        Object value = bson(c.value());
+        return switch (c.op()) {
+            case EQ -> eq(path, value);
+            case NE -> ne(path, value);
+            case IN -> in(path, (List<?>) value);
+            case NIN -> nin(path, (List<?>) value);
+            case GTE -> gte(path, value);
+            case GT -> gt(path, value);
+            case LTE -> lte(path, value);
+            case LT -> lt(path, value);
+            case CONTAINS -> regex(path, Pattern.quote(String.valueOf(c.value())), "i");
+            case EXISTS -> Boolean.TRUE.equals(c.value()) ? ne(path, null) : eq(path, null);
+        };
+    }
+
+    /** Instants must reach Mongo as Dates, or a range on a stored Date compares against a string. */
+    private static Object bson(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(MongoEntityRepository::bson).toList();
+        }
+        return value instanceof Instant instant ? BsonSupport.date(instant) : value;
     }
 
     @Override
