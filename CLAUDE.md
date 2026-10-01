@@ -156,8 +156,10 @@ adding `@QuarkusTest` + rest-assured tests for resources; the untested-adapter g
 `app.embedding.provider=openai-embed` is the shipped default and reads `GEMINI_API_KEY`. The local
 alternative `onnx-bge` has an empty `app.embedding.onnx.model-path`, so selecting it throws until a
 model is exported. For local dev with neither set `app.embedding.provider=local-hashing`.
-Optional env vars: `GROQ_API_KEY` (answers), `GEMINI_API_KEY` (hosted embeddings),
+Optional env vars: `GEMINI_API_KEY` (hosted embeddings),
 `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh and the email channel's sending account). No `.env` file — bare env vars.
+The LLM has no env var or property: endpoint, key, model and limits are `LLM` connections added in the
+console (Accounts → LLM); with none, answers, digest tasks and enrichment fail.
 
 Credentials live on `Connection` (`connections` collection, one default per connection type), not on `Knowledge`.
 A connection type is a `SourceType` name for a connector's account or a type registered by a `ConnectionKind`

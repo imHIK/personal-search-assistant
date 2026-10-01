@@ -73,7 +73,7 @@ machinery it already has. See `docs/limitations.md` L11.
 > **Connections are not only for knowledges.** A connection's `type` is a *connection type* — a
 > `SourceType` name for a connector's account, or a type something else registers, such as the email
 > channel's send-only `GMAIL_SEND` ([`publishing.md`](./publishing.md)) or the `LLM` endpoint
-> ([`providers.md`](./providers.md#llm-connections-editable-in-the-console)). `ConnectionKindRegistry`
+> ([`providers.md`](./providers.md#llm-connections)). `ConnectionKindRegistry`
 > resolves the type to its check: a connector that `requiresConnection()` is registered automatically
 > and verified by its own `verifyConnection`; anything else is a `ConnectionKind` bean. Nothing below
 > changes for connectors.

@@ -6,7 +6,8 @@ import { useConnections } from '@/hooks/queries'
 
 export function ReconnectBanner() {
   const { data } = useConnections()
-  // Its copy is about imports stopping, which is untrue of an LLM connection: that one falls back.
+  // Its copy is about imports stopping, which is untrue of an LLM connection; that one's error shows on
+  // the Accounts page and in the answer or task that failed.
   const broken = (data ?? []).filter(
     (connection) =>
       connection.status === 'ERROR' && sectionOf(accountFor(connection.type)) === 'accounts',

@@ -1,7 +1,9 @@
 package io.personalassistant.agent.llm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -59,13 +61,19 @@ class OpenAiCompatibleLlmProviderTest {
     }
 
     private OpenAiCompatibleLlmProvider provider() {
-        OpenAiCompatibleLlmProvider p = new OpenAiCompatibleLlmProvider(new OutboundHttp(limiter), RateLimitPolicies.unlimited());
-        p.baseUrl = "http://localhost:" + server.getAddress().getPort();
-        p.modelName = "llama-3.3-70b-versatile";
-        p.apiKey = Optional.of("secret-key");
-        p.temperature = 0.2;
+        OpenAiCompatibleLlmProvider p =
+                new OpenAiCompatibleLlmProvider(new OutboundHttp(limiter), RateLimitPolicies.unlimited());
         p.timeoutSeconds = 5;
         return p;
+    }
+
+    private LlmProfile profile(Optional<Double> temperature, Optional<Integer> maxTokens, Optional<String> key) {
+        return new LlmProfile("answer", "conn_1", "http://localhost:" + server.getAddress().getPort() + "/",
+                "llama-3.3-70b-versatile", temperature, maxTokens, key, null, Optional.empty());
+    }
+
+    private LlmProfile profile() {
+        return profile(Optional.of(0.2), Optional.empty(), Optional.of("secret-key"));
     }
 
     @Test
@@ -74,7 +82,7 @@ class OpenAiCompatibleLlmProviderTest {
                 + "\"content\":\"The answer is 42 [1].\"}}]}";
         OpenAiCompatibleLlmProvider p = provider();
 
-        String reply = p.complete("Answer only from sources.",
+        String reply = p.complete(profile(), "Answer only from sources.",
                 List.of(new Message("user", "What is the answer?")));
 
         assertEquals("The answer is 42 [1].", reply);
@@ -98,7 +106,7 @@ class OpenAiCompatibleLlmProviderTest {
         responseJson = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
         OpenAiCompatibleLlmProvider p = provider();
 
-        p.complete("  ", List.of(new Message("user", "hi")));
+        p.complete(profile(), "  ", List.of(new Message("user", "hi")));
 
         JsonNode messages = mapper.readTree(capturedBody.get()).path("messages");
         assertEquals(1, messages.size());
@@ -111,7 +119,7 @@ class OpenAiCompatibleLlmProviderTest {
         OpenAiCompatibleLlmProvider p = provider();
 
         assertThrows(IllegalStateException.class,
-                () -> p.complete("s", List.of(new Message("user", "hi"))));
+                () -> p.complete(profile(), "s", List.of(new Message("user", "hi"))));
     }
 
     @Test
@@ -121,17 +129,65 @@ class OpenAiCompatibleLlmProviderTest {
         OpenAiCompatibleLlmProvider p = provider();
 
         IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> p.complete("s", List.of(new Message("user", "hi"))));
+                () -> p.complete(profile(), "s", List.of(new Message("user", "hi"))));
         assertTrue(ex.getMessage().contains("500"), ex.getMessage());
     }
 
     @Test
     void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
-        limiter.failWith = new RateLimitedException(RateLimitKey.llm("openai-compat"),
+        limiter.failWith = new RateLimitedException(RateLimitKey.connection("conn_1"),
                 Instant.now().plusSeconds(60));
 
         RateLimitedException e = assertThrows(RateLimitedException.class,
-                () -> provider().complete("sys", List.of(new Message("user", "hi"))));
+                () -> provider().complete(profile(), "sys", List.of(new Message("user", "hi"))));
         assertNotNull(e.retryAt());
+    }
+
+    @Test
+    void blankTemperatureMaxTokensAndKeyAreLeftOutOfTheRequest() throws Exception {
+        responseJson = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+
+        provider().complete(profile(Optional.empty(), Optional.empty(), Optional.empty()), "s",
+                List.of(new Message("user", "hi")));
+
+        JsonNode body = mapper.readTree(capturedBody.get());
+        assertFalse(body.has("temperature"), "the vendor default applies");
+        assertFalse(body.has("max_tokens"));
+        assertNull(capturedAuth.get(), "no key sends no Authorization header (a local Ollama)");
+    }
+
+    @Test
+    void sendsMaxTokensAndJsonModeWhenAsked() throws Exception {
+        responseJson = "{\"choices\":[{\"message\":{\"content\":\"{}\"}}]}";
+
+        provider().complete(profile(Optional.empty(), Optional.of(4096), Optional.empty()),
+                LlmProvider.ResponseFormat.JSON_OBJECT, "s", List.of(new Message("user", "hi")));
+
+        JsonNode body = mapper.readTree(capturedBody.get());
+        assertEquals(4096, body.path("max_tokens").asInt());
+        assertEquals("json_object", body.path("response_format").path("type").asText());
+    }
+
+    @Test
+    void eachCallIsChargedToItsConnection() {
+        assertEquals(RateLimitKey.connection("conn_1"), provider().rateLimit(profile()).key());
+    }
+
+    @Test
+    void anErrorNamesTheCallButNeverTheKey() {
+        status = 401;
+        responseJson = "{\"error\":\"bad key\"}";
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> provider().complete(profile(), "s", List.of(new Message("user", "hi"))));
+
+        assertTrue(e.getMessage().contains("connection=conn_1"), e.getMessage());
+        assertFalse(e.getMessage().contains("secret-key"), "the key must never reach a log or an error");
+    }
+
+    @Test
+    void theStubProviderRefuses() {
+        assertThrows(UnsupportedOperationException.class,
+                () -> new StubLlmProvider().complete(profile(), "sys", List.of()));
     }
 }

@@ -370,7 +370,7 @@ function Editor({
             </Select>
             <Technical>
               <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
-                app.llm.profile.{llmProfile}
+                llmProfile: {llmProfile}
               </span>
             </Technical>
           </Field>

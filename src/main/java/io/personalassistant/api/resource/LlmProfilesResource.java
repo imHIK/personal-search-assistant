@@ -15,6 +15,7 @@ public class LlmProfilesResource {
     @Inject
     LlmProfiles profiles;
 
+    /** Profiles LLM connections serve, plus those the bundled tasks ask for. */
     @GET
     public List<String> list() {
         return profiles.names();

@@ -23,7 +23,7 @@ public class LlmProviderSelector {
         for (LlmProvider provider : implementations) {
             available.add(provider.providerId());
             if (provider.providerId().equals(selected)) {
-                LOG.info("Active LLM provider: " + selected + " (model=" + provider.model() + ")");
+                LOG.info("Active LLM provider: " + selected);
                 return provider;
             }
         }

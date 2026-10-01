@@ -5,45 +5,31 @@ import io.personalassistant.common.ratelimit.RateLimitPolicy;
 import java.util.Optional;
 
 /**
- * Per-call LLM overrides, from an LLM connection or {@code app.llm.profile.<name>.*}. Every field is optional;
- * absent inherits the provider default.
+ * One call's endpoint, model and limits, resolved from an LLM connection.
  *
- * @param maxTokens absent leaves it unsent, so the provider's default applies and a long answer can be cut
- *                  off silently
- * @param apiKey blank sends no auth header, which a local Ollama needs
+ * @param name the profile a task asked for, kept so logs and errors can name it
+ * @param temperature absent is left out of the request, so the vendor default applies
+ * @param maxTokens absent is left out too, and a long reply can then be cut off silently
+ * @param apiKey absent sends no Authorization header, which a local Ollama needs
  * @param rateLimitMode absent means fail fast
- * @param connectionId present when an LLM connection backs the profile; calls are then charged to that
- *                     connection's bucket instead of the shared provider one
  */
 public record LlmProfile(
         String name,
-        Optional<String> baseUrl,
-        Optional<String> model,
+        String connectionId,
+        String baseUrl,
+        String model,
         Optional<Double> temperature,
         Optional<Integer> maxTokens,
         Optional<String> apiKey,
-        Optional<RateLimitMode> rateLimitMode,
-        Optional<String> connectionId,
-        Optional<RateLimitPolicy> rateLimit) {
+        RateLimitPolicy rateLimit,
+        Optional<RateLimitMode> rateLimitMode) {
 
-    public LlmProfile(String name, Optional<String> baseUrl, Optional<String> model,
-                      Optional<Double> temperature, Optional<Integer> maxTokens, Optional<String> apiKey,
-                      Optional<RateLimitMode> rateLimitMode) {
-        this(name, baseUrl, model, temperature, maxTokens, apiKey, rateLimitMode, Optional.empty(),
-                Optional.empty());
-    }
-
-    public static LlmProfile inherit(String name) {
-        return new LlmProfile(name, Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), Optional.empty(), Optional.empty());
-    }
-
-    /** Background callers wait for the window instead of failing, unless the profile says otherwise. */
+    /** Background callers wait for the window instead of failing. */
     public LlmProfile withDefaultMode(RateLimitMode mode) {
         if (rateLimitMode.isPresent()) {
             return this;
         }
-        return new LlmProfile(name, baseUrl, model, temperature, maxTokens, apiKey, Optional.of(mode),
-                connectionId, rateLimit);
+        return new LlmProfile(name, connectionId, baseUrl, model, temperature, maxTokens, apiKey, rateLimit,
+                Optional.of(mode));
     }
 }

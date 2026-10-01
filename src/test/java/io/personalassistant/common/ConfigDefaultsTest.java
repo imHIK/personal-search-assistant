@@ -29,15 +29,6 @@ class ConfigDefaultsTest {
      * is dead.
      */
     private static final Set<String> REACHED_ANOTHER_WAY = Set.of(
-            // Resolved by name in LlmProfiles.
-            "app.llm.profile.answer.model",
-            "app.llm.profile.answer.temperature",
-            "app.llm.profile.answer.max-tokens",
-            "app.llm.profile.lite.base-url",
-            "app.llm.profile.lite.model",
-            "app.llm.profile.lite.api-key",
-            "app.llm.profile.lite.temperature",
-            "app.llm.profile.lite.max-tokens",
             // Interpolated into @Scheduled(every = "{…}") rather than injected.
             "app.ingestion.poll-interval",
             "app.indexing.poll-interval",

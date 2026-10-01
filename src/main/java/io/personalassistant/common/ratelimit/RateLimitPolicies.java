@@ -19,8 +19,6 @@ public class RateLimitPolicies {
 
     private static final String CONNECTOR_PREFIX = "app.ratelimit.connector.";
     private static final String JOB_BOARDS_KEY = "app.ratelimit.job-boards.rules";
-    private static final String LLM_KEY = "app.ratelimit.llm.rules";
-    private static final String LLM_BACKGROUND_KEY = "app.ratelimit.llm.background.rules";
     private static final String EMBEDDING_KEY = "app.ratelimit.embedding.rules";
     private static final String EMBEDDING_BACKGROUND_KEY = "app.ratelimit.embedding.background.rules";
 
@@ -31,12 +29,6 @@ public class RateLimitPolicies {
 
     @ConfigProperty(name = JOB_BOARDS_KEY)
     Optional<String> jobBoardRules;
-
-    @ConfigProperty(name = LLM_KEY)
-    Optional<String> llmRules;
-
-    @ConfigProperty(name = LLM_BACKGROUND_KEY)
-    Optional<String> llmBackgroundRules;
 
     @ConfigProperty(name = EMBEDDING_KEY)
     Optional<String> embeddingRules;
@@ -67,11 +59,6 @@ public class RateLimitPolicies {
 
     public RateLimit forBoard(String platform, RateLimitMode mode) {
         return new RateLimit(RateLimitKey.board(platform), parsed(JOB_BOARDS_KEY, jobBoardRules), mode);
-    }
-
-    public RateLimit forLlm(String providerId, RateLimitMode mode) {
-        return new RateLimit(RateLimitKey.llm(providerId),
-                tiered(mode, LLM_KEY, llmRules, LLM_BACKGROUND_KEY, llmBackgroundRules), mode);
     }
 
     public RateLimit forEmbedding(String providerId, RateLimitMode mode) {

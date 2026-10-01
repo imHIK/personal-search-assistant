@@ -124,4 +124,18 @@ public final class TestData {
                 "sha256:" + externalId, EntityStatus.INGESTED, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), now, now, null, 0L);
     }
+
+    /** An LLM connection with an optional profile; the key is {@code <id>-key}. */
+    public static Connection llmConnection(String id, String baseUrl, String profile, boolean isDefault,
+                                           ConnectionStatus status) {
+        Map<String, Object> config = new java.util.HashMap<>();
+        config.put("baseUrl", baseUrl);
+        config.put("model", id + "-model");
+        if (profile != null) {
+            config.put("profile", profile);
+        }
+        Instant now = Instant.now();
+        return new Connection(id, id, "LLM", Map.of("apiKey", id + "-key"), config, null, isDefault, status,
+                null, now, now);
+    }
 }

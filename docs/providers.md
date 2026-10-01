@@ -14,8 +14,9 @@ finds the matching adapter, and produces it as the `@Default` bean that `Default
 
 ## Adding a new model
 
-- **Same protocol (OpenAI-compatible):** just config. Point the hosted adapter at the new
-  `base-url` + `model` + `api-key`. Covers Gemini, Jina, Mistral, Groq, OpenRouter, Together, Ollama.
+- **Same protocol (OpenAI-compatible):** no code. For embeddings, point the hosted adapter's
+  `base-url` + `model` + `api-key` properties at it; for the LLM, add an `LLM` connection in the console
+  ([below](#llm-connections)). Covers Gemini, Jina, Mistral, Groq, OpenRouter, Together, Ollama.
 - **New protocol:** add one `@ProviderImpl`-qualified bean implementing the port with a new
   `providerId()`, then set the config key to it. Nothing else changes.
 
@@ -66,16 +67,16 @@ it does mean a large first import can take hours on a free tier.
 
 ### Rate limiting the model endpoints
 
-Set ceilings with `app.ratelimit.embedding.rules` and `app.ratelimit.llm.rules`, in the same
-`"<permits>/<window>"` form the connectors use (`10/1s,500/1m,10000/1d`); blank means unlimited. The
-shipped embedding rules are `6/1m,120/1d`, sized for Gemini's free tier; the LLM's are blank. Windows are
-keyed by provider id, so switching provider switches window.
+Set embedding ceilings with `app.ratelimit.embedding.rules`, in the same `"<permits>/<window>"` form the
+connectors use (`10/1s,500/1m,10000/1d`); blank means unlimited. The shipped rules are `6/1m,120/1d`,
+sized for Gemini's free tier. Embedding windows are keyed by provider id, so switching provider switches
+window. **LLM ceilings are not here:** each `LLM` connection carries its own rules, set on the connection
+in the console — see [LLM connections](#llm-connections).
 
 **Background calls stop short of the ceiling, so search keeps a reserve.** Indexing and search embed
 through the same account, and a backfill would otherwise spend the whole day's quota and leave every
-search without a vector. `app.ratelimit.embedding.background.rules` (and `app.ratelimit.llm.background.rules`)
-is a lower ceiling that `RateLimitPolicies` applies to `WAIT`-mode calls — indexing, and LLM profiles
-with `rate-limit-mode=wait` — **on the same key** as the shared rules:
+search without a vector. `app.ratelimit.embedding.background.rules` is a lower ceiling that
+`RateLimitPolicies` applies to `WAIT`-mode calls — indexing — **on the same key** as the shared rules:
 
 ```properties
 app.ratelimit.embedding.rules=6/1m,120/1d             # what the provider allows; searches may use all of it
@@ -114,25 +115,11 @@ already have separate entry points:
 | Indexing a backfill | `EmbeddingProvider.embedAll` | **Waits**, then defers — the import slows down |
 | Embedding a search query | `EmbeddingProvider.embedQuery` via `QueryEmbedder` | **Fails fast** — the search runs `LEXICAL` and returns 200 with `vectorError` set, hits intact |
 | Answering | `LlmProvider.complete` under the `answer` profile | **Fails fast** — 200 with `answerError` set, hits intact |
-| A background digest | `LlmProvider.complete` under a profile with `rate-limit-mode=wait` | **Waits** |
+| A digest's task | `LlmProvider.complete` under the task's profile | **Fails fast** — the run is kept, with `taskError` set |
+| Enriching an entity at indexing time | `DefaultMetadataEnricher` | **Waits**, then the indexing pass defers |
 
-The LLM's behaviour rides on the profile rather than the provider because the same bean serves both a
-user's request thread and the digest scheduler:
-
-```properties
-app.llm.profile.answer.rate-limit-mode=fail-fast
-app.llm.profile.digest.rate-limit-mode=wait
-```
-
-Absent, it is fail-fast — the safe default for the only caller that names no background profile.
-
-**Profiles are discovered, never declared.** `LlmProfiles.get` looks keys up dynamically, so a new
-profile is created by adding properties — no bean, no injection point, no code change. `names()`
-enumerates them by scanning `Config.getPropertyNames()` for the `app.llm.profile.` prefix, which is
-what `GET /api/llm-profiles` serves: a task editor can then offer the models that actually exist
-rather than asking for a name to be typed. That matters because an **unknown profile name does not
-throw** — it resolves to an inherit-everything profile with a warning, so a mistyped name silently
-runs on the provider default. A picker is the cheapest way to make that unreachable.
+The mode belongs to the *call*, not the account: `LlmProfile.rateLimitMode` is empty (fail fast) unless
+the caller sets it, and enrichment is the one that does (`withDefaultMode(WAIT)`).
 
 `app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
 is the one config key that silently corrupts the index if guessed — a missing property would
@@ -208,129 +195,74 @@ curl -s $BASE/embeddings -H "Authorization: Bearer $GEMINI_API_KEY" -H 'Content-
 
 | `app.llm.provider` | Adapter | Notes |
 |---|---|---|
-| `openai-compat` (default) | `OpenAiCompatibleLlmProvider` | Hosted (Groq/Gemini/…) or local Ollama |
-| `none` | `StubLlmProvider` | Throws on use; disables `answer:true` |
+| `openai-compat` (default) | `OpenAiCompatibleLlmProvider` | Any OpenAI-compatible chat endpoint: Groq, Gemini, OpenRouter, a local Ollama |
+| `none` | `StubLlmProvider` | Throws on use; turns every LLM call off |
 
-### Hosted setup (default — Groq free tier)
+`app.llm.provider` and `app.llm.timeout-seconds` are the only LLM properties. **Endpoint, key, model,
+temperature, max tokens and rate limits are not configuration at all** — they live on `LLM`
+connections, edited in the console, so changing the model needs no restart and no env var.
 
-```properties
-app.llm.provider=openai-compat
-app.llm.base-url=https://api.groq.com/openai/v1
-app.llm.model=llama-3.3-70b-versatile
-app.llm.api-key=${GROQ_API_KEY:}
-```
+### LLM connections
 
-Get a free key from the Groq console and export it as `GROQ_API_KEY`. For Gemini instead, set
-`base-url=https://generativelanguage.googleapis.com/v1beta/openai`, `model=gemini-2.0-flash`,
-`api-key=${GEMINI_API_KEY:}`.
-
-### Local later (Ollama)
-
-```bash
-ollama pull llama3.1:8b
-```
-
-```properties
-app.llm.base-url=http://localhost:11434/v1
-app.llm.model=llama3.1:8b
-app.llm.api-key=
-```
-
-No code change — same adapter, different config.
-
-### LLM profiles (per-role model selection)
-
-The `app.llm.*` keys above are the *provider defaults*. On top of them sit **named profiles**, resolved
-from `app.llm.profile.<name>.<key>` by `LlmProfiles`:
-
-```properties
-app.llm.profile.answer.model=llama-3.3-70b-versatile
-app.llm.profile.answer.temperature=0.2
-app.llm.profile.answer.max-tokens=2048
-
-app.llm.profile.lite.base-url=https://generativelanguage.googleapis.com/v1beta/openai
-app.llm.profile.lite.model=gemini-3.5-flash-lite
-app.llm.profile.lite.api-key=${GEMINI_API_KEY:}
-app.llm.profile.lite.temperature=0.0
-app.llm.profile.lite.max-tokens=4096
-```
-
-`lite` (job-fit scoring) is redirected to Gemini's OpenAI-compatible endpoint
-because of Groq's free-tier **tokens per minute**. Groq rejects any single request whose prompt plus
-`max_tokens` exceeds the per-minute limit (8000 for `gpt-oss-120b`) with a 413 that waiting cannot fix,
-and job-fit judges whole postings — ten of them run to ~60k chars. `max-tokens` is generous because
-a thinking model's reasoning is charged against it; a tight cap truncates the JSON and JSON mode then rejects the
-reply server-side (`json_validate_failed`). The rate limiter keys config-resolved LLM calls by provider
-id (`openai-compat`), not endpoint, so Groq- and Gemini-bound calls share one counter — harmless while
-`app.ratelimit.llm.*` rules are blank, and avoided altogether by moving each to an LLM connection.
-
-Recognised sub-keys: `base-url`, `model`, `temperature`, `max-tokens`, `api-key`. A caller asks for a
-profile by name — the answering *task* names `answer`, via `app.agent.task` — and gets the
-provider defaults for everything the profile does not set.
-
-**Why this exists.** LLM use is becoming both frequent and heterogeneous: answering wants a strong
-model, index-time enrichment wants a cheap one, a listwise reranker wants a fast one, and they need not
-live on the same provider. Without profiles the only way to reach a second model is a second bean with
-its own config keys, so every feature would grow the wiring. With them, giving a new feature its own
-model is a config edit — the keys are looked up dynamically, so **adding a profile requires no code at
-all**. `LlmProvider.complete(profile, system, messages)` is a `default` method, so providers that cannot
-vary anything (the stub) are unaffected.
-
-Three behaviours worth knowing:
-
-- **Unset means inherit, and blank counts as unset.** A profile naming only `model` keeps the provider's
-  temperature, timeout and endpoint. Blank has to mean "inherit" because a `${ENV_VAR:}`-backed key is
-  empty exactly when the variable is unset, and an empty model would otherwise be sent verbatim.
-- **A profile that redirects `base-url` must bring its own `api-key`.** It deliberately does *not* fall
-  back to the provider's — that would send one vendor's secret to another vendor's host. Sending no key
-  is the right default for the main reason to redirect, a local Ollama.
-- **An unknown profile name warns and inherits everything** rather than throwing. A misspelled profile on
-  a background feature should degrade to the default model, not take the feature offline.
-
-`max-tokens` deserves a note: nothing was sent before profiles existed, so the vendor default applied and
-a long list answer could be truncated with no local signal that it had been.
-
-### LLM connections (editable in the console)
-
-An `LLM` connection — added under Accounts → LLM, stored in `connections` like any other account —
-replaces the properties above at runtime, with no restart. It is a `ConnectionKind` bean
-(`LlmConnectionKind`), so it gets the generic create / edit / test / default / health-sweep machinery
-for free:
+An `LLM` connection is added under Accounts → LLM and stored in `connections` like any other account. It
+is a `ConnectionKind` bean (`LlmConnectionKind`), so it gets the generic create / edit / test / default /
+health-sweep machinery for free:
 
 | Where | Key | Notes |
 |---|---|---|
 | `auth` | `apiKey` | Empty sends no Authorization header (Ollama) |
 | `config` | `baseUrl`, `model` | Required |
 | `config` | `profile` | Optional: the profile name this connection serves |
-| `config` | `temperature`, `maxTokens` | Optional: absent falls back to the configured profile |
+| `config` | `temperature`, `maxTokens` | Optional: **absent is left out of the request**, so the vendor default applies |
 | `rateLimit` | rules | This connection's own window, `connection:<id>` |
 
 `LlmProfiles.get(name)` resolves, on every call (an edit applies to the next call):
 
-1. the ACTIVE `LLM` connection whose `config.profile` is `name`;
-2. otherwise the default ACTIVE `LLM` connection (the first one created becomes the default);
-3. otherwise `app.llm.profile.<name>.*` over `app.llm.*`, as before.
+1. the `LLM` connection whose `config.profile` is `name`;
+2. otherwise the default `LLM` connection (the first one created becomes the default);
+3. otherwise **it throws**, naming the profile and where to add a connection. Answering turns that into
+   `answerError`, a digest into `taskError`, and enrichment into the entity's `enrichment.error` — the
+   entity is still indexed. There is deliberately no configuration fallback.
 
-A connection always supplies endpoint, key and model **together** — the base-url-needs-its-own-key rule
-again — while `temperature` / `max-tokens` it leaves unset still come from the configured profile, so
-`lite`'s `0.0` / `4096` survive a move to a connection. `rate-limit-mode` stays with the configured
-profile (or the caller): it is a property of the call, not the account. Two connections may not serve
-the same profile; verification refuses the second. `GET /api/llm-profiles` lists configured profiles
-plus every profile a connection names.
+A `DISABLED` connection is skipped. One in `ERROR` is **still used**: with nothing to fall back to,
+skipping it would turn a failed health check — possibly a transient network blip on `/models` — into a
+certain failure, while a genuinely broken connection fails the call with its real error anyway. Two
+connections may not serve the same profile; verification refuses the second.
 
-**Rate limits are per connection.** A connection-backed call is charged to `connection:<id>` with the
-connection's rules (falling back to `app.ratelimit.connector.LLM.rules`, blank today), not to
-`llm:openai-compat`, so a Groq and a Gemini connection no longer share one counter. The
-`app.ratelimit.llm[.background].rules` keys apply only to calls that fall through to config.
+**Profiles are just names.** A task names one (`answer`, `lite`, or anything a user task picks); which
+connection serves it is decided per call. `GET /api/llm-profiles` lists the profiles connections serve
+plus those the bundled tasks ask for, so a task editor can offer `answer` and `lite` before any
+connection claims them. A profile nobody claims runs on the default connection.
+
+A typical setup is two connections:
+
+| Name | `baseUrl` | `model` | `profile` | Other |
+|---|---|---|---|---|
+| Groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | — (make it the default) | `maxTokens` 2048 |
+| Gemini lite | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-3.5-flash-lite` | `lite` | `temperature` 0.0, `maxTokens` 4096 |
+
+`lite` (job-fit scoring, enrichment) belongs on Gemini because of Groq's free-tier **tokens per minute**:
+Groq rejects any single request whose prompt plus `max_tokens` exceeds the per-minute limit (8000 for
+`gpt-oss-120b`) with a 413 that waiting cannot fix, and job-fit judges whole postings — ten of them run to
+~60k chars. Give `lite` a generous `maxTokens`: a thinking model's reasoning is charged against it, and a
+tight cap truncates the JSON, which JSON mode then rejects server-side (`json_validate_failed`). Nothing
+sends `max_tokens` unless a connection sets it, and then a long reply can be cut off with no local signal.
+
+For a local model, add a connection with `baseUrl` `http://localhost:11434/v1`, `model` `llama3.1:8b`
+and no key.
+
+**Rate limits are per connection.** Every call is charged to `connection:<id>` with the connection's rules
+(falling back to `app.ratelimit.connector.LLM.rules`, unset), so a Groq and a Gemini connection never
+share a counter.
 
 **Verification lists models, it does not complete.** `verify` calls `GET {baseUrl}/models` and checks
 `model` is offered (Gemini lists `models/<name>`, so a suffix match counts). The health sweep re-runs it
-every `app.connections.health-interval`, and a listing costs no tokens. A connection in `ERROR` drops out
-of resolution, so calls fall back to config rather than failing — which is also why the console's
-reconnect banner ignores LLM connections.
+every `app.connections.health-interval`, and a listing costs no tokens. The console's reconnect banner
+ignores LLM connections, since its copy is about imports stopping.
 
 The connection's `auth` (the key) is returned by `GET /api/connections` like every other account's
-credentials — see `ConnectionResource`.
+credentials — see `ConnectionResource`. Logs and errors name the connection, endpoint and model, never
+the key.
 
 ### Tasks, prompts and profiles
 
@@ -340,16 +272,17 @@ An LLM call resolves through three named things, each owning one decision:
 app.agent.task=answer
    └─ config/prompts.json  tasks.answer
         ├─ prompt:     "answer"   →  prompts.answer  (the text)
-        ├─ llmProfile: "answer"   →  app.llm.profile.answer.*  (the model)
+        ├─ llmProfile: "answer"   →  the LLM connection serving "answer", else the default  (the model)
         └─ contextChars / maxSources          (the budgets)
 ```
 
 **A prompt is keyed by task, never by model.** One tied to a model cannot be reused when the model
-changes and cannot be shared by two features on different models — so the model lives in the profile,
-which the task references by name. A task can therefore carry a prompt but never model settings. There is
+changes and cannot be shared by two features on different models — so the model lives on the connection
+serving the profile, which the task references by name. A task can therefore carry a prompt but never model settings. There is
 a test that fails if any prompt mentions a model or provider name.
 
-Adding a second LLM-using feature is a JSON entry plus a profile: no new bean, no new config namespace.
+Adding a second LLM-using feature is a JSON entry naming a profile: no new bean, no new config namespace,
+and a connection for that profile only if it should not run on the default.
 See [`configuration.md`](./configuration.md).
 
 > `app.embedding.onnx.query-instruction` below is deliberately **not** part of this. It is a model's

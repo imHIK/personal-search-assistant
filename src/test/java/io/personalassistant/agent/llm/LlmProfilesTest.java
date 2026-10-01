@@ -1,15 +1,15 @@
 package io.personalassistant.agent.llm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.agent.prompt.PromptCatalog;
 import io.personalassistant.common.ratelimit.RateLimitRules;
 import io.personalassistant.domain.model.Connection;
 import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.testsupport.InMemoryConnectionRepository;
-import io.smallrye.config.SmallRyeConfigBuilder;
-import java.time.Instant;
+import io.personalassistant.testsupport.TestData;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,140 +18,74 @@ import org.junit.jupiter.api.Test;
 
 class LlmProfilesTest {
 
-    private static LlmProfiles profiles(Map<String, String> properties) {
-        return profiles(properties, new InMemoryConnectionRepository());
-    }
+    private final InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
+    private final LlmProfiles profiles = new LlmProfiles(repo, PromptCatalog.bundled());
 
-    private static LlmProfiles profiles(Map<String, String> properties, InMemoryConnectionRepository repo) {
-        return new LlmProfiles(new SmallRyeConfigBuilder().withDefaultValues(properties).build(), repo);
-    }
-
-    private static Connection llm(String id, String profile, boolean isDefault, ConnectionStatus status) {
-        Map<String, Object> config = new HashMap<>();
-        config.put(LlmConnections.BASE_URL, "https://" + id + ".example/v1");
-        config.put(LlmConnections.MODEL, id + "-model");
-        if (profile != null) {
-            config.put(LlmConnections.PROFILE, profile);
-        }
-        return new Connection(id, id, LlmConnections.TYPE, Map.of(LlmConnections.API_KEY, id + "-key"),
-                config, RateLimitRules.parse("5/1m"), isDefault, status, null, Instant.now(), Instant.now());
+    private Connection save(String id, String profile, boolean isDefault, ConnectionStatus status) {
+        return repo.save(TestData.llmConnection(id, "https://" + id + ".example/v1", profile, isDefault, status));
     }
 
     @Test
-    void aConnectionServingTheProfileWinsOverTheDefaultAndConfig() {
-        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
-        repo.save(llm("groq", null, true, ConnectionStatus.ACTIVE));
-        repo.save(llm("gemini", "lite", false, ConnectionStatus.ACTIVE));
-        LlmProfiles resolved = profiles(Map.of(
-                "app.llm.profile.lite.model", "configured",
-                "app.llm.profile.lite.max-tokens", "4096"), repo);
+    void theConnectionServingAProfileWinsOverTheDefault() {
+        save("groq", null, true, ConnectionStatus.ACTIVE);
+        save("gemini", "lite", false, ConnectionStatus.ACTIVE);
 
-        LlmProfile lite = resolved.get("lite");
-        assertEquals(Optional.of("gemini-model"), lite.model());
-        assertEquals(Optional.of("https://gemini.example/v1"), lite.baseUrl());
+        LlmProfile lite = profiles.get("lite");
+        assertEquals("gemini", lite.connectionId());
+        assertEquals("https://gemini.example/v1", lite.baseUrl());
+        assertEquals("gemini-model", lite.model());
         assertEquals(Optional.of("gemini-key"), lite.apiKey());
-        assertEquals(Optional.of("gemini"), lite.connectionId());
-        assertEquals(Optional.of(4096), lite.maxTokens(), "unset on the connection, so config fills it");
-        assertEquals(1, lite.rateLimit().orElseThrow().rules().size());
+        assertEquals("lite", lite.name());
 
-        assertEquals(Optional.of("groq"), resolved.get("answer").connectionId(),
-                "an unclaimed profile goes to the default connection");
-        assertEquals(Optional.of("groq"), resolved.get(null).connectionId());
+        assertEquals("groq", profiles.get("answer").connectionId(), "an unclaimed profile takes the default");
+        assertEquals("groq", profiles.get(null).connectionId());
     }
 
     @Test
-    void anInactiveConnectionFallsThroughToConfig() {
-        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
-        repo.save(llm("gemini", "lite", true, ConnectionStatus.ERROR));
+    void blankTemperatureAndMaxTokensAreLeftOut() {
+        save("groq", null, true, ConnectionStatus.ACTIVE);
 
-        LlmProfile lite = profiles(Map.of("app.llm.profile.lite.model", "configured"), repo).get("lite");
-
-        assertEquals(Optional.of("configured"), lite.model());
-        assertTrue(lite.connectionId().isEmpty());
-    }
-
-    @Test
-    void namesIncludeTheProfilesConnectionsServe() {
-        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
-        repo.save(llm("ollama", "local", false, ConnectionStatus.ACTIVE));
-
-        assertTrue(profiles(Map.of("app.llm.profile.answer.model", "x"), repo).names()
-                .containsAll(List.of("answer", "local")));
-    }
-
-    @Test
-    void readsEveryRecognisedKey() {
-        LlmProfile profile = profiles(Map.of(
-                "app.llm.profile.answer.base-url", "https://api.groq.com/openai/v1",
-                "app.llm.profile.answer.model", "llama-3.3-70b-versatile",
-                "app.llm.profile.answer.temperature", "0.2",
-                "app.llm.profile.answer.max-tokens", "2048",
-                "app.llm.profile.answer.api-key", "sk-test")).get("answer");
-
-        assertEquals("answer", profile.name());
-        assertEquals(Optional.of("https://api.groq.com/openai/v1"), profile.baseUrl());
-        assertEquals(Optional.of("llama-3.3-70b-versatile"), profile.model());
-        assertEquals(Optional.of(0.2), profile.temperature());
-        assertEquals(Optional.of(2048), profile.maxTokens());
-        assertEquals(Optional.of("sk-test"), profile.apiKey());
-    }
-
-    @Test
-    void leavesUnsetKeysEmptySoTheProviderDefaultApplies() {
-        LlmProfile profile = profiles(Map.of("app.llm.profile.lite.model", "llama-3.1-8b-instant"))
-                .get("lite");
-
-        assertEquals(Optional.of("llama-3.1-8b-instant"), profile.model());
-        assertTrue(profile.temperature().isEmpty(), "temperature must inherit, not reset");
-        assertTrue(profile.baseUrl().isEmpty());
+        LlmProfile profile = profiles.get("answer");
+        assertTrue(profile.temperature().isEmpty(), "nothing is invented: the vendor default applies");
         assertTrue(profile.maxTokens().isEmpty());
-        assertTrue(profile.apiKey().isEmpty());
     }
 
     @Test
-    void treatsBlankAsUnset() {
-        LlmProfile profile = profiles(Map.of(
-                "app.llm.profile.lite.model", "llama-3.1-8b-instant",
-                "app.llm.profile.lite.api-key", "   ")).get("lite");
+    void readsTemperatureMaxTokensAndRateLimitFromTheConnection() {
+        Connection c = TestData.llmConnection("gemini", "https://g/v1", "lite", true, ConnectionStatus.ACTIVE);
+        Map<String, Object> config = new HashMap<>(c.config());
+        config.put("temperature", 0.0);
+        config.put("maxTokens", 4096);
+        repo.save(c.withEdits(c.name(), c.auth(), config, RateLimitRules.parse("15/1m"), c.updatedAt()));
 
-        assertTrue(profile.apiKey().isEmpty(), "blank is absent, not an empty credential");
+        LlmProfile lite = profiles.get("lite");
+        assertEquals(Optional.of(0.0), lite.temperature());
+        assertEquals(Optional.of(4096), lite.maxTokens());
+        assertEquals(1, lite.rateLimit().rules().size());
     }
 
     @Test
-    void unknownProfileInheritsEverything() {
-        LlmProfile profile = profiles(Map.of("app.llm.profile.answer.model", "x")).get("rerank");
+    void anErroredConnectionIsStillUsedButADisabledOneIsNot() {
+        save("flaky", "lite", false, ConnectionStatus.ERROR);
+        save("off", null, true, ConnectionStatus.DISABLED);
 
-        assertEquals("rerank", profile.name(), "the name is kept so logs and errors can report it");
-        assertTrue(profile.model().isEmpty());
-        assertTrue(profile.baseUrl().isEmpty());
+        assertEquals("flaky", profiles.get("lite").connectionId(),
+                "with no fallback, a failed health check must not take the only connection away");
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> profiles.get("answer"));
+        assertTrue(e.getMessage().contains("Accounts"), e.getMessage());
     }
 
     @Test
-    void toleratesANullOrBlankName() {
-        LlmProfiles resolved = profiles(Map.of("app.llm.profile.answer.model", "x"));
+    void withNoConnectionEveryProfileFailsNamingWhereToAddOne() {
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> profiles.get("lite"));
 
-        assertTrue(resolved.get(null).model().isEmpty());
-        assertTrue(resolved.get("  ").model().isEmpty());
+        assertTrue(e.getMessage().contains("\"lite\""), e.getMessage());
     }
 
     @Test
-    void profilesAreIndependent() {
-        LlmProfiles resolved = profiles(Map.of(
-                "app.llm.profile.answer.model", "llama-3.3-70b-versatile",
-                "app.llm.profile.lite.model", "llama-3.1-8b-instant"));
+    void namesAreConnectionProfilesPlusTheBundledTasksProfiles() {
+        save("ollama", "local", false, ConnectionStatus.ACTIVE);
 
-        assertEquals(Optional.of("llama-3.3-70b-versatile"), resolved.get("answer").model());
-        assertEquals(Optional.of("llama-3.1-8b-instant"), resolved.get("lite").model());
-        assertFalse(resolved.get("answer").model().equals(resolved.get("lite").model()));
-    }
-
-    @Test
-    void inheritFactoryOverridesNothing() {
-        LlmProfile profile = LlmProfile.inherit("default");
-
-        assertEquals("default", profile.name());
-        assertTrue(profile.model().isEmpty() && profile.baseUrl().isEmpty()
-                && profile.temperature().isEmpty() && profile.maxTokens().isEmpty()
-                && profile.apiKey().isEmpty());
+        assertTrue(profiles.names().containsAll(List.of("local", "answer", "lite")), profiles.names().toString());
     }
 }

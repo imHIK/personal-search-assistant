@@ -18,10 +18,6 @@ public record RateLimitKey(String value) {
         return new RateLimitKey("board:" + platform);
     }
 
-    public static RateLimitKey llm(String providerId) {
-        return new RateLimitKey("llm:" + providerId);
-    }
-
     public static RateLimitKey embedding(String providerId) {
         return new RateLimitKey("embedding:" + providerId);
     }

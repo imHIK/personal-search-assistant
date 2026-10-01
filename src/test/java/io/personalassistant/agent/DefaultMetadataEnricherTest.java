@@ -12,9 +12,10 @@ import io.personalassistant.agent.prompt.PromptCatalog;
 import io.personalassistant.agent.prompt.TaskLibrary;
 import io.personalassistant.common.ratelimit.RateLimitMode;
 import io.personalassistant.domain.model.Task;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
 import io.personalassistant.testsupport.InMemoryConnectionRepository;
 import io.personalassistant.testsupport.InMemoryTaskRepository;
-import io.smallrye.config.SmallRyeConfigBuilder;
+import io.personalassistant.testsupport.TestData;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -34,16 +35,6 @@ class DefaultMetadataEnricherTest {
         }
 
         @Override
-        public String model() {
-            return "m";
-        }
-
-        @Override
-        public String complete(String system, List<Message> messages) {
-            return complete(LlmProfile.inherit("default"), ResponseFormat.TEXT, system, messages);
-        }
-
-        @Override
         public String complete(LlmProfile profile, ResponseFormat format, String system,
                                List<Message> messages) {
             this.profile = profile;
@@ -55,9 +46,14 @@ class DefaultMetadataEnricherTest {
     }
 
     private final ScriptedLlm llm = new ScriptedLlm();
+    private final InMemoryConnectionRepository connections = new InMemoryConnectionRepository();
     private final DefaultMetadataEnricher enricher = new DefaultMetadataEnricher(llm,
-            new LlmProfiles(new SmallRyeConfigBuilder().build(), new InMemoryConnectionRepository()),
+            new LlmProfiles(connections, PromptCatalog.bundled()),
             new TaskLibrary(PromptCatalog.bundled(), new InMemoryTaskRepository()));
+
+    {
+        connections.save(TestData.llmConnection("gemini", "https://g/v1", "lite", true, ConnectionStatus.ACTIVE));
+    }
 
     private static Task task(Task.Field... fields) {
         return new Task("task_1", "Facts", "", Task.Mode.SIMPLE, "Extract posting facts.",

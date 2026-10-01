@@ -192,7 +192,7 @@ export const labels = {
     sections: { accounts: nouns.accounts, llm: 'LLM' },
     sectionEmpty: {
       accounts: `No ${nouns.accounts.toLowerCase()} yet`,
-      llm: 'No LLM connection — the server configuration is used.',
+      llm: 'No LLM connection — answers, digest tasks and enrichment are off until you add one.',
     },
     addLlm: 'Add LLM',
     add: `Add ${nouns.account.toLowerCase()}`,

@@ -15,13 +15,7 @@ public class StubLlmProvider implements LlmProvider {
     }
 
     @Override
-    public String model() {
-        return "none";
-    }
-
-    @Override
-    public String complete(String system, List<Message> messages) {
-        throw new UnsupportedOperationException(
-                "No LLM wired yet — implement LlmProvider (Ollama or hosted REST endpoint).");
+    public String complete(LlmProfile profile, ResponseFormat format, String system, List<Message> messages) {
+        throw new UnsupportedOperationException("LLM calls are off: app.llm.provider is none");
     }
 }

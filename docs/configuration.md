@@ -82,9 +82,9 @@ console: `answer` is machinery the read path runs for itself, and offering it wo
 that quietly does nothing useful.
 
 **Prompts are keyed by task, never by model.** A prompt naming a model cannot be reused when the model
-changes and cannot be shared by two features on different models. Model choice lives in
-`app.llm.profile.*`, which a task *references* by name — so a task can carry a prompt but never model
-settings. `PromptCatalogTest.noPromptMentionsAModelOrProvider` enforces this; it fails if a prompt
+changes and cannot be shared by two features on different models. Model choice lives on the `LLM`
+connection serving a profile, which a task *references* by name — so a task can carry a prompt but never
+model settings. `PromptCatalogTest.noPromptMentionsAModelOrProvider` enforces this; it fails if a prompt
 mentions `llama`, `gemini`, `groq`, `claude`, `openai`, `bge` or similar.
 
 > `app.embedding.onnx.query-instruction` is **not** a prompt and stays a property. It is a model's
@@ -142,8 +142,9 @@ Four resolvers exist. Match the one whose shape fits rather than inventing a fif
 |---|---|---|
 | **Per-leaf overlay** | `ChunkingSpecResolver` — per-knowledge nullable fields over `app.chunking.*` | a caller should override *some* fields and inherit the rest |
 | **Whole-value tier** | `ScheduleResolver` and `RetentionResolver` (knowledge → connector → global), `FieldSets` (connector → default) | a tier states the complete answer or says nothing |
-| **Dynamic by name** | `LlmProfiles` reading `app.llm.profile.<name>.*` | adding an instance should need config only, no code |
-| **Stored-entity over config** | `RateLimitPolicies` — `Connection.rateLimit` over `app.ratelimit.connector.<TYPE>.rules`; `LlmProfiles` — an `LLM` connection over `app.llm.profile.<name>.*` | the value is **user-editable at runtime**, so it lives in Mongo and config only supplies the fallback |
+| **Dynamic by name** | `OAuthClients` reading `app.oauth.<providerId>.*` | adding an instance should need config only, no code |
+| **Stored-entity over config** | `RateLimitPolicies` — `Connection.rateLimit` over `app.ratelimit.connector.<TYPE>.rules` | the value is **user-editable at runtime**, so it lives in Mongo and config only supplies the fallback |
+| **Stored entity only** | `LlmProfiles` — a profile name resolved to an `LLM` connection, with no config tier | the whole setting is the user's, and a config fallback would only hide a missing connection |
 
 All three end in an immutable **resolved value record** — `ChunkingSpec`, `SyncSchedule`, `TaskSpec` —
 whose compact constructor does the clamping. That is what keeps tests CDI-free: a test builds the record
@@ -189,7 +190,7 @@ directly instead of standing up a container, and every path that produces one is
 
 > **A key composed from an identifier is the "dynamic by name" tier, and it has a cost.**
 > `OAuthClients` reads `app.oauth.<providerId>.client-id` / `.client-secret` by building the name at
-> runtime, the same shape as `LlmProfiles` — which is precisely what lets a new OAuth provider ship two
+> runtime — which is precisely what lets a new OAuth provider ship two
 > properties and no resolution code. The price is that `ConfigDefaultsTest`'s reverse check cannot see
 > the key: it scans for string literals, and a composed name is not one, so every such key has to be
 > listed in `REACHED_ANOTHER_WAY` or it reports as rename debris. Composing a name is a real trade —
@@ -208,7 +209,7 @@ directly instead of standing up a container, and every path that produces one is
 
 - every `@ConfigProperty(defaultValue = …)` agrees with `application.properties`, which is the tiebreaker;
 - every `app.*` key shipped is actually read, with `REACHED_ANOTHER_WAY` allowlisting the ones resolved
-  dynamically (`app.llm.profile.*`) or interpolated into `@Scheduled(every = "{…}")`;
+  dynamically (`app.oauth.<provider>.*`) or interpolated into `@Scheduled(every = "{…}")`;
 - `app.embedding.dimension` carries no code default anywhere (invariant 5);
 - and the scan itself matches the codebase.
 
@@ -230,8 +231,8 @@ externalised rather than hardcoded.
 
 1. **Retrieval presets.** `app.search.lexical.*` + `app.search.rrf.*` + `candidate-multiplier` are eight
    keys that take different values in different scenarios — the textbook case. Named presets
-   (`balanced` / `precise` / `recall`) selectable per request would mirror `LlmProfiles` exactly and let
-   retrieval settings be A/B'd without a redeploy. The console already sends a `mode`; a `preset` beside
+   (`balanced` / `precise` / `recall`) selectable per request would mirror how a task names an LLM
+   profile, and let retrieval settings be A/B'd without a redeploy. The console already sends a `mode`; a `preset` beside
    it is the same idea one level up.
 2. **Lexical field boosts** (`text,title^2`) — a field set with weights; folds into `field-sets.json`
    once presets exist.

@@ -23,8 +23,6 @@ class RateLimitPoliciesTest {
         policies = RateLimitPolicies.unlimited();
         policies.embeddingRules = Optional.of("4/1m");
         policies.embeddingBackgroundRules = Optional.of("2/1m");
-        policies.llmRules = Optional.empty();
-        policies.llmBackgroundRules = Optional.empty();
 
         clock = new MutableClock(T0);
         limiter = new SlidingWindowRateLimiter();

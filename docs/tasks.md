@@ -46,7 +46,7 @@ through to a built-in that happens to share its name.
     { "name": "reason",  "type": "TEXT",   "description": "one sentence", "optional": false },
     { "name": "concern", "type": "TEXT",   "description": "biggest downside", "optional": true }
   ],
-  "llmProfile": "lite",              // app.llm.profile.<name>.*
+  "llmProfile": "lite",              // the LLM connection serving "lite", else the default
   "sourceText": "ENTITY",            // whole document, or CHUNK for the matching passage
   "contextChars": 24000,
   "maxSources": 10

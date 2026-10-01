@@ -128,8 +128,8 @@ is not parsed and there is no pay filter. It is still in the posting text the `j
   quality is bounded by that choice; raise the profile if the reasons read as shallow. Its
   `contextChars` is 80000 so all ten postings of a run fit whole (median posting ~6k chars); a budget
   that does not fit them drops the tail silently, since `AnswerPromptBuilder` stops at the budget. That
-  one request is ~20k tokens, which is why `lite` is on Gemini rather than Groq — see
-  [providers.md](./providers.md#llm-profiles-per-role-model-selection).
+  one request is ~20k tokens, which is why the `lite` connection should be Gemini rather than Groq — see
+  [providers.md](./providers.md#llm-connections).
 - **Seniority and remoteness are only as good as the posting.** The normalisers return null rather
   than guessing, so a filter on `metadata.seniority` silently excludes every posting whose title states
   no level — which is many of them. Prefer filters on facts boards state structurally
