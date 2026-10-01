@@ -148,17 +148,25 @@ deep link.
   every `JOB_POSTING` that is not `DELETED`, newest **first seen** (`createdAt`) first, 25 a page.
   There is no query text to rank by and no top-K cut-off, which is why this is not built on
   `/api/search`.
+- **The company leads each row**, with its logo. `frontend/src/config/companies.ts` gives each known
+  company a `domain`, and the browser loads its icon from DuckDuckGo's icon service — so DuckDuckGo
+  sees which domains are looked up. A company with no known domain, or an icon that fails to load,
+  gets a coloured monogram instead. `companyFor` also maps the spellings a board stores
+  (`mastercard`, a bare Oracle tenant `CX_1001`) to the known label, and the company filter merges
+  them into one chip.
 - **Filters** are declared in `frontend/src/config/jobDashboard.ts`: title, company / team / platform /
   source (options from `GET /api/entities/facets`, with counts), location (substring), remote,
-  seniority, posted within, first seen within, applied, and show hidden. The state lives in the URL,
+  seniority, posted within, first seen within, status, and show hidden. The state lives in the URL,
   so a filtered view can be bookmarked.
 - **Enriched fields become filters by themselves.** The page reads the sources' `enrichTaskId`, and
   each field of that task is a filter — `NUMBER` a min/max, `BOOLEAN` yes/no, `TEXT`/`LIST` chips from
   the field's `values` or from facets. Adding a field to the task adds the filter; re-index the source
   to fill it on existing postings. They also show on each row, labelled by field name.
-- **Applied and hidden are user marks in `custom`.** *Mark applied* writes `custom.applied` (a
-  timestamp) and *Hide* writes `custom.hidden: true`, through `PATCH /api/entities/{id}/custom` (a
-  `null` removes a key). `custom` is a third owner on the entity — the user — so neither ingestion nor
+- **Status and hidden are user marks in `custom`.** Each posting has at most one status —
+  `REACHED_OUT`, `APPLIED` or `APPLIED_COLD` — in `custom.status`, with `custom.statusAt` stamped when
+  it is set; *Hide* writes `custom.hidden: true`. Both go through `PATCH /api/entities/{id}/custom` (a
+  `null` removes a key). The status filter's *No status* option is a `$nin` over the other statuses,
+  which also matches a posting that has none. `custom` is a third owner on the entity — the user — so neither ingestion nor
   the indexer touches it, and it survives re-ingest and re-index. Hidden postings are filtered out
   (`custom.hidden {ne: true}`) unless *Show hidden* is on. A posting removed by retention takes its
   marks with it.

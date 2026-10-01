@@ -7,6 +7,7 @@ import type {
   Task,
   TaskFieldType,
 } from '@/api/types'
+import { companyFor } from './companies'
 import { seniorityOptions } from './searchFilters'
 
 /**
@@ -25,6 +26,8 @@ export interface JobFilterSpec {
   path?: string
   options?: { value: string; label: string }[]
   placeholder?: string
+  /** Facet values sharing a label become one chip that selects all of them. */
+  labelFor?: (value: string) => string
 }
 
 const sinceOptions = [
@@ -43,11 +46,23 @@ export const jobDashboard = {
   entityType: 'JOB_POSTING' as EntityType,
   sourceType: 'JOB_BOARDS' as SourceType,
   pageSize: 25,
-  /** The `custom` keys the row buttons write. */
-  marks: { applied: 'applied', hidden: 'hidden' },
+  /** The `custom` keys the row controls write. */
+  marks: { status: 'status', statusAt: 'statusAt', hidden: 'hidden' },
+  /** One per posting, in `custom.status`; `tone` names a `--tone-*` CSS variable pair. */
+  statuses: [
+    { value: 'REACHED_OUT', label: 'Reached out', tone: 'busy' },
+    { value: 'APPLIED', label: 'Applied', tone: 'ok' },
+    { value: 'APPLIED_COLD', label: 'Applied – cold', tone: 'wait' },
+  ],
   filters: [
     { id: 'q', label: 'Title', kind: 'search', placeholder: 'Search titles' },
-    { id: 'company', label: 'Company', kind: 'multi', path: 'metadata.company' },
+    {
+      id: 'company',
+      label: 'Company',
+      kind: 'multi',
+      path: 'metadata.company',
+      labelFor: (value: string) => companyFor(value)?.label ?? value,
+    },
     { id: 'location', label: 'Location', kind: 'contains', path: 'metadata.location', placeholder: 'e.g. Bengaluru' },
     { id: 'remote', label: 'Remote only', kind: 'toggle', path: 'metadata.remote' },
     { id: 'seniority', label: 'Seniority', kind: 'multi', path: 'metadata.seniority', options: seniorityOptions },
@@ -109,6 +124,13 @@ export function facetPaths(specs: JobFilterSpec[]): string[] {
 
 export type JobParams = Record<string, string>
 
+/** The status filter's token for postings with no status yet. */
+export const NO_STATUS = 'NONE'
+
+export function statusFor(value: unknown) {
+  return jobDashboard.statuses.find((s) => s.value === value)
+}
+
 const DAY_MS = 86_400_000
 
 function isNumber(value: string | undefined): value is string {
@@ -161,9 +183,15 @@ export function buildJobQuery(
     }
   }
 
-  const applied = params.applied
-  if (applied === 'yes' || applied === 'no') {
-    add(`custom.${jobDashboard.marks.applied}`, { exists: applied === 'yes' })
+  const statuses = params.status ? params.status.split(',') : []
+  if (statuses.length > 0) {
+    const chosen = statuses.filter((s) => s !== NO_STATUS)
+    const all = jobDashboard.statuses.map((s) => s.value)
+    // $nin also matches a missing field, which is how "no status" joins the chosen ones.
+    add(
+      `custom.${jobDashboard.marks.status}`,
+      statuses.includes(NO_STATUS) ? { nin: all.filter((v) => !chosen.includes(v)) } : chosen,
+    )
   }
   if (params.showHidden !== '1') {
     add(`custom.${jobDashboard.marks.hidden}`, { ne: true })

@@ -4,7 +4,7 @@ import type { FacetValue, Knowledge } from '@/api/types'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Input'
 import { Toggle } from '@/components/ui/Toggle'
-import type { JobFilterSpec, JobParams } from '@/config/jobDashboard'
+import { jobDashboard, NO_STATUS, type JobFilterSpec, type JobParams } from '@/config/jobDashboard'
 import { labels } from '@/config/labels'
 import { cn } from '@/lib/utils'
 
@@ -54,17 +54,15 @@ export function JobFilters({ specs, values, facets, sources, onChange, onClear }
         </Group>
       )}
 
-      <Group label={labels.jobs.applied}>
-        <Select
-          value={values.applied ?? ''}
-          onChange={(event) => onChange('applied', event.target.value)}
-          aria-label={labels.jobs.applied}
-          className="h-8 text-[13px]"
-        >
-          <option value="">{labels.jobs.any}</option>
-          <option value="no">{labels.jobs.appliedNo}</option>
-          <option value="yes">{labels.jobs.applied}</option>
-        </Select>
+      <Group label={labels.jobs.status}>
+        <Chips
+          options={[
+            ...jobDashboard.statuses.map((s) => ({ value: s.value, label: s.label })),
+            { value: NO_STATUS, label: labels.jobs.noStatus },
+          ]}
+          selected={split(values.status)}
+          onChange={(next) => onChange('status', next.join(','))}
+        />
       </Group>
 
       <Toggle
@@ -151,9 +149,7 @@ function FilterControl({
         </Group>
       )
     case 'multi': {
-      const options =
-        spec.options ??
-        (facetValues ?? []).map((f) => ({ value: String(f.value), label: String(f.value), count: f.count }))
+      const options = spec.options ?? groupFacets(facetValues ?? [], spec.labelFor)
       if (options.length === 0 && !value) return null
       return (
         <Group label={spec.label}>
@@ -177,31 +173,63 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+/** `values` set: one chip standing for several stored spellings of the same thing. */
+interface ChipOption {
+  value: string
+  label: string
+  count?: number
+  values?: string[]
+}
+
+function groupFacets(facets: FacetValue[], labelFor?: (value: string) => string): ChipOption[] {
+  const groups = new Map<string, ChipOption>()
+  for (const facet of facets) {
+    const raw = String(facet.value)
+    const label = labelFor ? labelFor(raw) : raw
+    const group = groups.get(label)
+    if (group) {
+      group.values!.push(raw)
+      group.count = (group.count ?? 0) + facet.count
+    } else {
+      groups.set(label, { value: raw, label, count: facet.count, values: [raw] })
+    }
+  }
+  return [...groups.values()].sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
+}
+
 function Chips({
   options,
   selected,
   onChange,
 }: {
-  options: { value: string; label: string; count?: number }[]
+  options: ChipOption[]
   selected: string[]
   onChange: (next: string[]) => void
 }) {
+  const valuesOf = (o: ChipOption) => o.values ?? [o.value]
   // A selected value that fell out of the facet list must stay visible, or it could not be removed.
-  const shown: { value: string; label: string; count?: number }[] = [
+  const shown: ChipOption[] = [
     ...options,
-    ...selected.filter((v) => !options.some((o) => o.value === v)).map((v) => ({ value: v, label: v })),
+    ...selected
+      .filter((v) => !options.some((o) => valuesOf(o).includes(v)))
+      .map((v) => ({ value: v, label: v })),
   ]
   return (
     <div className="flex max-h-48 flex-wrap gap-1 overflow-y-auto">
       {shown.map((option) => {
-        const active = selected.includes(option.value)
+        const values = valuesOf(option)
+        const active = values.every((v) => selected.includes(v))
         return (
           <button
             key={option.value}
             type="button"
             aria-pressed={active}
             onClick={() =>
-              onChange(active ? selected.filter((v) => v !== option.value) : [...selected, option.value])
+              onChange(
+                active
+                  ? selected.filter((v) => !values.includes(v))
+                  : [...selected, ...values.filter((v) => !selected.includes(v))],
+              )
             }
             className={cn(
               'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',

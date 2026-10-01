@@ -694,7 +694,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"applied\": \"2026-10-01T09:00:00Z\",\n  \"hidden\": null\n}",
+              "raw": "{\n  \"status\": \"APPLIED_COLD\",\n  \"statusAt\": \"2026-10-01T09:00:00Z\",\n  \"hidden\": null\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -713,7 +713,7 @@
                 "custom"
               ]
             },
-            "description": "Merges keys into entities.custom: a value sets the key, null removes it, other keys are untouched. Values must be text, numbers or booleans. The /jobs page writes custom.applied (timestamp) and custom.hidden (true). User-owned: re-ingest and re-index never touch it. 404 on an unknown id."
+            "description": "Merges keys into entities.custom: a value sets the key, null removes it, other keys are untouched. Values must be text, numbers or booleans. The /jobs page writes custom.status (REACHED_OUT, APPLIED or APPLIED_COLD) with custom.statusAt (timestamp), and custom.hidden (true). User-owned: re-ingest and re-index never touch it. 404 on an unknown id."
           }
         }
       ]
