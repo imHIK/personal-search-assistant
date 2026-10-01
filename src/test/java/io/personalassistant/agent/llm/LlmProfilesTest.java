@@ -4,7 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.common.ratelimit.RateLimitRules;
+import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
+import io.personalassistant.testsupport.InMemoryConnectionRepository;
 import io.smallrye.config.SmallRyeConfigBuilder;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -12,7 +19,64 @@ import org.junit.jupiter.api.Test;
 class LlmProfilesTest {
 
     private static LlmProfiles profiles(Map<String, String> properties) {
-        return new LlmProfiles(new SmallRyeConfigBuilder().withDefaultValues(properties).build());
+        return profiles(properties, new InMemoryConnectionRepository());
+    }
+
+    private static LlmProfiles profiles(Map<String, String> properties, InMemoryConnectionRepository repo) {
+        return new LlmProfiles(new SmallRyeConfigBuilder().withDefaultValues(properties).build(), repo);
+    }
+
+    private static Connection llm(String id, String profile, boolean isDefault, ConnectionStatus status) {
+        Map<String, Object> config = new HashMap<>();
+        config.put(LlmConnections.BASE_URL, "https://" + id + ".example/v1");
+        config.put(LlmConnections.MODEL, id + "-model");
+        if (profile != null) {
+            config.put(LlmConnections.PROFILE, profile);
+        }
+        return new Connection(id, id, LlmConnections.TYPE, Map.of(LlmConnections.API_KEY, id + "-key"),
+                config, RateLimitRules.parse("5/1m"), isDefault, status, null, Instant.now(), Instant.now());
+    }
+
+    @Test
+    void aConnectionServingTheProfileWinsOverTheDefaultAndConfig() {
+        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
+        repo.save(llm("groq", null, true, ConnectionStatus.ACTIVE));
+        repo.save(llm("gemini", "lite", false, ConnectionStatus.ACTIVE));
+        LlmProfiles resolved = profiles(Map.of(
+                "app.llm.profile.lite.model", "configured",
+                "app.llm.profile.lite.max-tokens", "4096"), repo);
+
+        LlmProfile lite = resolved.get("lite");
+        assertEquals(Optional.of("gemini-model"), lite.model());
+        assertEquals(Optional.of("https://gemini.example/v1"), lite.baseUrl());
+        assertEquals(Optional.of("gemini-key"), lite.apiKey());
+        assertEquals(Optional.of("gemini"), lite.connectionId());
+        assertEquals(Optional.of(4096), lite.maxTokens(), "unset on the connection, so config fills it");
+        assertEquals(1, lite.rateLimit().orElseThrow().rules().size());
+
+        assertEquals(Optional.of("groq"), resolved.get("answer").connectionId(),
+                "an unclaimed profile goes to the default connection");
+        assertEquals(Optional.of("groq"), resolved.get(null).connectionId());
+    }
+
+    @Test
+    void anInactiveConnectionFallsThroughToConfig() {
+        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
+        repo.save(llm("gemini", "lite", true, ConnectionStatus.ERROR));
+
+        LlmProfile lite = profiles(Map.of("app.llm.profile.lite.model", "configured"), repo).get("lite");
+
+        assertEquals(Optional.of("configured"), lite.model());
+        assertTrue(lite.connectionId().isEmpty());
+    }
+
+    @Test
+    void namesIncludeTheProfilesConnectionsServe() {
+        InMemoryConnectionRepository repo = new InMemoryConnectionRepository();
+        repo.save(llm("ollama", "local", false, ConnectionStatus.ACTIVE));
+
+        assertTrue(profiles(Map.of("app.llm.profile.answer.model", "x"), repo).names()
+                .containsAll(List.of("answer", "local")));
     }
 
     @Test

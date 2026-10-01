@@ -69,7 +69,7 @@ const rules: Rule[] = [
     match: /llm|groq|api.?key|StubLlmProvider|completion/i,
     title: 'The answer service is unavailable',
     detail:
-      'Written answers need an LLM provider. Set GROQ_API_KEY (or another OpenAI-compatible endpoint) and restart the server. Search itself still works without it.',
+      'Written answers need an LLM. Add or fix one in the LLM section under Accounts. Search itself still works without it.',
   },
   {
     match: /opensearch|connection refused.*9200|index_not_found/i,

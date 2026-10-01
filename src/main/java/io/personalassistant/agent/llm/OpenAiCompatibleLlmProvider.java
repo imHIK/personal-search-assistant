@@ -9,6 +9,7 @@ import io.personalassistant.common.ProviderImpl;
 import io.personalassistant.common.http.HttpCall;
 import io.personalassistant.common.http.OutboundHttp;
 import io.personalassistant.common.http.OutboundHttpException;
+import io.personalassistant.common.ratelimit.RateLimit;
 import io.personalassistant.common.ratelimit.RateLimitMode;
 import io.personalassistant.common.ratelimit.RateLimitPolicies;
 import io.personalassistant.common.ratelimit.RateLimitedException;
@@ -100,7 +101,7 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
             HttpCall call = HttpCall
                     .post(endpoint.replaceAll("/+$", "") + "/chat/completions",
                             mapper.writeValueAsString(body), Duration.ofSeconds(timeoutSeconds),
-                            policies.forLlm(providerId(), profile.rateLimitMode().orElse(defaultMode())))
+                            rateLimit(profile))
                     .header("Content-Type", "application/json")
                     .header("Authorization", key == null ? null : "Bearer " + key);
 
@@ -128,6 +129,16 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         return RateLimitMode.FAIL_FAST;
     }
 
+    /** A connection-backed profile is charged to that account, so two vendors never share a window. */
+    RateLimit rateLimit(LlmProfile profile) {
+        RateLimitMode mode = profile.rateLimitMode().orElse(defaultMode());
+        if (profile.connectionId().isPresent()) {
+            return policies.forConnection(profile.connectionId().get(), LlmConnections.TYPE,
+                    profile.rateLimit().orElse(null), mode);
+        }
+        return policies.forLlm(providerId(), mode);
+    }
+
     /**
      * A profile that redirects base-url never inherits the provider's key: that would send one vendor's
      * secret to another vendor's host.
@@ -142,7 +153,9 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
 
     /** Never includes the key, only whether one resolved. */
     String callSummary(LlmProfile profile, String endpoint, String model, boolean hasKey) {
-        return "profile=" + profile.name() + ", base-url=" + endpoint + ", model=" + model
+        return "profile=" + profile.name()
+                + profile.connectionId().map(id -> ", connection=" + id).orElse("")
+                + ", base-url=" + endpoint + ", model=" + model
                 + ", temperature=" + profile.temperature().orElse(temperature)
                 + ", max-tokens=" + profile.maxTokens().map(String::valueOf).orElse("<unset>")
                 + ", api-key=" + (hasKey ? "present" : "ABSENT -> sending no Authorization header");

@@ -1,6 +1,6 @@
 import { HelpCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
 import type { RateLimitPolicy } from '@/api/types'
@@ -12,7 +12,7 @@ import { Field, Input, Select } from '@/components/ui/Input'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Toggle } from '@/components/ui/Toggle'
 import { ErrorState, SkeletonList } from '@/components/ui/States'
-import { accountFor, accountTypes } from '@/config/accounts'
+import { accountFor, accountTypes, sectionOf } from '@/config/accounts'
 import { initialValues, pruneEmpty, type FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnection, useConnectionMutations } from '@/hooks/queries'
@@ -27,8 +27,11 @@ export function AccountFormPage() {
   const { data: existing, isLoading, error: loadError } = useConnection(id)
   const { create, patch } = useConnectionMutations()
 
+  const [params] = useSearchParams()
   const candidates = useMemo(() => accountTypes(), [])
-  const [type, setType] = useState<string>(candidates[0]?.id ?? 'GMAIL')
+  const [type, setType] = useState<string>(
+    candidates.find((c) => c.id === params.get('type'))?.id ?? candidates[0]?.id ?? 'GMAIL',
+  )
   const [name, setName] = useState('')
   const [makeDefault, setMakeDefault] = useState(false)
   const [auth, setAuth] = useState<FormValues>({})
@@ -194,13 +197,15 @@ export function AccountFormPage() {
         {descriptor.configFields.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>OAuth application</CardTitle>
+              <CardTitle>{descriptor.configTitle ?? 'OAuth application'}</CardTitle>
             </CardHeader>
             <CardBody className="space-y-4">
-              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                Only needed if the server has no OAuth client configured. Leave blank to use the
-                server's.
-              </p>
+              {!descriptor.configTitle && (
+                <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                  Only needed if the server has no OAuth client configured. Leave blank to use the
+                  server's.
+                </p>
+              )}
               <SchemaForm fields={descriptor.configFields} values={config} onChange={setConfig} />
               <Technical>
                 <RawBlobEditor label="Extra auth keys" values={auth} onChange={setAuth} />
@@ -220,7 +225,9 @@ export function AccountFormPage() {
             <RateLimitFields value={rateLimit} onChange={setRateLimit} disabled={pending} />
             {rateLimit.rules.length > 0 && (
               <p className="text-xs leading-relaxed text-[var(--text-subtle)]">
-                {labels.accounts.rateLimitWarning}
+                {sectionOf(descriptor) === 'llm'
+                  ? labels.accounts.llmRateLimitWarning
+                  : labels.accounts.rateLimitWarning}
               </p>
             )}
           </CardBody>

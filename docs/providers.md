@@ -260,9 +260,9 @@ because of Groq's free-tier **tokens per minute**. Groq rejects any single reque
 `max_tokens` exceeds the per-minute limit (8000 for `gpt-oss-120b`) with a 413 that waiting cannot fix,
 and job-fit judges whole postings — ten of them run to ~60k chars. `max-tokens` is generous because
 a thinking model's reasoning is charged against it; a tight cap truncates the JSON and JSON mode then rejects the
-reply server-side (`json_validate_failed`). The rate limiter keys LLM calls by provider id
-(`openai-compat`), not endpoint, so Groq- and Gemini-bound calls share one counter — harmless while
-`app.ratelimit.llm.*` rules are blank.
+reply server-side (`json_validate_failed`). The rate limiter keys config-resolved LLM calls by provider
+id (`openai-compat`), not endpoint, so Groq- and Gemini-bound calls share one counter — harmless while
+`app.ratelimit.llm.*` rules are blank, and avoided altogether by moving each to an LLM connection.
 
 Recognised sub-keys: `base-url`, `model`, `temperature`, `max-tokens`, `api-key`. A caller asks for a
 profile by name — the answering *task* names `answer`, via `app.agent.task` — and gets the
@@ -289,6 +289,48 @@ Three behaviours worth knowing:
 
 `max-tokens` deserves a note: nothing was sent before profiles existed, so the vendor default applied and
 a long list answer could be truncated with no local signal that it had been.
+
+### LLM connections (editable in the console)
+
+An `LLM` connection — added under Accounts → LLM, stored in `connections` like any other account —
+replaces the properties above at runtime, with no restart. It is a `ConnectionKind` bean
+(`LlmConnectionKind`), so it gets the generic create / edit / test / default / health-sweep machinery
+for free:
+
+| Where | Key | Notes |
+|---|---|---|
+| `auth` | `apiKey` | Empty sends no Authorization header (Ollama) |
+| `config` | `baseUrl`, `model` | Required |
+| `config` | `profile` | Optional: the profile name this connection serves |
+| `config` | `temperature`, `maxTokens` | Optional: absent falls back to the configured profile |
+| `rateLimit` | rules | This connection's own window, `connection:<id>` |
+
+`LlmProfiles.get(name)` resolves, on every call (an edit applies to the next call):
+
+1. the ACTIVE `LLM` connection whose `config.profile` is `name`;
+2. otherwise the default ACTIVE `LLM` connection (the first one created becomes the default);
+3. otherwise `app.llm.profile.<name>.*` over `app.llm.*`, as before.
+
+A connection always supplies endpoint, key and model **together** — the base-url-needs-its-own-key rule
+again — while `temperature` / `max-tokens` it leaves unset still come from the configured profile, so
+`lite`'s `0.0` / `4096` survive a move to a connection. `rate-limit-mode` stays with the configured
+profile (or the caller): it is a property of the call, not the account. Two connections may not serve
+the same profile; verification refuses the second. `GET /api/llm-profiles` lists configured profiles
+plus every profile a connection names.
+
+**Rate limits are per connection.** A connection-backed call is charged to `connection:<id>` with the
+connection's rules (falling back to `app.ratelimit.connector.LLM.rules`, blank today), not to
+`llm:openai-compat`, so a Groq and a Gemini connection no longer share one counter. The
+`app.ratelimit.llm[.background].rules` keys apply only to calls that fall through to config.
+
+**Verification lists models, it does not complete.** `verify` calls `GET {baseUrl}/models` and checks
+`model` is offered (Gemini lists `models/<name>`, so a suffix match counts). The health sweep re-runs it
+every `app.connections.health-interval`, and a listing costs no tokens. A connection in `ERROR` drops out
+of resolution, so calls fall back to config rather than failing — which is also why the console's
+reconnect banner ignores LLM connections.
+
+The connection's `auth` (the key) is returned by `GET /api/connections` like every other account's
+credentials — see `ConnectionResource`.
 
 ### Tasks, prompts and profiles
 

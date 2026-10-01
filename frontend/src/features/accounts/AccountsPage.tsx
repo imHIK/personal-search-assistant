@@ -12,7 +12,7 @@ import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
-import { accountFor, accountTypes } from '@/config/accounts'
+import { accountFor, accountSections, accountTypes, sectionOf } from '@/config/accounts'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { presentConnection } from '@/config/presentation'
@@ -64,57 +64,83 @@ export function AccountsPage() {
         <SkeletonList rows={2} />
       ) : error ? (
         <ErrorState error={error} onRetry={() => void refetch()} />
-      ) : !data || data.length === 0 ? (
-        <EmptyState
-          icon={Plug}
-          title={labels.accounts.empty}
-          description={
-            needsAccounts.length > 0
-              ? `${needsAccounts.map((c) => c.label).join(' and ')} need an account before they can be connected.`
-              : labels.accounts.emptyHint
-          }
-          action={
-            <Button variant="primary" onClick={() => navigate('/connections/new')}>
-              <Plus />
-              {labels.accounts.add}
-            </Button>
-          }
-        />
       ) : (
-        <div className="space-y-3">
-          {data.map((connection) => (
-            <AccountRow
-              key={connection.id}
-              connection={connection}
-              testing={test.isPending && test.variables === connection.id}
-              onTest={() =>
-                test.mutate(connection.id, {
-                  onSuccess: (checked) =>
-                    checked.status === 'ERROR'
-                      ? toast.error(labels.accounts.testFailed(checked.name), {
-                          description: checked.lastError
-                            ? friendlyLastError(checked.lastError).detail
-                            : undefined,
+        <div className="space-y-8">
+          {accountSections.map((section) => {
+            const rows = (data ?? []).filter(
+              (connection) => sectionOf(accountFor(connection.type)) === section.id,
+            )
+            return (
+              <section key={section.id} className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-[var(--text)]">
+                    {labels.accounts.sections[section.id]}
+                  </h2>
+                  {section.addType && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => navigate(`/connections/new?type=${section.addType}`)}
+                    >
+                      <Plus />
+                      {labels.accounts.addLlm}
+                    </Button>
+                  )}
+                </div>
+                {rows.length === 0 ? (
+                  section.id === 'accounts' ? (
+                    <EmptyState
+                      icon={Plug}
+                      title={labels.accounts.empty}
+                      description={
+                        needsAccounts.length > 0
+                          ? `${needsAccounts.map((c) => c.label).join(' and ')} need an account before they can be connected.`
+                          : labels.accounts.emptyHint
+                      }
+                    />
+                  ) : (
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {labels.accounts.sectionEmpty[section.id]}
+                    </p>
+                  )
+                ) : (
+                  rows.map((connection) => (
+                    <AccountRow
+                      key={connection.id}
+                      connection={connection}
+                      testing={test.isPending && test.variables === connection.id}
+                      onTest={() =>
+                        test.mutate(connection.id, {
+                          onSuccess: (checked) =>
+                            checked.status === 'ERROR'
+                              ? toast.error(labels.accounts.testFailed(checked.name), {
+                                  description: checked.lastError
+                                    ? friendlyLastError(checked.lastError).detail
+                                    : undefined,
+                                })
+                              : toast.success(labels.accounts.testOk(checked.name)),
+                          onError: (mutationError) =>
+                            toast.error(friendlyError(mutationError).title, {
+                              description: friendlyError(mutationError).detail,
+                            }),
                         })
-                      : toast.success(labels.accounts.testOk(checked.name)),
-                  onError: (mutationError) =>
-                    toast.error(friendlyError(mutationError).title, {
-                      description: friendlyError(mutationError).detail,
-                    }),
-                })
-              }
-              onMakeDefault={() => {
-                makeDefault.mutate(connection.id, {
-                  onSuccess: () => toast.success(`"${connection.name}" is now the default`),
-                  onError: (mutationError) =>
-                    toast.error(friendlyError(mutationError).title, {
-                      description: friendlyError(mutationError).detail,
-                    }),
-                })
-              }}
-              onRemove={() => setPendingRemoval(connection)}
-            />
-          ))}
+                      }
+                      onMakeDefault={() => {
+                        makeDefault.mutate(connection.id, {
+                          onSuccess: () => toast.success(`"${connection.name}" is now the default`),
+                          onError: (mutationError) =>
+                            toast.error(friendlyError(mutationError).title, {
+                              description: friendlyError(mutationError).detail,
+                            }),
+                        })
+                      }}
+                      onRemove={() => setPendingRemoval(connection)}
+                    />
+                  ))
+                )}
+              </section>
+            )
+          })}
         </div>
       )}
 

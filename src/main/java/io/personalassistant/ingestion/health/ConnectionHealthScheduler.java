@@ -13,7 +13,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Credentials are otherwise verified only at create and on an auth edit. The result is recorded on the
+ * Credentials are otherwise verified only at create and on an auth or config edit. The result is recorded on the
  * connection, and IngestionJob skips knowledges whose connection is in ERROR; nothing is paused, so a
  * connection that works again resumes on its own.
  */

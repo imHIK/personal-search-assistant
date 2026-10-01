@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.common.http.OutboundHttp;
+import io.personalassistant.common.ratelimit.RateLimitKey;
 import io.personalassistant.common.ratelimit.RateLimitPolicies;
 import io.personalassistant.testsupport.RecordingRateLimiter;
 import java.util.List;
@@ -104,6 +105,16 @@ class OpenAiCompatibleLlmProviderProfileTest {
 
         assertFalse(summary.contains("api-key=present"));
         assertFalse(summary.contains("provider-key"), "the key itself must never reach a log or error");
+    }
+
+    @Test
+    void aConnectionBackedProfileIsChargedToThatConnection() {
+        LlmProfile backed = new LlmProfile("lite", Optional.of("https://x/v1"), Optional.of("m"),
+                Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.of("conn_1"), Optional.empty());
+
+        assertEquals(RateLimitKey.connection("conn_1"), provider().rateLimit(backed).key());
+        assertEquals(RateLimitKey.llm("openai-compat"), provider().rateLimit(LlmProfile.inherit("x")).key());
     }
 
     @Test

@@ -143,7 +143,7 @@ Four resolvers exist. Match the one whose shape fits rather than inventing a fif
 | **Per-leaf overlay** | `ChunkingSpecResolver` — per-knowledge nullable fields over `app.chunking.*` | a caller should override *some* fields and inherit the rest |
 | **Whole-value tier** | `ScheduleResolver` and `RetentionResolver` (knowledge → connector → global), `FieldSets` (connector → default) | a tier states the complete answer or says nothing |
 | **Dynamic by name** | `LlmProfiles` reading `app.llm.profile.<name>.*` | adding an instance should need config only, no code |
-| **Stored-entity over config** | `RateLimitPolicies` — `Connection.rateLimit` over `app.ratelimit.connector.<TYPE>.rules` | the value is **user-editable at runtime**, so it lives in Mongo and config only supplies the fallback |
+| **Stored-entity over config** | `RateLimitPolicies` — `Connection.rateLimit` over `app.ratelimit.connector.<TYPE>.rules`; `LlmProfiles` — an `LLM` connection over `app.llm.profile.<name>.*` | the value is **user-editable at runtime**, so it lives in Mongo and config only supplies the fallback |
 
 All three end in an immutable **resolved value record** — `ChunkingSpec`, `SyncSchedule`, `TaskSpec` —
 whose compact constructor does the clamping. That is what keeps tests CDI-free: a test builds the record

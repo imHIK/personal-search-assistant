@@ -154,6 +154,14 @@ class DefaultConnectionServiceTest {
     }
 
     @Test
+    void updateReverifiesWhenConfigChanges() {
+        Connection c = create("work", false);
+        int before = connector.verifyConnectionCalls;
+        service.update(c.id(), new ConnectionEdit(null, null, Map.of("model", "other"), null));
+        assertEquals(before + 1, connector.verifyConnectionCalls, "changed config re-verifies");
+    }
+
+    @Test
     void anAccountsRateLimitRoundTrips() {
         Connection c = service.create(new NewConnection("work", "SLACK", Map.of("token", "t"),
                 Map.of(), RateLimitRules.parse("10/1s,500/1m"), false));

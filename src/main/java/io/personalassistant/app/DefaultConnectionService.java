@@ -85,7 +85,9 @@ public class DefaultConnectionService implements ConnectionService {
                 edit.rateLimit() != null ? edit.rateLimit() : current.rateLimit(),
                 Instant.now());
 
-        if (edit.auth() != null && !edit.auth().equals(current.auth())) {
+        boolean authChanged = edit.auth() != null && !edit.auth().equals(current.auth());
+        boolean configChanged = edit.config() != null && !edit.config().equals(current.config());
+        if (authChanged || configChanged) {
             verify(kinds.get(current.type()), edited);
             edited = edited.withStatus(ConnectionStatus.ACTIVE, null);
         }

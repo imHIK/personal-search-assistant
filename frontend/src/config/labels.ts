@@ -48,7 +48,7 @@ export const labels = {
     answerHeading: 'Answer',
     vectorUnavailable: 'Semantic search is unavailable, so these are keyword matches only.',
     answerUnavailable:
-      'The answer service is unavailable, so only results are shown. Check that an LLM provider and API key are configured.',
+      'The answer service is unavailable, so only results are shown. Check the LLM section under Accounts.',
     narrowBy: 'Narrow by',
     clearFilters: 'Clear',
     filterAny: 'Any',
@@ -166,6 +166,12 @@ export const labels = {
   accounts: {
     title: nouns.accounts,
     subtitle: 'Sign-in details reused across sources.',
+    sections: { accounts: nouns.accounts, llm: 'LLM' },
+    sectionEmpty: {
+      accounts: `No ${nouns.accounts.toLowerCase()} yet`,
+      llm: 'No LLM connection — the server configuration is used.',
+    },
+    addLlm: 'Add LLM',
     add: `Add ${nouns.account.toLowerCase()}`,
     empty: `No ${nouns.accounts.toLowerCase()} yet`,
     emptyHint: 'Google sources need an account before they can be connected.',
@@ -195,6 +201,8 @@ export const labels = {
     connectSaveFirst: 'Give this account a name first, then connect.',
     connectOk: 'Account connected',
     connectFailed: "That didn't complete — the account was not connected.",
+    llmRateLimitWarning:
+      'Answers fail fast when the limit is reached; background tasks wait for the next window.',
     rateLimitTitle: 'Speed limit',
     rateLimitHint:
       'How fast this account may be called. Leave empty to use the server default. Most services ' +

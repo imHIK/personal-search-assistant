@@ -72,7 +72,8 @@ machinery it already has. See `docs/limitations.md` L11.
 
 > **Connections are not only for knowledges.** A connection's `type` is a *connection type* — a
 > `SourceType` name for a connector's account, or a type something else registers, such as the email
-> channel's send-only `GMAIL_SEND` ([`publishing.md`](./publishing.md)). `ConnectionKindRegistry`
+> channel's send-only `GMAIL_SEND` ([`publishing.md`](./publishing.md)) or the `LLM` endpoint
+> ([`providers.md`](./providers.md#llm-connections-editable-in-the-console)). `ConnectionKindRegistry`
 > resolves the type to its check: a connector that `requiresConnection()` is registered automatically
 > and verified by its own `verifyConnection`; anything else is a `ConnectionKind` bean. Nothing below
 > changes for connectors.
@@ -92,7 +93,8 @@ knowledges at whichever they want, without duplicating credentials per knowledge
 - **Opt-in per connector.** `SourceConnector.requiresConnection()` is `false` by default, so a no-auth
   source like `LOCAL_FS` never needs one; credentialed connectors override it to `true`.
 - **Verified once, at connect time.** `SourceConnector.verifyConnection(Connection)` validates the
-  credentials when the connection is created/edited (Gmail hits `getProfile`, Drive hits `about`) —
+  credentials when the connection is created, or edited with a changed `auth` or `config` (Gmail hits
+  `getProfile`, Drive hits `about`; an `LLM` connection lists the endpoint's models) —
   not on every knowledge or every grab. A connector is free to raise its own transport type
   (`GoogleApiException`, `AtsApiException`, `RateLimitedException`); `DefaultConnectionService` funnels
   all of them into `IllegalArgumentException`, so a rejected create/edit is a **400 whose JSON body
@@ -188,7 +190,7 @@ what the consent flow requests.
 
 ### Connection health
 
-Credentials are verified at create and on an auth edit — and, until now, never again. A token that
+Credentials are verified at create and on an auth or config edit — and, until now, never again. A token that
 expired afterwards left its connection reading `ACTIVE` while every sync failed: the failures scrolled
 past in the log, the console showed nothing wrong, and the first real signal was that the data had
 quietly stopped updating.

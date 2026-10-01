@@ -375,6 +375,56 @@
           }
         },
         {
+          "name": "Create LLM connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gemini lite\",\n  \"type\": \"LLM\",\n  \"auth\": {\n    \"apiKey\": \"{{llmApiKey}}\"\n  },\n  \"config\": {\n    \"baseUrl\": \"{{llmBaseUrl}}\",\n    \"model\": \"{{llmModel}}\",\n    \"profile\": \"lite\",\n    \"temperature\": 0.0,\n    \"maxTokens\": 4096\n  },\n  \"rateLimit\": {\n    \"rules\": [\n      {\n        \"permits\": 15,\n        \"windowSeconds\": 60\n      },\n      {\n        \"permits\": 1000,\n        \"windowSeconds\": 86400\n      }\n    ]\n  },\n  \"makeDefault\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections"
+              ]
+            },
+            "description": "An OpenAI-compatible chat endpoint that replaces app.llm.* at runtime. Verification lists {baseUrl}/models and checks the model is offered (400 with the reason otherwise).\n\nconfig.profile is the task profile it serves (lite, answer, …); leave it out and the connection only serves as the type default, which every profile no connection claims falls to. Two connections may not serve one profile. temperature / maxTokens are optional and fall back to app.llm.profile.<name>.*.\n\nrateLimit is this account's own window (connection:<id>), so two vendors never share a counter. Set llmBaseUrl / llmModel / llmApiKey first. Resolution order is in docs/providers.md."
+          }
+        },
+        {
+          "name": "List LLM profiles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/llm-profiles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "llm-profiles"
+              ]
+            },
+            "description": "Configured app.llm.profile.<name> names plus every profile an LLM connection serves."
+          }
+        },
+        {
           "name": "Test connection",
           "request": {
             "method": "POST",

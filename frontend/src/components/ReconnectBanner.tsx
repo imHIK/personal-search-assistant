@@ -1,11 +1,16 @@
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { accountFor, sectionOf } from '@/config/accounts'
 import { labels } from '@/config/labels'
 import { useConnections } from '@/hooks/queries'
 
 export function ReconnectBanner() {
   const { data } = useConnections()
-  const broken = (data ?? []).filter((connection) => connection.status === 'ERROR')
+  // Its copy is about imports stopping, which is untrue of an LLM connection: that one falls back.
+  const broken = (data ?? []).filter(
+    (connection) =>
+      connection.status === 'ERROR' && sectionOf(accountFor(connection.type)) === 'accounts',
+  )
   if (broken.length === 0) return null
 
   const target = broken.length === 1 ? `/connections/${broken[0].id}` : '/connections'

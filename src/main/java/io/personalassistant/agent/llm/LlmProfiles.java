@@ -1,17 +1,24 @@
 package io.personalassistant.agent.llm;
 
 import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
+import io.personalassistant.storage.repository.ConnectionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.Config;
 
 /**
- * Resolves profiles from {@code app.llm.profile.<name>.<key>} dynamically, so a new profile is only new
- * properties. Blank values count as absent (SmallRye turns empty into null). An unknown name inherits
- * everything with a warning rather than failing the call.
+ * An ACTIVE LLM connection serving the profile wins, then the default LLM connection, then
+ * {@code app.llm.profile.<name>.<key>}. Connections are read on every call, so an edit applies to the next
+ * one; only the config side is cached. Blank values count as absent (SmallRye turns empty into null). An
+ * unknown name inherits everything with a warning rather than failing the call.
  */
 @ApplicationScoped
 public class LlmProfiles {
@@ -20,24 +27,31 @@ public class LlmProfiles {
 
     private static final String PREFIX = "app.llm.profile.";
 
+    private static final String DEFAULT = "default";
+
     private final Config config;
+    private final ConnectionRepository connections;
 
     private final ConcurrentHashMap<String, LlmProfile> cache = new ConcurrentHashMap<>();
 
     @Inject
-    public LlmProfiles(Config config) {
+    public LlmProfiles(Config config, ConnectionRepository connections) {
         this.config = config;
+        this.connections = connections;
     }
 
     public LlmProfile get(String name) {
-        if (name == null || name.isBlank()) {
-            return LlmProfile.inherit("default");
-        }
-        return cache.computeIfAbsent(name, this::resolve);
+        boolean unnamed = name == null || name.isBlank();
+        LlmProfile configured = unnamed
+                ? LlmProfile.inherit(DEFAULT)
+                : cache.computeIfAbsent(name, this::resolve);
+        return connectionFor(unnamed ? DEFAULT : name)
+                .map(c -> fromConnection(configured, c))
+                .orElse(configured);
     }
 
-    public java.util.List<String> names() {
-        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+    public List<String> names() {
+        Set<String> out = new LinkedHashSet<>();
         for (String property : config.getPropertyNames()) {
             if (!property.startsWith(PREFIX)) {
                 continue;
@@ -48,7 +62,37 @@ public class LlmProfiles {
                 out.add(rest.substring(0, dot));
             }
         }
-        return java.util.List.copyOf(out);
+        for (Connection c : connections.findByType(LlmConnections.TYPE)) {
+            LlmConnections.profile(c).ifPresent(out::add);
+        }
+        return List.copyOf(out);
+    }
+
+    private Optional<Connection> connectionFor(String name) {
+        List<Connection> active = connections.findByType(LlmConnections.TYPE).stream()
+                .filter(c -> c.status() == ConnectionStatus.ACTIVE)
+                .toList();
+        return active.stream()
+                .filter(c -> LlmConnections.profile(c).filter(name::equals).isPresent())
+                .findFirst()
+                .or(() -> active.stream().filter(Connection::isDefault).findFirst());
+    }
+
+    /**
+     * Endpoint, key and model always come from the connection together: mixing a connection's endpoint with
+     * a configured key would send one vendor's secret to another's host. Temperature and max-tokens fall back
+     * to the configured profile, so a connection need not repeat them.
+     */
+    private static LlmProfile fromConnection(LlmProfile configured, Connection c) {
+        return new LlmProfile(configured.name(),
+                LlmConnections.baseUrl(c),
+                LlmConnections.model(c),
+                LlmConnections.temperature(c).or(configured::temperature),
+                LlmConnections.maxTokens(c).or(configured::maxTokens),
+                LlmConnections.apiKey(c),
+                configured.rateLimitMode(),
+                Optional.of(c.id()),
+                Optional.ofNullable(c.rateLimit()));
     }
 
     private LlmProfile resolve(String name) {
