@@ -31,6 +31,8 @@ export interface FieldSpec {
   /** `number` only. */
   min?: number
   max?: number
+  /** `number` only. Absent is the browser's 1, which rejects decimals; `any` accepts them. */
+  step?: number | 'any'
   validate?: (value: unknown) => string | undefined
 }
 

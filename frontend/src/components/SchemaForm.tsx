@@ -110,9 +110,10 @@ function Control({
         <Input
           id={id}
           type="number"
-          inputMode="numeric"
+          inputMode={field.step === undefined ? 'numeric' : 'decimal'}
           min={field.min}
           max={field.max}
+          step={field.step}
           value={value === undefined || value === null ? '' : String(value)}
           placeholder={field.placeholder}
           disabled={disabled}

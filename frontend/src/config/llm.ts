@@ -32,7 +32,7 @@ export const llmAccount: AccountDescriptor = {
       placeholder: 'lite',
       hint: 'The task profile this serves. Empty: only used as the default.',
     },
-    { name: 'temperature', kind: 'number', label: 'Temperature', min: 0, max: 2 },
+    { name: 'temperature', kind: 'number', label: 'Temperature', min: 0, max: 2, step: 'any' },
     { name: 'maxTokens', kind: 'number', label: 'Max tokens', min: 1 },
   ],
   configTitle: 'Model',
