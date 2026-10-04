@@ -15,9 +15,20 @@ interface JobFiltersProps {
   sources: Knowledge[]
   onChange: (id: string, value: string) => void
   onClear: () => void
+  mySkills: string
+  onMySkillsChange: (value: string) => void
 }
 
-export function JobFilters({ specs, values, facets, sources, onChange, onClear }: JobFiltersProps) {
+export function JobFilters({
+  specs,
+  values,
+  facets,
+  sources,
+  onChange,
+  onClear,
+  mySkills,
+  onMySkillsChange,
+}: JobFiltersProps) {
   const active = Object.keys(values).some((key) => key !== 'page' && values[key] !== '')
 
   return (
@@ -70,6 +81,17 @@ export function JobFilters({ specs, values, facets, sources, onChange, onClear }
         onCheckedChange={(checked) => onChange('showHidden', checked ? '1' : '')}
         label={labels.jobs.showHidden}
       />
+
+      <div className="space-y-1.5 border-t border-[var(--border)] pt-4">
+        <p className="text-xs font-medium text-[var(--text-muted)]">{labels.jobs.mySkills}</p>
+        <DebouncedInput
+          value={mySkills}
+          onChange={onMySkillsChange}
+          placeholder={labels.jobs.mySkillsPlaceholder}
+          label={labels.jobs.mySkills}
+        />
+        <p className="text-[11px] text-[var(--text-subtle)]">{labels.jobs.mySkillsHint}</p>
+      </div>
     </div>
   )
 }

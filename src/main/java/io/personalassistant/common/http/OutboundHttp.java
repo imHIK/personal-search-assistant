@@ -72,11 +72,11 @@ public class OutboundHttp {
         }
         if (response.statusCode() / 100 != 2) {
             String snippet = snippet(response.body());
-            if (response.statusCode() == TOO_MANY_REQUESTS) {
-                penalize(call.limit(), response);
-            }
+            Instant retryAt = response.statusCode() == TOO_MANY_REQUESTS
+                    ? penalize(call.limit(), response)
+                    : null;
             throw new OutboundHttpException(response.statusCode(), call.url(), snippet,
-                    "HTTP " + response.statusCode() + " for " + call.url() + ": " + snippet);
+                    "HTTP " + response.statusCode() + " for " + call.url() + ": " + snippet, retryAt);
         }
         return response;
     }
@@ -95,11 +95,11 @@ public class OutboundHttp {
         return builder.method(call.method(), body).build();
     }
 
-    private void penalize(RateLimit limit, HttpResponse<?> response) {
+    private Instant penalize(RateLimit limit, HttpResponse<?> response) {
         Instant until = response.headers().firstValue("Retry-After")
                 .map(this::parseRetryAfter)
                 .orElseGet(() -> Instant.now().plusSeconds(defaultRetryAfterSeconds));
-        limiter.penalize(limit.key(), until);
+        return limiter.penalize(limit.key(), until);
     }
 
     /**

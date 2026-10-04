@@ -8,6 +8,7 @@ import type {
   TaskFieldType,
 } from '@/api/types'
 import { companyFor } from './companies'
+import { labels } from './labels'
 import { seniorityOptions } from './searchFilters'
 
 /**
@@ -30,6 +31,12 @@ export interface JobFilterSpec {
   labelFor?: (value: string) => string
 }
 
+export type EnrichedDisplay =
+  | { as: 'fact'; format?: (value: unknown) => string }
+  | { as: 'tags' }
+  | { as: 'description' }
+  | { as: 'hidden' }
+
 const sinceOptions = [
   { value: '1', label: '24 hours' },
   { value: '3', label: '3 days' },
@@ -48,8 +55,22 @@ export const jobDashboard = {
   pageSize: 25,
   /** The `custom` keys the row controls write. */
   marks: { status: 'status', statusAt: 'statusAt', hidden: 'hidden' },
+  /**
+   * Where a known metadata-task field goes on a card. A field not listed is placed by its value: a
+   * list becomes tags, long text a description, anything else a `name value` fact.
+   */
+  enrichedDisplay: {
+    minYoe: { as: 'fact', format: (value: unknown) => labels.jobs.yoe(String(value)) },
+    skills: { as: 'tags' },
+    // The card's location comes from the board; the task's list repeats it with Remote/Hybrid mixed in.
+    locations: { as: 'hidden' },
+  } as Record<string, EnrichedDisplay>,
+  tagLimit: 6,
+  /** Browser-only conveniences; nothing here is shared or sent to the backend. */
+  storage: { lastVisit: 'jobs.lastVisit', since: 'jobs.since', mySkills: 'jobs.mySkills' },
   /** One per posting, in `custom.status`; `tone` names a `--tone-*` CSS variable pair. */
   statuses: [
+    { value: 'INTERESTED', label: 'Interested', tone: 'alert' },
     { value: 'REACHED_OUT', label: 'Reached out', tone: 'busy' },
     { value: 'APPLIED', label: 'Applied', tone: 'ok' },
     { value: 'APPLIED_COLD', label: 'Applied – cold', tone: 'wait' },

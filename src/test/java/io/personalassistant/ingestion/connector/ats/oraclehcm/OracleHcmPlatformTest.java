@@ -1,7 +1,11 @@
 package io.personalassistant.ingestion.connector.ats.oraclehcm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.ingestion.connector.ats.BoardFilter;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -22,7 +26,57 @@ class OracleHcmPlatformTest {
     }
 
     @Test
-    void theLocationTermsAreSentAsKeywordsSoOnlyMatchesCostADetailCall() {
+    void aLocationTermIsResolvedToThePlaceItNamesAndQueriedById() {
+        FakeOracleHcmApi api = board().withPlaces();
+
+        List<RawItem> items = fetch(api, List.of("india"));
+
+        Assertions.assertEquals(List.of("1", "3"), items.stream().map(RawItem::externalId).toList());
+        Assertions.assertEquals(List.of("loc-India"), api.locationIds);
+        Assertions.assertTrue(api.keywords.isEmpty(), "keywords miss most postings, so none are sent");
+        Assertions.assertEquals(2, api.detailCalls.size(), "the Dublin role is never fetched");
+    }
+
+    @Test
+    void onlyAnExactlyNamedPlaceCountsNotEveryTypeaheadPrefixMatch() {
+        FakeOracleHcmApi api = new FakeOracleHcmApi()
+                .withRequisition("1", "Backend Engineer", "Pune, Maharashtra, India", "<p>A.</p>")
+                .withRequisition("2", "Analyst", "Indianapolis, Indiana, United States", "<p>B.</p>")
+                .withPlaces();
+
+        List<RawItem> items = fetch(api, List.of("india"));
+
+        Assertions.assertEquals(List.of("loc-India"), api.locationIds);
+        Assertions.assertEquals(List.of("1"), items.stream().map(RawItem::externalId).toList());
+    }
+
+    @Test
+    void aTermThePodDoesNotKnowAsAPlaceIsSentAsAKeyword() {
+        FakeOracleHcmApi api = board().withPlaces();
+
+        fetch(api, List.of("bengaluru", "bangalore"));
+
+        Assertions.assertEquals(List.of("loc-Bengaluru, Karnataka, India"), api.locationIds);
+        Assertions.assertEquals(List.of("bangalore"), api.keywords);
+    }
+
+    @Test
+    void aThrottledPlaceLookupDefersRatherThanFallingBackToKeywords() {
+        RateLimitedException throttled =
+                new RateLimitedException(RateLimitKey.board("oraclehcm"), Instant.now().plusSeconds(60));
+        FakeOracleHcmApi api = new FakeOracleHcmApi() {
+            @Override
+            public JsonNode locationSuggestions(OracleHcmSite site, String term) {
+                throw throttled;
+            }
+        };
+
+        Assertions.assertSame(throttled,
+                Assertions.assertThrows(RateLimitedException.class, () -> fetch(api, List.of("india"))));
+    }
+
+    @Test
+    void withoutAPlaceLookupTheLocationTermsAreSentAsKeywords() {
         FakeOracleHcmApi api = board();
 
         List<RawItem> items = fetch(api, List.of("india"));

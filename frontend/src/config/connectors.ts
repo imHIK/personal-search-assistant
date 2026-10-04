@@ -206,7 +206,7 @@ export const connectors: ConnectorDescriptor[] = [
         name: 'companies',
         kind: 'picklist',
         label: 'Companies',
-        hint: 'Tick the ones you want. Anything not listed can be typed in — use the name as it appears in their careers URL, prefix it to pin a platform (lever:paytm), and paste the full address for Workday (adobe/external_experienced/wd5) or Oracle HCM (eofe.fa.us2.oraclecloud.com/BNY-Careers). Check an unfamiliar name above before adding it.',
+        hint: 'Tick the ones you want. Anything not listed can be typed in — use the name as it appears in their careers URL, prefix it to pin a platform (lever:paytm), and for Workday, Oracle HCM, iCIMS, Keka, Freshteam, TurboHire, Zwayam or Eightfold paste the address of any one of their jobs. Check an unfamiliar name above before adding it.',
         placeholder: 'Or type another name — e.g. lever:paytm',
         addOwnLabel: 'Add',
         browseNoun: 'companies we have checked',
@@ -255,8 +255,8 @@ export const connectors: ConnectorDescriptor[] = [
       {
         name: 'includeRemote',
         kind: 'boolean',
-        label: 'Keep remote roles wherever they are filed',
-        hint: 'A role the board marks remote is kept even when its location does not match the places above. Off means a remote role listed under London is dropped by an India filter.',
+        label: 'Keep remote roles that name no place',
+        hint: 'A role the board marks remote is kept when its location names no place (just "Remote" or "Anywhere"). A remote role that names a place — "Remote - US", "Czech Republic" — still has to match the places above.',
         placeholder: 'Include remote roles',
       },
       {

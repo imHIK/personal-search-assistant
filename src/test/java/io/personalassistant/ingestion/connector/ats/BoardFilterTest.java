@@ -73,13 +73,27 @@ class BoardFilterTest {
     }
 
     @Test
-    void includeRemoteAdmitsARemoteRoleFiledAnywhere() {
+    void includeRemoteAdmitsARemoteRoleThatNamesNoPlace() {
         BoardFilter on = new BoardFilter(List.of("bengaluru"), List.of(), List.of(), null, true);
         BoardFilter off = new BoardFilter(List.of("bengaluru"), List.of(), List.of(), null, false);
-        RawItem remoteInLondon = posting("Backend Engineer", "London, UK", true, Instant.now());
 
-        Assertions.assertTrue(on.matches(remoteInLondon), "remote is a place a role can be");
-        Assertions.assertFalse(off.matches(remoteInLondon));
+        for (String location : List.of("Remote", "Remote (Anywhere)", "Fully Remote - Worldwide")) {
+            RawItem remote = posting("Backend Engineer", location, true, Instant.now());
+            Assertions.assertTrue(on.matches(remote), location);
+            Assertions.assertFalse(off.matches(remote), location);
+        }
+    }
+
+    @Test
+    void includeRemoteStillHoldsARemoteRoleThatNamesAPlaceToThePlaceTerms() {
+        BoardFilter f = new BoardFilter(List.of("bengaluru", "india"), List.of(), List.of(), null, true);
+
+        Assertions.assertTrue(f.matches(posting("A", "Remote - Bengaluru", true, Instant.now())));
+        Assertions.assertTrue(f.matches(posting("B", "Remote, India", true, Instant.now())));
+        Assertions.assertFalse(f.matches(posting("C", "London, UK", true, Instant.now())));
+        Assertions.assertFalse(f.matches(posting("D", "Czech Republic", true, Instant.now())));
+        Assertions.assertFalse(f.matches(posting("E", "San Jose, San Francisco", true, Instant.now())));
+        Assertions.assertFalse(f.matches(posting("F", "Remote - US", true, Instant.now())));
     }
 
     @Test

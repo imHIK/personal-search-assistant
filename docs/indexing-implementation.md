@@ -133,9 +133,13 @@ the pass runs it on the parsed text before chunking:
 - **Stored apart from `metadata`.** Values go to `entities.enriched`, with
   `entities.enrichment {taskId, taskVersion, checksum, at, error}` recording what produced them.
   `metadata` is ingestion's and `upsert` replaces it wholesale; enriched values inside it would vanish
-  on every re-ingest. Both fields are **indexer-owned** and written **inside the fenced `markIndexed`**
-  (its `EnrichmentOutcome` argument: `KEEP` / `CLEAR` / `SET` / `ERROR`), so a worker that lost its
-  lease records no enrichment either. `upsert` never touches them.
+  on every re-ingest. Both fields are **indexer-owned** and written **inside the fenced `markIndexed`
+  or `markFailed`** (their `EnrichmentOutcome` argument: `KEEP` / `CLEAR` / `SET` / `ERROR`), so a
+  worker that lost its lease records no enrichment either. `upsert` never touches them.
+- **Kept when the pass fails after enriching.** A rate-limited embed or a rejected bulk write goes
+  through `markFailed` carrying the outcome, so the stamp is current on the retry and the LLM is not
+  called again. Otherwise every deferral would re-buy it: up to `max-deferrals + 1` calls for one
+  entity.
 - **Recomputed only when stale.** The LLM is called when the stored stamp's `taskId`, `taskVersion`
   (the task's `updatedAt`) or `checksum` differs from now, or the last attempt errored. Re-indexing
   unchanged items costs no calls; new content (a changed checksum) or an edited task re-enriches.
@@ -317,6 +321,7 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v3_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
 | `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
 | `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
+| `app.embedding.onnx.include-token-types` | `true` | Feed `token_type_ids`; required by BERT-family exports, `false` for RoBERTa/MPNet |
 | `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `models/gemini-embedding-001` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Gemini needs the `models/` prefix; a bare id 404s |
 | `app.embedding.openai.dimensions` | `768` | Width requested via the OpenAI `dimensions` parameter; `0` omits it and takes the model's native width. `gemini-embedding-001` is natively 3072, so this is what keeps it inside the 768 knn mapping. A model that ignores the parameter fails loudly on the first batch |
 | `app.llm.provider` | `openai-compat` | `openai-compat` (any OpenAI-compatible endpoint) or `none` (`StubLlmProvider`, turns every LLM call off). Endpoint, key, model and limits are `LLM` connections in the console, not properties — see [`providers.md`](./providers.md#llm-connections) |

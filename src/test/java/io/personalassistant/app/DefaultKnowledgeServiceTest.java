@@ -277,9 +277,11 @@ class DefaultKnowledgeServiceTest {
         entities.upsert(TestData.entityInIterable("ent_3", kn.id(), "chan_a", "x3"));
         entities.seedIndexed("ent_1", 4, "m", Instant.now());
         entities.seedFailed("ent_2", EntityStatus.FAILED, "boom", 1);
+        entities.upsert(TestData.entityInIterable("ent_4", kn.id(), "chan_a", "x4"));
+        entities.markDeleted("ent_4", Instant.now());
 
         Knowledge.Stats stats = service.get(kn.id()).orElseThrow().stats();
-        assertEquals(3, stats.entities(), "total reflects all entities");
+        assertEquals(3, stats.entities(), "total counts live entities; a tombstone is not still processing");
         assertEquals(1, stats.indexed());
         assertEquals(1, stats.failed());
 

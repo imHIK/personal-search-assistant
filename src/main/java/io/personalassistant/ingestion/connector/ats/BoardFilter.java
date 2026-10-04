@@ -13,7 +13,8 @@ import java.util.Map;
  * opinion. Exclude beats include, and a missing location or date keeps the posting.
  *
  * @param locations already lowercased
- * @param includeRemote an OR with the place terms: a stated-remote posting matches however it is filed
+ * @param includeRemote a stated-remote posting that names no place matches; one that names a place still
+ *     has to match the place terms
  */
 public record BoardFilter(List<String> locations, List<String> titleInclude,
                           List<String> titleExclude, Duration maxAge, boolean includeRemote) {
@@ -82,11 +83,13 @@ public record BoardFilter(List<String> locations, List<String> titleInclude,
             return true;
         }
         Map<String, Object> metadata = item.metadata();
-        if (includeRemote && metadata != null && Boolean.TRUE.equals(metadata.get("remote"))) {
-            return true; // stated remote: the place terms do not apply to it
-        }
         Object place = metadata == null ? null : metadata.get("location");
-        return AtsNormalization.matchesLocation(place == null ? null : place.toString(), locations);
+        String location = place == null ? null : place.toString();
+        if (includeRemote && Boolean.TRUE.equals(metadata == null ? null : metadata.get("remote"))
+                && AtsNormalization.placeWithoutRemote(location).isEmpty()) {
+            return true;
+        }
+        return AtsNormalization.matchesLocation(location, locations);
     }
 
     /**

@@ -385,6 +385,51 @@ class IndexingRunnerTest {
     }
 
     @Test
+    void aRateLimitedEmbedKeepsTheEnrichmentItAlreadyPaidFor() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
+        throttled.rateLimitedUntil = Instant.now();
+        IndexingRunner limited = runnerWith(throttled);
+        entities.upsert(TestData.ingestedText("ent_e6", "kn_1", "doc", "text"));
+
+        limited.indexEntity(claim("ent_e6"), WORKER);
+
+        Entity deferred = entities.findById("ent_e6").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, deferred.status());
+        assertEquals(5L, deferred.enriched().get("yoe"), "the deferral records the enrichment");
+        assertEquals(deferred.checksum(), deferred.enrichment().checksum());
+
+        throttled.rateLimitedUntil = null;
+        limited.indexEntity(claim("ent_e6"), WORKER);
+
+        assertEquals(1, enricher.calls.size(), "the retry reuses it instead of calling the LLM again");
+        assertEquals(EntityStatus.INDEXED, entities.findById("ent_e6").orElseThrow().status());
+        assertEquals(5L, index.indexed.get(0).metadata().get("yoe"));
+    }
+
+    @Test
+    void aFailedWriteAfterEnrichingKeepsTheEnrichment() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        index.indexChunksFailure = new IllegalStateException("1 of 1 chunks rejected by OpenSearch");
+        runner.backoffSeconds = 0;
+        entities.upsert(TestData.ingestedText("ent_e7", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e7"), WORKER);
+
+        Entity failed = entities.findById("ent_e7").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, failed.status(), "it took the retry path");
+        assertEquals(5L, failed.enriched().get("yoe"));
+
+        index.indexChunksFailure = null;
+        runner.indexEntity(claim("ent_e7"), WORKER);
+
+        assertEquals(1, enricher.calls.size());
+        assertEquals(EntityStatus.INDEXED, entities.findById("ent_e7").orElseThrow().status());
+    }
+
+    @Test
     void removingTheTaskClearsStoredValuesOnTheNextPass() {
         enrichWith(metadataTask("task_meta").id());
         enricher.reply = Map.of("yoe", 5L);

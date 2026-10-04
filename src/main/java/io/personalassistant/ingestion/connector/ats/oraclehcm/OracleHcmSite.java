@@ -6,8 +6,9 @@ import java.util.regex.Pattern;
 
 /**
  * A host/siteNumber pair, neither guessable: the host is a per-customer Fusion pod and the site number an
- * arbitrary slug, so both are read off the careers URL. Vanity domains serve the UI but not the REST API, so
- * the pod host is what matters.
+ * arbitrary slug, so both are read off the careers URL. A vanity front page ({@code jobs.akamai.com}) does not
+ * serve the REST API, so the pod host is what matters; a vanity host that serves the Candidate Experience UI
+ * itself ({@code enterpriseplatform.dell.com/hcmUI/...}) does, and is accepted in URL form.
  *
  * @param host the Fusion host serving the REST API, without scheme
  */
@@ -18,9 +19,13 @@ public record OracleHcmSite(String host, String site) {
             "^([a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.oraclecloud\\.com)/([A-Za-z0-9_-]+)$",
             Pattern.CASE_INSENSITIVE);
 
-    /** A pasted career-site URL: {@code https://host/hcmUI/CandidateExperience/en/sites/CX_1/jobs}. */
+    /**
+     * A pasted career-site URL: {@code https://host/hcmUI/CandidateExperience/en/sites/CX_1/jobs}. Any host:
+     * one that serves the Candidate Experience UI at this path serves the REST API too
+     * ({@code enterpriseplatform.dell.com}).
+     */
     private static final Pattern URL = Pattern.compile(
-            "^(?:https?://)?([a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.oraclecloud\\.com)"
+            "^(?:https?://)?([a-z0-9-]+(?:\\.[a-z0-9-]+)+)"
                     + "/hcmUI/CandidateExperience/[\\w-]+/sites/([A-Za-z0-9_-]+).*$",
             Pattern.CASE_INSENSITIVE);
 

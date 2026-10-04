@@ -57,8 +57,17 @@ public interface EntityRepository {
     boolean markDeletionComplete(String id, String owner, Instant cleanedAt);
 
     /** A terminal status also clears needsReindex; flagNeedsReindex is the only way back. Fenced. */
+    default boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                               int retryCount, Instant nextAttemptAt) {
+        return markFailed(id, owner, restingStatus, error, retryCount, nextAttemptAt, EnrichmentOutcome.keep());
+    }
+
+    /**
+     * Also writes the enrichment outcome, in the same fenced update: a pass that enriched and then failed
+     * keeps what it paid for, so the retry does not call the LLM again.
+     */
     boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
-                       int retryCount, Instant nextAttemptAt);
+                       int retryCount, Instant nextAttemptAt, EnrichmentOutcome enrichment);
 
     /**
      * Dead-letters and sets needsRefetch in one fenced write, since markFailed drops the lease and would

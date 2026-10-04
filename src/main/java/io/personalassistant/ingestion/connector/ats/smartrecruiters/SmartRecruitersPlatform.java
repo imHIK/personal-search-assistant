@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.smartrecruiters;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
@@ -96,6 +97,8 @@ public class SmartRecruitersPlatform implements BoardPlatform {
         JsonNode detail;
         try {
             detail = api.posting(company, id);
+        } catch (RateLimitedException e) {
+            throw e; // throttled, not this posting's fault: skipping would drop postings silently
         } catch (RuntimeException e) {
             // Withdrawn since the listing, or transient: skipping one posting beats failing the board.
             LOG.log(Level.FINE, "Could not fetch SmartRecruiters posting " + id, e);

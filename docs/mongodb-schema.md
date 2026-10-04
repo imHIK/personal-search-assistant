@@ -115,7 +115,8 @@ One document per ingested item (a file, an email, a message).
 > **`enriched` is not inside `metadata` on purpose.** `upsert` replaces `metadata` wholesale on every
 > re-ingest, so LLM-produced values there would be lost each time and re-bought from the model.
 > `enriched` and `enrichment` are indexer-owned like `index.*`, written only by the fenced
-> `markIndexed`; the chunks receive `metadata ∪ enriched`.
+> `markIndexed` or `markFailed` (a pass that fails after enriching keeps what it paid for); the chunks
+> receive `metadata ∪ enriched`.
 >
 > **`custom` belongs to the user.** `PATCH /api/entities/{id}/custom` merges keys into it field by field
 > (`custom.<key>`), so neither stage's writes reach it and it survives re-ingest and re-index. It is

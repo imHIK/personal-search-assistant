@@ -56,7 +56,7 @@ aligns vocabulary with the existing codebase. Open decisions are marked **[DECID
   },
   "anchor": "2026-06-22T00:00:00Z",   // boundary between backward and forward (see §5)
   "status": "DRAFT|ACTIVE|PAUSED|ERROR|DELETED",
-  "stats": { "entities": 0, "indexed": 0, "failed": 0 },
+  "stats": { "entities": 0, "indexed": 0, "failed": 0 },   // computed on read; entities excludes DELETED
   "createdAt": "...", "updatedAt": "..."
 }
 ```

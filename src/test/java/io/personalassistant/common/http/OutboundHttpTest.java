@@ -130,6 +130,33 @@ class OutboundHttpTest {
     }
 
     @Test
+    void aTooManyRequestsCarriesThePauseTheLimiterActuallyApplied() {
+        Instant clamped = Instant.parse("2026-10-03T21:00:00Z");
+        OutboundHttp http = new OutboundHttp(new RecordingRateLimiter() {
+            @Override
+            public Instant penalize(RateLimitKey key, Instant until) {
+                super.penalize(key, until);
+                return clamped;
+            }
+        });
+        status = 429;
+        retryAfter.set("86400");
+
+        OutboundHttpException e = assertThrows(OutboundHttpException.class, () -> http.json(call()));
+
+        assertEquals(clamped, e.retryAt(), "the clamped instant, not the server's raw answer");
+    }
+
+    @Test
+    void onlyATooManyRequestsCarriesARetryInstant() {
+        status = 503;
+
+        OutboundHttpException e = assertThrows(OutboundHttpException.class, () -> http().json(call()));
+
+        assertEquals(null, e.retryAt());
+    }
+
+    @Test
     void reportsATransportFailureWithNoStatus() {
         HttpCall unreachable = HttpCall.get("http://localhost:1/nope", Duration.ofSeconds(2),
                 new RateLimit(KEY, RateLimitPolicy.UNLIMITED, RateLimitMode.WAIT));

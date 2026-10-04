@@ -19,6 +19,9 @@ public final class AtsNormalization {
     /** Hybrid is excluded: on-site some days is not remote. */
     private static final Pattern REMOTE =
             Pattern.compile("\\b(fully[ -]?remote|remote[ -]?first|remote)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NO_PLACE = Pattern.compile(
+            "\\b(fully[ -]?remote|remote[ -]?first|remote|anywhere|worldwide|global|work from home|wfh)\\b",
+            Pattern.CASE_INSENSITIVE);
 
     private AtsNormalization() {
     }
@@ -83,6 +86,18 @@ public final class AtsNormalization {
         String head = descriptionText == null ? ""
                 : descriptionText.substring(0, Math.min(descriptionText.length(), 400));
         return REMOTE.matcher(head).find();
+    }
+
+    /**
+     * The location with the words that say "remote" or "anywhere" removed: empty when it names no place, so
+     * {@code Remote (Anywhere)} is empty and {@code Remote - US} is {@code us}.
+     */
+    public static String placeWithoutRemote(String location) {
+        if (location == null) {
+            return "";
+        }
+        String stripped = NO_PLACE.matcher(location.toLowerCase(Locale.ROOT)).replaceAll(" ");
+        return NON_ALNUM.matcher(stripped).replaceAll(" ").trim();
     }
 
     /** From the title only; null when it carries no explicit marker, which is common and correct. */

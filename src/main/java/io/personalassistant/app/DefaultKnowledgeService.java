@@ -415,9 +415,13 @@ public class DefaultKnowledgeService implements KnowledgeService {
         }
     }
 
-    /** Computed on read rather than maintained on the hot ingestion and indexing path. */
+    /**
+     * Computed on read rather than maintained on the hot ingestion and indexing path. Tombstones are left
+     * out of the total, or the console's "processing" (total - indexed - failed) never reaches zero.
+     */
     private Knowledge withFreshStats(Knowledge kn) {
-        long total = entities.countByKnowledge(kn.id());
+        long total = entities.countByKnowledge(kn.id())
+                - entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.DELETED);
         long indexed = entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.INDEXED);
         long failed = entities.countByKnowledgeAndStatus(kn.id(), EntityStatus.FAILED);
         return kn.withStats(new Knowledge.Stats(total, indexed, failed));

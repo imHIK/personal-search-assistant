@@ -25,6 +25,7 @@ import {
 } from '@/hooks/queries'
 import { JobFilters } from './JobFilters'
 import { JobRow } from './JobRow'
+import { useMySkills, useNewSince } from './jobPrefs'
 
 /** Standalone: no console chrome and no nav entry; reached at /jobs. */
 export function JobsDashboardPage() {
@@ -50,6 +51,8 @@ export function JobsDashboardPage() {
   const result = useEntityQuery(body, sourceIds.length > 0)
   const facets = useEntityFacets([jobDashboard.entityType], sourceIds, facetPaths(specs))
   const mark = useEntityCustom()
+  const newSince = useNewSince()
+  const mySkills = useMySkills()
 
   const setValue = (id: string, value: string) => {
     const next = new URLSearchParams(params)
@@ -83,6 +86,8 @@ export function JobsDashboardPage() {
             sources={sources}
             onChange={setValue}
             onClear={() => setParams(new URLSearchParams(), { replace: true })}
+            mySkills={mySkills.raw}
+            onMySkillsChange={mySkills.setRaw}
           />
         </aside>
 
@@ -112,6 +117,8 @@ export function JobsDashboardPage() {
                   key={item.id}
                   item={item}
                   enrichedSpecs={enriched}
+                  newSince={newSince}
+                  mySkills={mySkills.skills}
                   pending={mark.isPending && mark.variables?.id === item.id}
                   onMark={(values) =>
                     mark.mutate(

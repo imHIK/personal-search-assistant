@@ -363,7 +363,7 @@ indexing timestamp alone, or a revived item will read as brand new.
 | Re-index a knowledge | `POST /api/index/knowledge/{id}/reindex` | `flagNeedsReindexByKnowledge` → Stage 2 re-runs over the corpus — the survivable way to change embedding model. For a `FETCH_AND_REINDEX` connector it also flags the file-backed entities `needsRefetch` and rewinds the cursors, so Stage 1 refreshes the staged copies first |
 | Delete one entity | `DELETE /api/index/entities/{id}` | `markDeleted` → Stage 2 removes its chunks |
 | Browse entities | `GET /api/knowledge/{id}/entities` | Read-only. Pages the ingested items newest-first with an optional `EntityStatus` filter, returning `EntitySummary` projections. This is how a caller finds the `FAILED` items worth re-indexing, and the only way to enumerate entities at all. |
-| Inspect sync progress | `GET /api/knowledge/{id}/cursors` | Read-only. Per-iterable walk state. `stats` on the knowledge says how many entities exist; only the cursors say whether the *backward* walk is finished (`EXHAUSTED`) or the forward one is merely waiting (`IDLE`). |
+| Inspect sync progress | `GET /api/knowledge/{id}/cursors` | Read-only. Per-iterable walk state. `stats` on the knowledge says how many live (non-`DELETED`) entities exist; only the cursors say whether the *backward* walk is finished (`EXHAUSTED`) or the forward one is merely waiting (`IDLE`). |
 
 ---
 
@@ -489,7 +489,9 @@ RawItem.tombstone(externalId);
    `app.ratelimit.max-deferrals` rather than `app.ingestion.retry-limit`, so a throttled source syncs
    slowly instead of dead-lettering; since each deferral is now a genuine reopening rather than a
    30-second tick, that budget is a slow backstop for an unsatisfiable limit. Replaying the page is
-   safe because `grab` is idempotent (rule 4).
+   safe because `grab` is idempotent (rule 4). A job board's own `429` takes this path too: `AtsHttp`
+   rethrows it as a `RateLimitedException` carrying the pause the limiter applied; other connectors'
+   429s still surface as failures.
 
    The status is separate from `AVAILABLE` for the user's sake: throttling is the one failure whose
    fix is usually theirs (raise the account's limit), which it can only be if the console can show it.

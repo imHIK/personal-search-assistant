@@ -44,6 +44,10 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.onnx.normalize", defaultValue = "true")
     boolean normalize;
 
+    /** BERT-family exports declare token_type_ids as a required input; RoBERTa/MPNet ones do not have it. */
+    @ConfigProperty(name = "app.embedding.onnx.include-token-types", defaultValue = "true")
+    boolean includeTokenTypes;
+
     /** Prepended to queries only. Model-specific: the wrong instruction is worse than none. */
     @ConfigProperty(name = "app.embedding.onnx.query-instruction")
     Optional<String> queryInstruction;
@@ -130,6 +134,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
                         .optEngine("OnnxRuntime")
                         .optArgument("pooling", pooling)
                         .optArgument("normalize", normalize)
+                        .optArgument("includeTokenTypes", includeTokenTypes)
                         .optTranslatorFactory(new TextEmbeddingTranslatorFactory())
                         .build();
                 model = criteria.loadModel();

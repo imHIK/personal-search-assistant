@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.workday;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
@@ -134,6 +135,8 @@ public class WorkdayPlatform implements BoardPlatform {
         JsonNode detail;
         try {
             detail = api.posting(site, path).path("jobPostingInfo");
+        } catch (RateLimitedException e) {
+            throw e; // throttled, not this posting's fault: skipping would drop postings silently
         } catch (RuntimeException e) {
             // Filled or withdrawn since the search: skipping one posting beats failing the site.
             LOG.log(Level.FINE, "Could not fetch Workday posting " + path, e);

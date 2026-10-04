@@ -1,8 +1,11 @@
 package io.personalassistant.ingestion.connector.ats.smartrecruiters;
 
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import io.personalassistant.ingestion.connector.ats.BoardFilter;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -53,6 +56,16 @@ class SmartRecruitersPlatformTest {
         List<RawItem> items = fetch(api, List.of("india"));
 
         Assertions.assertEquals(List.of("3"), items.stream().map(RawItem::externalId).toList());
+    }
+
+    @Test
+    void aThrottledDetailFetchDefersTheBoardRatherThanSkippingThePosting() {
+        RateLimitedException throttled =
+                new RateLimitedException(RateLimitKey.board("smartrecruiters"), Instant.now().plusSeconds(60));
+        FakeSmartRecruitersApi api = board().failDetail("Acme", "1", throttled);
+
+        Assertions.assertSame(throttled, Assertions.assertThrows(RateLimitedException.class,
+                () -> fetch(api, List.of("india"))));
     }
 
     @Test

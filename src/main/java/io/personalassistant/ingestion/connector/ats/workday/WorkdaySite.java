@@ -17,9 +17,12 @@ public record WorkdaySite(String tenant, String site, String wd) {
     private static final Pattern TRIPLE =
             Pattern.compile("^([\\w.-]+)/([\\w.-]+)/(wd\\d+)$", Pattern.CASE_INSENSITIVE);
 
-    /** A pasted career-site URL: {@code https://adobe.wd5.myworkdayjobs.com/external_experienced}. */
+    /**
+     * A pasted career-site URL: {@code https://adobe.wd5.myworkdayjobs.com/external_experienced}, often with a
+     * locale ({@code /en-US/}) ahead of the site.
+     */
     private static final Pattern URL = Pattern.compile(
-            "^(?:https?://)?([\\w-]+)\\.(wd\\d+)\\.myworkdayjobs\\.com/(?:[\\w-]+/)??([\\w.-]+)/?.*$",
+            "^(?:https?://)?([\\w-]+)\\.(wd\\d+)\\.myworkdayjobs\\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?([\\w.-]+)(?:[/?#].*)?$",
             Pattern.CASE_INSENSITIVE);
 
     /** Empty rather than a throw for anything else: that is how a bare company name is told apart. */

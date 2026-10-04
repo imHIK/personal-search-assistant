@@ -6,6 +6,7 @@ import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Chunk;
 import io.personalassistant.domain.model.Embedding;
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.ParsedContent;
@@ -90,6 +91,8 @@ public class IndexingRunner {
 
     /** @param owner every terminal write is fenced on it, so a run whose lease lapsed records nothing */
     public void indexEntity(Entity entity, String owner) {
+        // Hoisted so a pass that fails after enriching still records it, sparing the retry an LLM call.
+        EnrichmentOutcome enrichedOutcome = EnrichmentOutcome.keep();
         try {
             Optional<Knowledge> kn = knowledge.findById(entity.knowledgeId());
             if (kn.isEmpty()) {
@@ -101,6 +104,7 @@ public class IndexingRunner {
             Extracted extracted = extract(entity);
             // Before chunking, so the enriched fields ride on every chunk and search filters reach them.
             EntityEnrichment.Result enriched = enrichment.resolve(kn.get(), entity, extracted.parsed().text());
+            enrichedOutcome = enriched.outcome();
             Entity toChunk = enriched.values().isEmpty() ? entity
                     : entity.withMetadata(Entity.mergeEnriched(entity.metadata(), enriched.values()));
             // Resolved on every pass: a chunking change applies to the next entity indexed; nothing is
@@ -123,11 +127,11 @@ public class IndexingRunner {
                         + " before markIndexed; leaving it to the new owner");
             }
         } catch (RateLimitedException e) {
-            defer(entity, owner, e);
+            defer(entity, owner, e, enrichedOutcome);
         } catch (MissingContentException e) {
             missingContent(entity, owner, e);
         } catch (RuntimeException e) {
-            fail(entity, owner, Errors.summary(e), false);
+            fail(entity, owner, Errors.summary(e), false, enrichedOutcome);
             LOG.log(Level.WARNING, "Indexing failed for entity " + entity.id(), e);
         }
     }
@@ -223,7 +227,7 @@ public class IndexingRunner {
      * {@code app.ratelimit.max-deferrals}, not the retry limit, so a healthy throttled entity is never
      * dead-lettered.
      */
-    private void defer(Entity entity, String owner, RateLimitedException e) {
+    private void defer(Entity entity, String owner, RateLimitedException e, EnrichmentOutcome enrichedOutcome) {
         int count = (entity.retry() == null ? 0 : entity.retry().count()) + 1;
         boolean dead = count > maxDeferrals;
         EntityStatus resting = dead ? EntityStatus.FAILED : EntityStatus.INGESTED;
@@ -237,19 +241,24 @@ public class IndexingRunner {
             LOG.fine(() -> reason + " for entity " + entity.id());
         }
         if (!entities.markFailed(entity.id(), owner, resting, reason, count,
-                dead ? null : e.retryAt())) {
+                dead ? null : e.retryAt(), enrichedOutcome)) {
             LOG.warning("Lost the indexing lease on entity " + entity.id()
                     + " before recording a rate-limit deferral; the new owner will retry");
         }
     }
 
     private void fail(Entity entity, String owner, String error, boolean terminal) {
+        fail(entity, owner, error, terminal, EnrichmentOutcome.keep());
+    }
+
+    private void fail(Entity entity, String owner, String error, boolean terminal,
+                      EnrichmentOutcome enrichedOutcome) {
         // Consecutive, not cumulative: markIndexed zeroes it on every success.
         int retryCount = (entity.retry() == null ? 0 : entity.retry().count()) + 1;
         boolean dead = terminal || retryCount > retryLimit;
         EntityStatus resting = dead ? EntityStatus.FAILED : EntityStatus.INGESTED;
         Instant nextAttempt = dead ? null : Instant.now().plusSeconds(backoffSeconds);
-        if (!entities.markFailed(entity.id(), owner, resting, error, retryCount, nextAttempt)) {
+        if (!entities.markFailed(entity.id(), owner, resting, error, retryCount, nextAttempt, enrichedOutcome)) {
             LOG.warning("Lost the indexing lease on entity " + entity.id()
                     + " before recording a failure; the new owner will record its own outcome");
         }

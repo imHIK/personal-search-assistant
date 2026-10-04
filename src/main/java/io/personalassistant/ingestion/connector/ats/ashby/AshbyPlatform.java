@@ -36,10 +36,10 @@ public class AshbyPlatform implements BoardPlatform {
     public OptionalInt countPostings(String handle) {
         try {
             JsonNode response = api.listJobs(handle);
-            if (response == null || !response.has("jobs")) {
-                return OptionalInt.empty();
-            }
-            return OptionalInt.of(response.path("jobs").size());
+            int jobs = response == null ? 0 : response.path("jobs").size();
+            // An empty board is a miss: a dormant one would otherwise shadow the company's live board
+            // on a platform probed later.
+            return jobs > 0 ? OptionalInt.of(jobs) : OptionalInt.empty();
         } catch (RuntimeException e) {
             // A miss is the normal outcome for all but one platform, so it must not propagate.
             return OptionalInt.empty();

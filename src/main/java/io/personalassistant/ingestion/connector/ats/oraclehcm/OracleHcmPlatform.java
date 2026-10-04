@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.oraclehcm;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
 import io.personalassistant.ingestion.connector.ats.AtsNormalization;
@@ -17,12 +18,12 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 /**
  * Oracle Recruiting Cloud career sites. A site is a host/siteNumber pair, never derivable from a name, so
- * countPostings answers empty without a network call for anything that does not parse. The location terms go
- * out as keyword queries, one per term and unioned, never as a filter; the connector still filters the
- * result. Every requisition kept costs a detail call, so the query matters.
+ * countPostings answers empty without a network call for anything that does not parse. Each location term is
+ * resolved to the pod's place ids and queried by id, unioned; the connector still filters the result. Every requisition kept costs a detail call, so the query matters.
  */
 @ApplicationScoped
 public class OracleHcmPlatform implements BoardPlatform {
@@ -57,7 +58,7 @@ public class OracleHcmPlatform implements BoardPlatform {
             return OptionalInt.empty();
         }
         try {
-            JsonNode response = api.searchRequisitions(site.get(), "", 1, 0);
+            JsonNode response = api.searchRequisitions(site.get(), "", null, 1, 0);
             int total = total(response);
             return total > 0 ? OptionalInt.of(total) : OptionalInt.empty();
         } catch (RuntimeException e) {
@@ -73,14 +74,19 @@ public class OracleHcmPlatform implements BoardPlatform {
                         + "'. Expected host/siteNumber (e.g."
                         + " eofe.fa.us2.oraclecloud.com/BNY-Careers) or the career-site URL."));
 
-        List<String> queries = filter.locations().isEmpty()
-                ? List.of("")
-                : List.copyOf(new LinkedHashSet<>(filter.locations()));
-
-        // Keyed by requisition id: a posting matched by two terms costs one detail call.
+        // Keyed by requisition id: a posting matched by two places or terms costs one detail call.
         Map<String, JsonNode> summaries = new LinkedHashMap<>();
-        for (String query : queries) {
-            collectSummaries(site, query, filter, summaries);
+        if (filter.locations().isEmpty()) {
+            collectSummaries(site, "", null, filter, summaries);
+        }
+        for (String term : new LinkedHashSet<>(filter.locations())) {
+            List<String> places = locationIds(site, term);
+            if (places.isEmpty()) {
+                collectSummaries(site, term, null, filter, summaries);
+            }
+            for (String locationId : places) {
+                collectSummaries(site, "", locationId, filter, summaries);
+            }
         }
 
         List<RawItem> items = new ArrayList<>(summaries.size());
@@ -93,11 +99,40 @@ public class OracleHcmPlatform implements BoardPlatform {
         return items;
     }
 
-    private void collectSummaries(OracleHcmSite site, String query, BoardFilter filter,
+    /**
+     * The pod's places named exactly by the term (city, state or country), so {@code india} is not
+     * Indianapolis. Empty when nothing matches or the lookup fails: the caller then sends the term as a
+     * keyword, which reads titles and descriptions far more than locations — measured on TI, it found 18 of
+     * the 133 postings in India that the place id finds.
+     */
+    private List<String> locationIds(OracleHcmSite site, String term) {
+        JsonNode suggestions;
+        try {
+            suggestions = api.locationSuggestions(site, term).path("items");
+        } catch (RateLimitedException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            LOG.log(Level.FINE, "No place lookup on " + site + " for '" + term + "'; sending it as a keyword",
+                    e);
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonNode place : suggestions) {
+            String id = place.path("Id").asText("");
+            boolean named = Stream.of("City", "State", "Country")
+                    .anyMatch(field -> place.path(field).asText("").trim().equalsIgnoreCase(term));
+            if (!id.isBlank() && named && !ids.contains(id)) {
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    private void collectSummaries(OracleHcmSite site, String keyword, String locationId, BoardFilter filter,
                                   Map<String, JsonNode> into) {
         int offset = 0;
         for (int page = 0; page < MAX_PAGES; page++) {
-            JsonNode response = api.searchRequisitions(site, query, PAGE_SIZE, offset);
+            JsonNode response = api.searchRequisitions(site, keyword, locationId, PAGE_SIZE, offset);
             JsonNode list = requisitions(response);
             if (!list.isArray() || list.isEmpty()) {
                 break;
@@ -125,6 +160,8 @@ public class OracleHcmPlatform implements BoardPlatform {
         JsonNode detail;
         try {
             detail = first(api.requisition(site, id));
+        } catch (RateLimitedException e) {
+            throw e; // throttled, not this posting's fault: skipping would drop postings silently
         } catch (RuntimeException e) {
             // Withdrawn since the listing, or transient: skipping one posting beats failing the site.
             LOG.log(Level.FINE, "Could not fetch Oracle HCM requisition " + id, e);

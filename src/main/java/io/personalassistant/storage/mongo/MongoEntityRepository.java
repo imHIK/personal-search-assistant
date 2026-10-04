@@ -252,14 +252,20 @@ public class MongoEntityRepository implements EntityRepository {
 
     @Override
     public boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
-                              int retryCount, Instant nextAttemptAt) {
+                              int retryCount, Instant nextAttemptAt, EnrichmentOutcome enrichment) {
         var result = collection().updateOne(ownedBy(id, owner),
-                failUpdate(restingStatus, error, retryCount, nextAttemptAt));
+                failUpdate(restingStatus, error, retryCount, nextAttemptAt, enrichment));
         return result.getMatchedCount() > 0;
     }
 
     Bson failUpdate(EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt) {
-        List<Bson> updates = new ArrayList<>(List.of(
+        return failUpdate(restingStatus, error, retryCount, nextAttemptAt, EnrichmentOutcome.keep());
+    }
+
+    Bson failUpdate(EntityStatus restingStatus, String error, int retryCount, Instant nextAttemptAt,
+                    EnrichmentOutcome enrichment) {
+        List<Bson> updates = new ArrayList<>(enrichmentUpdates(enrichment));
+        updates.addAll(List.of(
                 Updates.set("status", restingStatus.name()),
                 Updates.set("index.error", error),
                 Updates.set("retry", new Document("count", retryCount)

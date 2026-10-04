@@ -40,6 +40,13 @@ class OracleHcmSiteTest {
     }
 
     @Test
+    void aVanityHostServingTheCandidateExperienceUiIsAccepted() {
+        Assertions.assertEquals("enterpriseplatform.dell.com/careers", OracleHcmSite.parse(
+                "https://enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/jobs/preview/294511")
+                .orElseThrow().toString());
+    }
+
+    @Test
     void aVanityDomainIsRejectedBecauseItDoesNotServeTheApi() {
         Assertions.assertEquals(Optional.empty(),
                 OracleHcmSite.parse("https://jobs.akamai.com/en/sites/CX_1/jobs"));

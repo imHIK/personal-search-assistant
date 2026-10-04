@@ -128,6 +128,18 @@ class MongoEntityRepositoryBsonTest {
     }
 
     @Test
+    void enrichmentAlsoRidesOnTheFencedFailWrite() {
+        Entity.Enrichment stamp = new Entity.Enrichment("task_1", Instant.now(), "c1", Instant.now(), null);
+        BsonDocument update = render(repo.failUpdate(EntityStatus.INGESTED, "Rate limited", 1, Instant.now(),
+                EnrichmentOutcome.set(Map.of("yoe", 5L), stamp)));
+        BsonDocument set = update.getDocument("$set");
+
+        assertEquals(5L, set.getDocument("enriched").getInt64("yoe").getValue());
+        assertEquals("INGESTED", set.getString("status").getValue(), "still the fail write");
+        assertTrue(update.getDocument("$unset").containsKey("lease"));
+    }
+
+    @Test
     void theBrowserFilterHidesTombstonesAndComparesDatesAsDates() {
         EntityFilter filter = new EntityFilter(Set.of(EntityType.JOB_POSTING), null, null, List.of(
                 new EntityFilter.Condition("metadata.postedAt", EntityFilter.Op.GTE,

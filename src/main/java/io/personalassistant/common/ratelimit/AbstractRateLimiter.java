@@ -82,14 +82,15 @@ abstract class AbstractRateLimiter implements RateLimiter {
      * covers the pause, cursors and entities.
      */
     @Override
-    public void penalize(RateLimitKey key, Instant until) {
+    public Instant penalize(RateLimitKey key, Instant until) {
         if (key == null || until == null) {
-            return;
+            return until;
         }
         Instant capped = clock.instant().plusSeconds(maxPenaltySeconds);
         Instant pauseUntil = until.isAfter(capped) ? capped : until;
         storePenalty(key, pauseUntil);
         LOG.log(Level.WARNING, () -> "Rate limited by the server on " + key
                 + "; pausing until " + pauseUntil);
+        return pauseUntil;
     }
 }

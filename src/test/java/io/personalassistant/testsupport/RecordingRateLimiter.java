@@ -26,7 +26,8 @@ public class RecordingRateLimiter implements RateLimiter {
     }
 
     @Override
-    public void penalize(RateLimitKey key, Instant until) {
+    public Instant penalize(RateLimitKey key, Instant until) {
         penalties.put(key.value(), until);
+        return until;
     }
 }

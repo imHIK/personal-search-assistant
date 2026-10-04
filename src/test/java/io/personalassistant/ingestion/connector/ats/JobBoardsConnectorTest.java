@@ -241,16 +241,15 @@ class JobBoardsConnectorTest {
     }
 
     @Test
-    void includeRemoteAdmitsARemoteRoleFiledOutsideTheNamedPlaces() {
-        Assertions.assertEquals(List.of("engineer-blr", "manager-blr", "engineer-stale"),
-                grabWith("filterable", Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"))),
-                "the London remote role is out");
-        Assertions.assertEquals(
-                List.of("engineer-blr", "engineer-remote", "manager-blr", "engineer-stale"),
+    void includeRemoteDoesNotAdmitARemoteRoleFiledUnderAnotherPlace() {
+        List<String> expected = List.of("engineer-blr", "manager-blr", "engineer-stale");
+        Assertions.assertEquals(expected,
+                grabWith("filterable", Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"))));
+        Assertions.assertEquals(expected,
                 grabWith("filterable", Map.of(
                         JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"),
                         JobBoardsConnector.INCLUDE_REMOTE_INPUT, true)),
-                "and back in once remote counts as a place");
+                "London names a place, so the place terms still apply");
     }
 
     @Test

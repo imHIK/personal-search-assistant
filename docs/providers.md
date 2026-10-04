@@ -136,11 +136,15 @@ invisible to semantic search.
 Export the model to ONNX once, then point the app at the directory:
 
 ```bash
-pip install "optimum[exporters]"
-optimum-cli export onnx --model BAAI/bge-base-en-v1.5 ./models/bge-base-en-v1.5
+python3 -m venv optimum-venv
+optimum-venv/bin/pip install optimum-onnx onnxruntime
+optimum-venv/bin/optimum-cli export onnx --model BAAI/bge-base-en-v1.5 --task feature-extraction ~/models/bge-base-en-v1.5
 ```
 
-That directory will contain `model.onnx`, `tokenizer.json`, and `config.json`. Then:
+optimum 2.x moved the exporter out of `optimum[exporters]` into `optimum-onnx`; without
+`onnxruntime` the export writes `model.onnx` and then fails fixing its dynamic axes. That directory will
+contain `model.onnx`, `tokenizer.json`, and `config.json` (about 435 MB). Then, as env vars or
+properties:
 
 ```properties
 app.embedding.provider=onnx-bge
@@ -148,7 +152,10 @@ app.embedding.onnx.model-path=/absolute/path/to/models/bge-base-en-v1.5
 ```
 
 BGE uses CLS pooling + L2 normalization (the defaults). The model loads lazily on first use, so the
-app boots fine even when this provider isn't active.
+app boots fine even when this provider isn't active. `app.embedding.onnx.include-token-types` (default
+`true`) feeds `token_type_ids`, which every BERT-family export declares as a required input — DJL
+omits it otherwise and inference fails with *"Input mismatch"*. Set it `false` for a RoBERTa/MPNet
+export. Input past 512 tokens is truncated, not rejected.
 
 ### Hosted setup (`openai-embed`)
 

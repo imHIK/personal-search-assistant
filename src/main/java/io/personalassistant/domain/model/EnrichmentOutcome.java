@@ -3,8 +3,9 @@ package io.personalassistant.domain.model;
 import java.util.Map;
 
 /**
- * What the fenced markIndexed writes to {@code enriched} / {@code enrichment}: carried on that write rather
- * than a separate one, so a worker that lost its lease cannot record enrichment for content it no longer owns.
+ * What the fenced markIndexed or markFailed writes to {@code enriched} / {@code enrichment}: carried on that
+ * write rather than a separate one, so a worker that lost its lease cannot record enrichment for content it no
+ * longer owns.
  */
 public record EnrichmentOutcome(Kind kind, Map<String, Object> values, Entity.Enrichment stamp) {
 

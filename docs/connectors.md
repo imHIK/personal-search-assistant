@@ -18,7 +18,7 @@ resume from where it stopped.
 | Local filesystem | `LOCAL_FS` | `localfs.LocalFsConnector` | none | root + one per sub-directory |
 | Gmail | `GMAIL` | `google.gmail.GmailConnector` | required (OAuth) | all-mail, or one per configured label |
 | Google Drive | `GOOGLE_DRIVE` | `google.drive.GoogleDriveConnector` | required (OAuth) | one per folder (tree walked at discovery) |
-| Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Workday / Oracle HCM |
+| Company job boards | `JOB_BOARDS` | `ats.JobBoardsConnector` | none (public boards) | **one per company**, across Greenhouse / Lever / Ashby / SmartRecruiters / Rippling / AInterviews / Kula / Workday / Oracle HCM / iCIMS Jibe / Keka / Freshteam / TurboHire / Zwayam / Eightfold |
 
 ## Content: `grab()` maps, `materialize()` fetches
 
@@ -142,7 +142,20 @@ Two consequences worth knowing:
   server really meant longer, the next call earns another `429` and another pause.
 
 Boards have no `Connection`, so their bucket is the platform and their rules come from
-`app.ratelimit.job-boards.rules`.
+`app.ratelimit.job-boards.rules`. **A board's own 429 defers too.** `OutboundHttp` penalises the
+bucket and puts the instant the limiter actually applied (after the 6 h clamp; the 60 s default when
+there is no `Retry-After`) on the exception; `AtsHttp` turns that into a `RateLimitedException` on the
+board's bucket, so the runner rests the company's cursor `RATE_LIMITED` until then instead of counting a
+failure. This is scoped to boards — other `OutboundHttp` callers still get a plain
+`OutboundHttpException` for a 429. Two places must not swallow it:
+
+- **Per-posting detail calls** skip one posting on any other error, but rethrow `RateLimitedException`:
+  skipping would let a throttled board report success with postings silently missing. Our own
+  limiter's refusal is the same exception, so this covers both kinds of throttling.
+- **Eightfold's PCSX probe** rethrows it, since reading a 429 as "not a PCSX tenant" falls back to v2,
+  which a PCSX tenant answers with an empty board.
+
+Resolution (`countPostings`) still reads a 429 as a miss, like any outage — see `BoardPlatform`.
 
 > **Setting a board limit also slows the company lookup.** `POST /api/connectors/job-boards/lookup` is
 > a synchronous, user-facing call, and it shares the `board:<platform>` bucket with ingestion. Because
@@ -323,6 +336,11 @@ posting under, in order:
 |---------------------------------|------------------------------|-------|-------------------|
 | Greenhouse                      | `company_name` on the job    | label | board token       |
 | SmartRecruiters                 | `company.name` on the detail | label | handle            |
+| Rippling                        | `companyName` on the detail  | label | board slug        |
+| iCIMS Jibe                      | `hiring_organization` on the job | label | host          |
+| Zwayam                          | `companyName` of the site    | label | domain            |
+| AInterviews, Kula, Keka, Freshteam, Eightfold | label          | —     | slug / host / employer domain |
+| TurboHire                       | `ClientName` when shown      | label | organisation name |
 | Lever, Ashby, Workday, Oracle   | label                        | —     | board / tenant / site number |
 
 It is a map beside the list rather than a name folded into each entry because an entry is an iterable
@@ -361,12 +379,14 @@ wrap the checksum in `withCompany`, see above),
 discovered by CDI and registered nowhere — the same shape as connectors, parsers and chunking
 strategies. `countPostings` must return an empty `OptionalInt` rather than throw for a miss, since
 resolution probes every platform and a miss is the normal outcome for all but one; `hasBoard` is a
-default method over it.
+default method over it. **An empty board is a miss too**, on every platform: companies leave dormant
+boards behind when they move ATS (project44 has an empty Ashby board and a live Greenhouse one), and
+since the first platform to answer wins, a dormant board counted as found would shadow the live one.
 
 It returns a **count**, not a boolean, because every platform's existence check already knew one —
-Greenhouse, Lever and Ashby from the listing size, SmartRecruiters from `totalFound`, Oracle HCM from
-`TotalJobsCount`, Workday from
-`total`. Throwing it away and re-fetching the board to answer "how big is it?" would double the
+Greenhouse, Lever, Ashby, AInterviews, Keka and Freshteam from the listing size, Kula from `meta.count`, TurboHire from its career-page list, SmartRecruiters from `totalFound`,
+Rippling from the distinct jobs in its listing, Jibe and Zwayam from `totalCount`, Eightfold from `count`,
+Oracle HCM from `TotalJobsCount`, Workday from `total`. Throwing it away and re-fetching the board to answer "how big is it?" would double the
 requests for a number already in hand, which is what makes the lookup endpoint below cheap.
 
 ### Snapshot-shaped
@@ -401,8 +421,11 @@ Per-platform quirks:
   Ashby now stamp title and location too; a role relocated without a description change is therefore
   still missed on those four. Aligning them means one forced re-index of every posting they hold, so
   it is deliberately not bundled here.
-- **SmartRecruiters** — the only platform that pays **per posting**, and the only one that reaches
+- **SmartRecruiters** — pays **per posting**, and is the only one that reaches
   Swiggy (71 postings, 70 in India) and Freshworks. Two consequences below.
+- **Rippling, iCIMS Jibe, AInterviews, Keka, Zwayam and Eightfold** — stamp title, location and body
+  like Greenhouse and Ashby, plus whatever update stamp the platform has (Jibe's `update_date`,
+  Zwayam's `modifiedDate`, Eightfold's `t_update`). See their sections below.
 
 #### SmartRecruiters costs 1 + N requests
 
@@ -436,8 +459,9 @@ Two API quirks worth knowing:
 
 #### Workday is addressed by a triple, and queries rather than filters
 
-A Workday site is a `tenant/site/wd` triple (`adobe/external_experienced/wd5`) or the career-site URL,
-and **none of the three parts is guessable** — 13 of 22 blind attempts failed on companies that
+A Workday site is a `tenant/site/wd` triple (`adobe/external_experienced/wd5`) or the career-site URL
+— any job URL works, and a locale segment ahead of the site (`/en-GB/JioStar/...`, present on most
+copied links) is skipped rather than read as the site. **None of the three parts is guessable** — 13 of 22 blind attempts failed on companies that
 certainly use Workday. So `WorkdaySite.parse` returning empty is what tells the connector a bare
 company name is not a Workday site, and `hasBoard` answers `false` for one **without any network
 call**. Resolution asks every platform about every name; a speculative POST per name would slow adding
@@ -493,22 +517,163 @@ site number is an arbitrary slug (`CX_1`, `CX_1001`, `BNY-Careers`). So `OracleH
 empty is what tells the connector a bare name is not an Oracle site, and `hasBoard` answers `false`
 without a network call.
 
-**A vanity domain is deliberately rejected.** Employers front the pod with their own hostname
-(`jobs.akamai.com`, `careers.americanexpress.com`); those serve the UI but **not** the REST API, so
-accepting one would produce a site that resolves and then fails every fetch. The underlying pod host
-has to be read off the page.
+**A vanity front page is rejected; a vanity host serving the UI itself is not.** Employers front the
+pod with their own hostname (`jobs.akamai.com`, `careers.americanexpress.com`); those serve a page but
+**not** the REST API, so accepting one would produce a site that resolves and then fails every fetch, and
+the pod host has to be read off the page. Some instead serve Oracle's Candidate Experience UI on their
+own host (`enterpriseplatform.dell.com/hcmUI/CandidateExperience/...`), and that host answers the REST
+API too, so the pasted-URL form accepts any host whose path is `/hcmUI/CandidateExperience/`. The
+`host/site` pair form still requires an `oraclecloud.com` host. Note a site number in such a URL can be
+an alias: Dell's `careers` is `CX_1001`.
 
 It pays **per posting**, like SmartRecruiters and more so: the listing carries no description at all —
 `ShortDescriptionStr` is empty and the qualification fields are null — so every requisition kept costs
-a second call. The location terms are therefore sent as Oracle's `keyword` finder, one request per
-term, unioned by requisition id. Measured on BNY's site: **1,386 requisitions blank, 138 for `"Pune"`**.
-Without that prefilter JPMorgan's 7,325 requisitions would be 7,326 requests a poll.
+a second call, and the location terms must narrow the search server-side.
+
+**Each term is resolved to the pod's place ids and queried by `locationId`**, unioned by requisition id.
+The resolver is the careers page's own place typeahead (`recruitingCESearchAutoSuggestions`,
+`findByLoc;string=<term>`), which answers `{Id, Level, City, State, Country}` from the pod's geography;
+only a place whose city, state or country *equals* the term is taken, since the typeahead is a prefix
+match (`india` also suggests Indianapolis). A term the pod does not know as a place (TI's geography has
+Bengaluru but no Bangalore), or a failed lookup, is sent as a `keyword` instead — a superset the
+connector then filters. Three alternatives were measured and rejected (2026-10-04):
+
+- **`keyword`**, the original design, reads titles and descriptions far more than locations. It found
+  18 of TI's 133 postings in India, ~110 of JPMorgan's 312, ~9 of American Express's 49 — every Oracle
+  board here was silently losing most of its Indian roles.
+- **The `LOCATIONS` facet** is exact (TI: 133), but some sites cap it at the ten busiest places, and
+  Dell's ten do not include India.
+- **The `location` finder parameter** is exact for a correctly cased country, but unmatched text —
+  `india` in lower case, any city — silently applies no filter at all and returns the whole site.
 
 Two quirks: the search envelope nests one level deeper than the others (`items[0].requisitionList`,
 with the count at `items[0].TotalJobsCount`), and the detail finder takes **quoted** values
 (`ById;Id="69848",siteNumber="BNY-Careers"`) where the search finder does not. As with Lever,
 SmartRecruiters and Workday, no update timestamp is published — `ExternalPostedStartDate` does not move
 on an edit — so the checksum hashes the body.
+
+#### Rippling and iCIMS Jibe
+
+Both were added for employers the other platforms could not reach: ThoughtSpot and Rippling itself on
+**Rippling ATS**, Docusign and Booking.com on **iCIMS**, whose customers' branded careers sites run on
+iCIMS's Jibe front end.
+
+**Rippling** (`rippling`) is a bare slug read off `ats.rippling.com/<slug>/jobs`, probed like Lever:
+`GET .../ats/v1/board/<slug>/jobs` answers 404 for no board. It pays **per posting** — the listing has
+no description — so it applies the title and location hint before each detail call, as SmartRecruiters
+does. **The listing repeats a job once per location** (Rippling's own board: 651 rows for 331 jobs),
+so rows are grouped by `uuid` first: one item and one detail call per job, and a job passes the hint
+when *any* of its locations does. `createdOn` does not move on an edit.
+
+**Jibe** (`jibe`) is addressed by the careers **host** (`careers.docusign.com`), or any URL on it.
+`JibeSite.parse` accepts only a dotted host or a URL with a scheme — a bare name is a miss without a
+network call, and a schemeless `host/path` is left to Workday and Oracle. `GET https://<host>/api/jobs`
+returns the whole posting, description included, 100 a page, so it costs one request per hundred and
+ignores the hint. Two quirks: dates are written `+0000`, which neither ISO parser accepts, so
+`JibePlatform.instant` inserts the colon; and the remote marker lives in `location_name`
+(`US-WA-Remote (SEA Area)`) while `full_location` drops it, so both feed `isRemote`. The posting link is
+`https://<host>/jobs/<slug>`, which every site redirects to its own job page whatever path prefix it
+uses; `apply_url` is iCIMS's login-gated apply form.
+
+Avature (Delta, Bloomberg) was looked at in the same pass and not built: tenants expose an RSS feed with
+only title, link and date, so details would mean scraping HTML, and Delta's tenant answers every request
+— feed and sitemap included — with a bot-protection 202.
+
+#### Indian ATSs and Eightfold: AInterviews, Keka, Zwayam, Eightfold
+
+Added from careers links collected for Lenskart, WebEngage, Cultfit and Netflix / Millennium, then PayPal,
+Qualcomm and Morgan Stanley. Each was
+reverse-read from what its careers page loads, so none is a documented API — they are the same JSON the
+public page fetches, unauthenticated, and each was verified from Java's `HttpClient` (the connector's
+own client), not just a browser.
+
+- **AInterviews** (`ainterviews`) — bare slug from `ainterviews.com/job_board/<slug>/` (Lenskart is
+  `lenskart_ho`). `GET /api/job_board/<slug>/jobs/` returns every job with its description; 404 for no
+  board. One request; probed from bare names like Lever.
+- **Keka** (`keka`) — the `<tenant>.keka.com` host, which is often not the company name (WebEngage is
+  `webklipper`). The job API is keyed by a board GUID that only the careers page states, in the path of
+  its own assets (`/ats/documents/<guid>/careerportal/...`), so a poll is two requests: the page, then
+  `/careers/api/embedjobs/default/active/<guid>`, which carries every description. Locations are filed as
+  `city, state, countryName` so a filter on either the city or the country matches.
+- **Zwayam** (`zwayam`) — the company's careers domain (`careers.cult.fit`), shared shape with Jibe via
+  `CareersHost`. `POST public.zwayam.com/jobs/search` with form fields `domain` and a `filterCri` JSON
+  pages ten hits at a time with no description; an unknown domain answers 200 with `data: null`. Each
+  kept hit costs `POST /jobs-service/v1/jobs/careersite` for `role` + `longDescription`, so the hint runs
+  first, and one `careersite-configurations` call per poll supplies the folder job links live under. The
+  host sits behind Akamai, which kills curl's HTTP/2 stream but accepts Java's client.
+- **Eightfold** (`eightfold`) — a `host/domain` pair (`explore.jobs.netflix.net/netflix.com`) or a pasted
+  careers URL, which always carries `domain=`. **A tenant answers exactly one of two APIs**, so every
+  poll asks PCSX first and falls back:
+  - `GET /api/pcsx/search?domain=&location=&start=` — PayPal, Qualcomm, Morgan Stanley. `location` is
+    matched server-side and case-insensitively, so the location terms go out as one query per term,
+    unioned by id, as with Oracle. Checked against a full walk of Morgan Stanley's 1,347 positions:
+    `bengaluru` + `bangalore` and `mumbai` returned exactly the positions a local match finds, and
+    `India` returned 118 where a substring match found 125 — the 7 were Indianapolis. Detail is
+    `GET /api/pcsx/position_details`. A v2 tenant answers 403 "PCSX is not enabled".
+  - `GET /api/apply/v2/jobs?domain=&start=` — Netflix, Millennium. No server-side location, so the whole
+    listing is walked and filtered locally. Detail is `GET /api/apply/v2/jobs/<id>`. A PCSX tenant
+    answers it 200 with no `count`.
+
+  Both page **ten positions at a time whatever is asked for**, and both need a detail call per position
+  kept, at ~1.2s a page and ~0.6s a detail, sequential. The whole board is one grab, which must finish
+  inside the 900s lease: Morgan Stanley for six Indian cities is ~140s, Qualcomm for India ~7 minutes,
+  and **Qualcomm with no locations (2,054 positions) ~25 minutes — it can never finish, so it needs
+  locations, and a title filter helps.** Eightfold also answers **429 "Please try again later", with no
+  Retry-After**, to a tenant that has been walked repeatedly; 200 sequential requests in 200s did not
+  trip it, so it is volume over a longer window, not burst rate. A 429 defers that company's cursor —
+  see the note on a board's own 429 under rate limits. With no `Retry-After` that is the 60 s default,
+  shorter than Eightfold's window, so a tenant that stays throttled spends deferrals; past
+  `app.ratelimit.max-deferrals` (20) it parks `FAILED`.
+
+**Darwinbox** (Zepto) was examined in the same pass and is not reachable: `candidateapi/job/alljobs`
+answers the browser but returns a Cloudflare 403 to any non-browser client, Java's included.
+
+#### Kula and Freshteam
+
+Added in the 2026-10-04 discovery pass, each for a cluster of Indian startups (most found through Peak XV's
+portfolio job board, below).
+
+- **Kula** (`kula`) — bare account slug from `careers.kula.ai/<slug>` (Multiplier is `usemultiplier`).
+  `GET careers.kula.ai/api/internal/ats_job_posts?accountName=<slug>&page=N&items=99` is what the careers
+  page calls: posts with `ats_job.job_description`, `offices[].location`, `workplace` and a nullable
+  `end_at` (which becomes `expiresAt`), paged by `meta.pages`; 404 `err_account_not_found` for no account.
+  Probed from bare names like Lever. Posts not `listed`, or `kind: internal`, are skipped.
+- **Freshteam** (`freshteam`) — the `<sub>.freshteam.com` host (or any URL on it).
+  `GET /hire/widgets/jobs.json` returns every job with its description in one request, plus `branches`
+  and `job_roles` that jobs cite by id; the branch becomes the location and the role the team. An
+  unknown subdomain answers 200 with a page rather than JSON, which reads as no board.
+
+#### TurboHire
+
+`turbohire` — the `<account>.turbohire.co` host, a URL on it, or the bare account. The account is not
+always the company: Ola is `olacareers`, Setu sits under `pinelabsgroup`, and Cleartrip posts under
+`flipkart`. Every call is the careers page's own, against `thapi-stage0.azurewebsites.net/api` (one of
+several shards that each serve every account; `app.ingestion.turbohire.base-url`):
+
+1. `GET /token/noauth` — an anonymous bearer token, about an hour long. **It answers only with a
+   `Referer` of the account's own page**; without one it returns `"Invalid request."`.
+2. `GET /publicorganizations?accountName=<account>` — `OrgID`; 404 for no account.
+3. `POST /careerpagev2/filteredjobs?orgId=<OrgID>&pageType=0` with `{}` — the whole public page in one
+   response, each job with a 500-character teaser. **`pageType` must stay 0.** Types 1 and 2 are the
+   internal-job and referral lists; they answer the same anonymous token (Flipkart's type 1 held 7,589
+   postings against 8 public ones) but are not public postings, and are never requested.
+4. `GET /publicjobs/<JobId>?fieldVisibility=CareerPage` — `JobDescriptionV2`, responsibilities and the
+   company blurb. One per job kept, after the title and location hint.
+
+The list names the recruiter who posted each job (`CreatedByName`, `CreatedByEmail`); nothing from those
+fields is copied into an item. `ClientName` is masked unless `ShowClientName` is true, so it names the
+company only then; otherwise the label does. `ExpiryDates.CAREERPAGE` becomes `expiresAt`.
+
+**Phenom is not a platform here, because it is a front end.** GE HealthCare, GE Aerospace, Fiserv, FIS
+and Franklin Templeton run Phenom career sites whose `POST /widgets` search answers anonymously, but each
+job's `applyUrl` is a Workday posting — `gehc/GEHC_ExternalSite/wd5`, `fis/SearchJobs/wd5` — so they are
+catalogued by their Workday triple. Franklin Templeton's triple (`franklintempleton/Primary-External-1/wd5`)
+lists 0 jobs through Workday's public API, so it is reachable only through Phenom and is deferred.
+
+**Consider** (the job board behind VC portfolio sites such as `careers.peakxv.com`) is a discovery
+source, not a platform: `POST /api-boards/search-jobs` needs the page's session cookie and its
+`csrfToken`, and answers jobs with the company and a link to the company's own ATS but no description.
+Paging Peak XV's Indian jobs is how most of the 2026-10-04 additions were found.
 
 
 ### Filtering what gets kept (`BoardFilter`)
@@ -532,7 +697,7 @@ from 896 detail requests a poll to 69 — which a location filter often cannot, 
 may say only `"5 Locations"`.
 
 **Applied in two places, from one object.** `BoardPlatform.fetch` takes the filter as a *hint*: the
-per-posting platforms (SmartRecruiters, Oracle HCM) test `matchesTitle` on the listing before paying
+per-posting platforms (SmartRecruiters, Rippling, Zwayam, Eightfold, TurboHire, Oracle HCM) test `matchesTitle` on the listing before paying
 for a detail call, and Workday and Oracle additionally send the place terms as a server-side query.
 `JobBoardsConnector.grab` then re-applies the whole filter authoritatively, because a platform is free
 to ignore the hint. Both sides call the same `BoardFilter` methods; two copies of the rules would drift,
@@ -545,8 +710,13 @@ Three rules worth knowing:
 - **A missing value keeps the posting.** No location, no posted date — any doubt runs it, matching
   `IngestionJob.connectionUnusable`. Boards leave both blank often enough that the alternative loses
   real roles on the strength of an absent field. A *title* is always present, so title terms are exact.
-- **`includeRemote` is an OR with the place terms**, not a filter of its own: a stated-remote role
-  satisfies `locations` however it is filed, but still has to pass the title and age tests.
+- **`includeRemote` admits a remote role that names no place**, not a remote role filed anywhere: a
+  stated-remote posting whose location, with `remote` / `anywhere` / `worldwide` / `global` stripped, is
+  empty (`Remote`, `Remote (Anywhere)`) satisfies `locations`; one that names a place (`Remote - US`,
+  `Czech Republic`) still has to match the place terms, so `Remote - Bengaluru` passes an India city list
+  and `Remote - San Jose` does not. A region such as `APAC` is a place — add it to `locations` to keep
+  those. The location field is the only signal read: a remote role with a blank location whose
+  description says *US only* is still kept. Either way the title and age tests still apply.
 
 The country name alone is usually not enough for `locations` — most boards file a role as `"Bengaluru"`
 with no country, so a term list should name cities. And a narrow include list has a real recall cost: on

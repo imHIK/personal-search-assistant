@@ -78,4 +78,11 @@ class AshbyPlatformTest {
     void publishedAtIsCarriedAsTheItemTimestamp() {
         Assertions.assertEquals(Instant.parse("2026-08-01T00:00:00Z"), grab().get(0).modifiedAt());
     }
+
+    @Test
+    void anEmptyBoardIsAMissSoItCannotShadowALiveBoardElsewhere() {
+        AshbyPlatform platform = new AshbyPlatform(new FakeAshbyApi().withBoard("dormant", "{\"jobs\": []}"));
+
+        Assertions.assertTrue(platform.countPostings("dormant").isEmpty());
+    }
 }

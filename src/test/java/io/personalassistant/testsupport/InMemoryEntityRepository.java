@@ -142,11 +142,11 @@ public class InMemoryEntityRepository implements EntityRepository {
 
     @Override
     public boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
-                              int retryCount, Instant nextAttemptAt) {
+                              int retryCount, Instant nextAttemptAt, EnrichmentOutcome enrichment) {
         boolean stillFlagged = restingStatus != EntityStatus.FAILED;
-        return fenced(id, owner, e -> rebuild(e, restingStatus, stillFlagged && e.needsReindex(),
+        return fenced(id, owner, e -> withEnrichment(rebuild(e, restingStatus, stillFlagged && e.needsReindex(),
                 new Entity.IndexInfo(e.index().chunkCount(), e.index().embeddingModel(), e.index().indexedAt(), error),
-                null, new Entity.Retry(retryCount, nextAttemptAt)));
+                null, new Entity.Retry(retryCount, nextAttemptAt)), enrichment));
     }
 
     @Override

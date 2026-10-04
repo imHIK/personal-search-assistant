@@ -11,6 +11,8 @@ public interface RateLimiter {
     /**
      * Until {@code until}, every call on {@code key} is over its limit, including calls with no configured
      * policy.
+     *
+     * @return the instant actually applied, after any clamping; {@code until} when there is no key
      */
-    void penalize(RateLimitKey key, Instant until);
+    Instant penalize(RateLimitKey key, Instant until);
 }

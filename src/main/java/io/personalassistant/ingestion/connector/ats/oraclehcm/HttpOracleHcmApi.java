@@ -34,16 +34,27 @@ public class HttpOracleHcmApi implements OracleHcmApi {
      * from already-encoded parts.
      */
     @Override
-    public JsonNode searchRequisitions(OracleHcmSite site, String keyword, int limit, int offset) {
+    public JsonNode searchRequisitions(OracleHcmSite site, String keyword, String locationId, int limit,
+                                       int offset) {
         StringBuilder finder = new StringBuilder("findReqs;siteNumber=").append(enc(site.site()));
         if (keyword != null && !keyword.isBlank()) {
             finder.append(",keyword=").append(enc(keyword));
+        }
+        if (locationId != null && !locationId.isBlank()) {
+            finder.append(",locationId=").append(enc(locationId));
         }
         finder.append(",limit=").append(limit).append(",offset=").append(offset)
                 .append(",sortBy=POSTING_DATES_DESC");
         String url = site.apiRoot() + "/recruitingCEJobRequisitions?onlyData=true"
                 + "&expand=requisitionList.secondaryLocations,flexFieldsFacet.values"
                 + "&finder=" + finder;
+        return http.getJson(url, timeoutSeconds, rateLimit());
+    }
+
+    @Override
+    public JsonNode locationSuggestions(OracleHcmSite site, String term) {
+        String url = site.apiRoot() + "/recruitingCESearchAutoSuggestions?onlyData=true&limit=20"
+                + "&finder=findByLoc;string=" + enc(term);
         return http.getJson(url, timeoutSeconds, rateLimit());
     }
 

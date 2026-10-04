@@ -94,4 +94,10 @@ class GreenhousePlatformTest {
         Assertions.assertNull(grab().get(0).expiresAt());
     }
 
+    @Test
+    void anEmptyBoardIsAMissSoItCannotShadowALiveBoardElsewhere() {
+        GreenhousePlatform platform = new GreenhousePlatform(new FakeGreenhouseApi().withBoard("dormant", "{\"jobs\": []}"));
+
+        Assertions.assertTrue(platform.countPostings("dormant").isEmpty());
+    }
 }
