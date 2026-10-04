@@ -13,10 +13,7 @@ export const knowledgeApi = {
 
   get: (id: string) => http<Knowledge>(`/api/knowledge/${encodeURIComponent(id)}`),
 
-  /**
-   * Note: this resolves with **200 even when activation failed** — the returned knowledge then
-   * carries `status: 'ERROR'` and a `lastError`. Callers must check `status`, not just the promise.
-   */
+  /** Resolves 200 even when activation failed: check the returned `status` for 'ERROR'. */
   create: (body: CreateKnowledgeBody) =>
     http<Knowledge>('/api/knowledge', { method: 'POST', body }),
 
@@ -32,13 +29,26 @@ export const knowledgeApi = {
   remove: (id: string) =>
     http<null>(`/api/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  /** `status` is a comma-separated set; `q` matches the title or the external id. */
   entities: (
     id: string,
-    params: { status?: EntityStatus | null; limit?: number; offset?: number } = {},
+    params: {
+      status?: EntityStatus[] | null
+      q?: string | null
+      iterableId?: string | null
+      limit?: number
+      offset?: number
+    } = {},
   ) =>
     http<EntityPage>(
       `/api/knowledge/${encodeURIComponent(id)}/entities` +
-        query({ status: params.status, limit: params.limit, offset: params.offset }),
+        query({
+          status: params.status?.length ? params.status.join(',') : null,
+          q: params.q,
+          iterableId: params.iterableId,
+          limit: params.limit,
+          offset: params.offset,
+        }),
     ),
 
   cursors: (id: string) =>

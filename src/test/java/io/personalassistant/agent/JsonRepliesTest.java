@@ -5,10 +5,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * {@code response_format} is a request, not a contract, so these cover the shapes a model actually
- * returns when it half-honours it — and the one case that must stay a failure.
- */
 class JsonRepliesTest {
 
     @Test
@@ -42,7 +38,6 @@ class JsonRepliesTest {
 
     @Test
     void bracesInsideStringsDoNotEndTheObjectEarly() {
-        // A reason field quoting the posting is exactly how this breaks in practice.
         JsonNode node = JsonReplies.object("{\"reason\": \"uses {curly} braces\", \"score\": 5}")
                 .orElseThrow();
 
@@ -67,7 +62,6 @@ class JsonRepliesTest {
 
     @Test
     void returnsEmptyRatherThanInventingAnObject() {
-        // The caller reports "unscored"; substituting a default would look like a real result.
         Assertions.assertTrue(JsonReplies.object("I am unable to help with that.").isEmpty());
         Assertions.assertTrue(JsonReplies.object("{\"unterminated\": ").isEmpty());
         Assertions.assertTrue(JsonReplies.object("[1, 2, 3]").isEmpty(), "a bare array is not an object");

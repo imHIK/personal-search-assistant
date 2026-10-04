@@ -7,11 +7,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Discovers all {@link OAuthProvider} beans via CDI and indexes them both ways — by id for the API
- * path segment, by connection type for the token path. Adding a provider = adding a bean; no edits
- * here. Mirrors {@code CdiConnectorRegistry}.
- */
 @ApplicationScoped
 public class CdiOAuthProviderRegistry implements OAuthProviderRegistry {
 
@@ -23,7 +18,7 @@ public class CdiOAuthProviderRegistry implements OAuthProviderRegistry {
         for (OAuthProvider provider : providers) {
             OAuthProvider clash = byId.put(provider.id(), provider);
             if (clash != null) {
-                // Two providers answering the same URL segment would make the routing arbitrary.
+                // Two providers on one URL segment would make routing arbitrary.
                 throw new IllegalStateException("Duplicate OAuth provider id " + provider.id());
             }
             for (String type : provider.supports()) {

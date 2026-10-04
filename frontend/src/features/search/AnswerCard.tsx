@@ -5,18 +5,6 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { labels } from '@/config/labels'
 import { displayName } from '@/lib/utils'
 
-/**
- * The grounded answer.
- *
- * The backend returns a plain string — there is no structured citation object and no HTML. It is
- * prompted to use a fixed Markdown subset (headings, bold, lists, tables) and to cite sources as `[n]`,
- * grouping several into one marker as `[1,3]`. Both are handled by `<Markdown>`: the Markdown so a table
- * of source data renders as a table instead of a wall of pipes, and the markers so each citation becomes
- * a button that scrolls to the result it refers to — the difference between a citation a user can verify
- * and one they have to take on faith.
- *
- * See `lib/answerMarkdown.ts` for why the subset is parsed by hand rather than with a Markdown library.
- */
 export function AnswerCard({
   answer,
   hits,

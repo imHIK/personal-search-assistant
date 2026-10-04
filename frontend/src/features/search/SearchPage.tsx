@@ -1,8 +1,8 @@
-import { Info, Search as SearchIcon, SearchX, Sparkles } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Info, Search as SearchIcon, SearchX, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { SearchBody, SearchMode } from '@/api/types'
-import { Technical } from '@/components/TechnicalDetails'
+import { Technical, TechnicalInline } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Input'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
@@ -10,75 +10,76 @@ import { SegmentedControl, Toggle } from '@/components/ui/Toggle'
 import {
   DEFAULT_SEARCH_MODE,
   DEFAULT_TOP_K,
+  MATCHES_PER_RESULT_OPTIONS,
   TOP_K_OPTIONS,
   searchModes,
 } from '@/config/constants'
 import { labels } from '@/config/labels'
-import { buildFilters, filtersFor } from '@/config/searchFilters'
+import { buildFilters, filtersFor, searchFilters } from '@/config/searchFilters'
 import { useKnowledgeList } from '@/hooks/queries'
 import { useCitationJump } from '@/hooks/useCitationJump'
 import { formatSeconds } from '@/lib/utils'
 import { AnswerCard } from './AnswerCard'
 import { ResultCard } from './ResultCard'
 import { SearchFilters } from './SearchFilters'
+import { rememberSearch } from './lastSearch'
 import { useSearch } from './useSearch'
 
-/**
- * The landing screen. All state lives in the URL, so a search is shareable and the back button
- * works the way a user expects.
- */
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const { data: sources } = useKnowledgeList()
-  const search = useSearch()
-  // Ranks only mean anything within one result set, so the highlight is cleared whenever a new
-  // search runs.
   const { citedRank, jumpTo, register, clear: clearCitation } = useCitationJump()
 
   const urlQuery = params.get('q') ?? ''
   const mode = (params.get('mode') as SearchMode | null) ?? DEFAULT_SEARCH_MODE
   const topK = Number(params.get('topK')) || DEFAULT_TOP_K
+  // Absent means "the server's default"; 0 is a real choice (every match), so it cannot use `||`.
+  const matchesParam = params.get('matches')
+  const matches = matchesParam !== null && Number.isInteger(Number(matchesParam)) ? Number(matchesParam) : null
   const scope = params.get('scope') ?? ''
-  // Opt-out, not opt-in: the summary is the default reading of a result set, so a bare `?q=` URL
-  // produces one and only an explicit `answer=0` suppresses it.
-  const wantsAnswer = params.get('answer') !== '0'
-  const groupDuplicates = params.get('group') === '1'
+  // Opt-in: every answer is an LLM call.
+  const wantsAnswer = params.get('answer') === '1'
+  const groupDuplicates = params.get('group') !== '0'
 
-  // Filters are offered per source, so they follow the scope rather than the query. A scope of
-  // "everything" has no single source type and therefore offers only the universal specs.
-  const scopedSource = (sources ?? []).find((source) => source.id === scope)
+  const activeSources = (sources ?? []).filter((source) => source.status !== 'DELETED')
+  const scopedSource = activeSources.find((source) => source.id === scope)
   const filterSpecs = filtersFor(scopedSource?.connectorDetails.type ?? null)
   const filterValues = Object.fromEntries(
     filterSpecs.map((spec) => [spec.id, params.get(spec.id) ?? '']),
   )
-  // Serialised so the effect below re-runs when a filter changes without depending on a fresh
-  // object identity every render.
-  const filterKey = JSON.stringify(filterValues)
+  const activeFilterCount = filterSpecs.filter((spec) => filterValues[spec.id]).length
 
   const [draft, setDraft] = useState(urlQuery)
   useEffect(() => setDraft(urlQuery), [urlQuery])
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
-  // Re-run whenever the URL changes, so back/forward replays the search rather than showing a
-  // stale result set.
-  const runRef = useRef(search.mutate)
-  runRef.current = search.mutate
-  useEffect(() => {
-    if (!urlQuery.trim()) return
-    const filters = buildFilters(filterSpecs, JSON.parse(filterKey) as Record<string, string>)
-    const body: SearchBody = {
-      query: urlQuery,
-      mode,
-      topK,
-      answer: wantsAnswer,
-      knowledgeIds: scope ? [scope] : [],
-      ...(Object.keys(filters).length > 0 ? { filters } : {}),
-      ...(groupDuplicates ? { collapseDuplicates: true } : {}),
-    }
-    clearCitation()
-    runRef.current(body)
-    // filterSpecs is derived from scope, which is already a dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlQuery, mode, topK, wantsAnswer, scope, filterKey, groupDuplicates])
+  const hasSearch = urlQuery.trim() !== ''
+  // A scoped search waits for the source list, since the source type decides its filters.
+  const ready = !scope || sources !== undefined
+
+  const filters = buildFilters(filterSpecs, filterValues)
+  const body: SearchBody | null =
+    hasSearch && ready
+      ? {
+          query: urlQuery,
+          mode,
+          topK,
+          answer: wantsAnswer,
+          knowledgeIds: scope ? [scope] : [],
+          ...(Object.keys(filters).length > 0 ? { filters } : {}),
+          ...(groupDuplicates ? { collapseDuplicates: true } : {}),
+          ...(matches !== null ? { maxChunksPerEntity: matches } : {}),
+        }
+      : null
+  const search = useSearch(body)
+
+  const bodyKey = JSON.stringify(body)
+  // Ranks only mean anything within one result set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => clearCitation(), [bodyKey])
+
+  const queryString = params.toString()
+  useEffect(() => rememberSearch(hasSearch ? queryString : ''), [hasSearch, queryString])
 
   const update = (next: Record<string, string | null>) => {
     const merged = new URLSearchParams(params)
@@ -91,11 +92,15 @@ export function SearchPage() {
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    update({ q: draft.trim() || null })
+    const next = draft.trim()
+    if (next !== '' && next === urlQuery.trim()) {
+      void search.refetch()
+    } else {
+      update({ q: next || null })
+    }
   }
 
-  const result = search.data
-  const activeSources = (sources ?? []).filter((source) => source.status !== 'DELETED')
+  const result = search.data?.result
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -118,7 +123,7 @@ export function SearchPage() {
             variant="primary"
             size="sm"
             className="absolute right-2 top-1/2 -translate-y-1/2"
-            loading={search.isPending}
+            loading={search.isFetching}
           >
             {labels.search.submit}
           </Button>
@@ -134,7 +139,14 @@ export function SearchPage() {
 
           <Select
             value={scope}
-            onChange={(event) => update({ scope: event.target.value || null })}
+            onChange={(event) =>
+              update({
+                scope: event.target.value || null,
+                ...Object.fromEntries(
+                  searchFilters.filter((spec) => spec.sourceTypes).map((spec) => [spec.id, null]),
+                ),
+              })
+            }
             aria-label={labels.search.scope}
             className="h-8 w-auto min-w-40 text-[13px]"
           >
@@ -161,36 +173,66 @@ export function SearchPage() {
             </Select>
           </Technical>
 
-          {/* The two toggles sit together rather than one being pinned right: split across the
-              row they wrap onto separate lines at this container width. */}
+          <Technical>
+            <Select
+              value={matches === null ? '' : String(matches)}
+              onChange={(event) => update({ matches: event.target.value === '' ? null : event.target.value })}
+              aria-label={labels.search.matchesPerResult}
+              title={labels.search.matchesPerResult}
+              className="h-8 w-auto text-[13px]"
+            >
+              <option value="">{labels.search.matchesDefault}</option>
+              {MATCHES_PER_RESULT_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {labels.search.matchesOption(option)}
+                </option>
+              ))}
+            </Select>
+          </Technical>
+
+          {filterSpecs.length > 0 && (
+            <Button
+              type="button"
+              variant={activeFilterCount > 0 ? 'secondary' : 'ghost'}
+              size="sm"
+              aria-expanded={filtersOpen}
+              onClick={() => setFiltersOpen((open) => !open)}
+            >
+              <SlidersHorizontal />
+              {activeFilterCount > 0 ? labels.search.filtersActive(activeFilterCount) : labels.search.filters}
+            </Button>
+          )}
+
           <div className="ml-auto flex items-center gap-4">
             <Toggle
               checked={groupDuplicates}
-              onCheckedChange={(checked) => update({ group: checked ? '1' : null })}
+              onCheckedChange={(checked) => update({ group: checked ? null : '0' })}
               label={labels.search.groupDuplicates}
             />
             <Toggle
               checked={wantsAnswer}
-              onCheckedChange={(checked) => update({ answer: checked ? null : '0' })}
+              onCheckedChange={(checked) => update({ answer: checked ? '1' : null })}
               label={labels.search.answerToggle}
             />
           </div>
         </div>
 
-        <SearchFilters
-          specs={filterSpecs}
-          values={filterValues}
-          onChange={(id, value) => update({ [id]: value })}
-          onClear={() => update(Object.fromEntries(filterSpecs.map((spec) => [spec.id, null])))}
-        />
+        {filtersOpen && filterSpecs.length > 0 && (
+          <SearchFilters
+            specs={filterSpecs}
+            values={filterValues}
+            onChange={(id, value) => update({ [id]: value })}
+            onClear={() => update(Object.fromEntries(filterSpecs.map((spec) => [spec.id, null])))}
+          />
+        )}
       </form>
 
       <div className="mt-7">
-        {search.isPending ? (
+        {search.isFetching ? (
           <SkeletonList rows={4} />
         ) : search.error ? (
-          <ErrorState error={search.error} onRetry={() => update({ q: urlQuery })} />
-        ) : !urlQuery.trim() ? (
+          <ErrorState error={search.error} onRetry={() => void search.refetch()} />
+        ) : !hasSearch ? (
           <EmptyState
             icon={Sparkles}
             title={labels.search.idle}
@@ -200,7 +242,20 @@ export function SearchPage() {
           <EmptyState icon={SearchX} title={labels.search.empty} description={labels.search.emptyHint} />
         ) : (
           <div className="space-y-4">
-            {search.answerUnavailable && (
+            {result.vectorError && (
+              <div
+                role="status"
+                className="flex gap-2.5 rounded-xl border border-[var(--tone-wait)]/35 bg-[var(--tone-wait-bg)] px-4 py-3"
+              >
+                <Info className="mt-0.5 size-4 shrink-0 text-[var(--tone-wait)]" aria-hidden />
+                <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                  {labels.search.vectorUnavailable}
+                  <TechnicalInline> {result.vectorError}</TechnicalInline>
+                </p>
+              </div>
+            )}
+
+            {search.data?.answerUnavailable && (
               <div
                 role="status"
                 className="flex gap-2.5 rounded-xl border border-[var(--tone-wait)]/35 bg-[var(--tone-wait-bg)] px-4 py-3"

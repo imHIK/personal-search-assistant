@@ -1,49 +1,54 @@
 import { Briefcase, Folder, HardDrive, Hash, Mail, NotebookPen } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SourceType } from '@/api/types'
-import { knownCompanies } from './companies'
+import { knownCompanies, withCompanyLabels } from './companies'
 import { knownLocations } from './locations'
 import { roleExcludeTerms, roleIncludeTerms } from './roleTerms'
+import { seniorityOptions } from './searchFilters'
 import type { FieldSpec } from './fields'
 
-/**
- * One descriptor per connector. This is the frontend's mirror of the backend's CDI discovery:
- * over there a connector is "add an @ApplicationScoped bean", over here it is "append an object
- * to this array". The wizard, the type filters, the account forms, the settings form and the
- * empty states all render from these — no component branches on a SourceType anywhere.
- *
- * To add a connector once the backend supports it: add the object, flip `implemented` to true.
- */
+export interface ResultFieldSpec {
+  key: string
+  /**
+   * `flag` shows `label` when true; `option` shows the matching option's label and hides anything
+   * unknown; `date` shows `label` plus a relative time.
+   */
+  kind: 'text' | 'flag' | 'option' | 'date'
+  label?: string
+  options?: { value: string; label: string }[]
+}
+
 export interface ConnectorDescriptor {
   id: SourceType
-  /** What the user picks in the wizard. */
   label: string
-  /** One sentence answering "what will this let me search?". */
   description: string
   icon: LucideIcon
   /** False for SourceType constants with no connector behind them yet. */
   implemented: boolean
-  /** Whether an Account must be selected before this source can be created. */
   requiresConnection: boolean
-  /**
-   * Offer the company lookup helper on this connector's form. A descriptor flag rather than a check
-   * on the id, so no component branches on a SourceType.
-   */
   companyResolver?: boolean
-  /** Written into `Knowledge.inputs`. */
   inputFields: FieldSpec[]
-  /** Written into `Connection.auth` — rendered masked. */
-  authFields: FieldSpec[]
-  /** Written into `Connection.config`. */
-  configFields: FieldSpec[]
-  /** Rendered in the "how do I get these?" panel on the account form. */
-  credentialHelp?: { title: string; steps: string[]; scopes?: string[] }
   /**
-   * Connect this account through the backend's OAuth flow instead of pasting a token by hand. The
-   * value is the provider's server-side id (`OAuthProvider.id()`), used as a path segment — so a new
-   * OAuth application is this one field plus one bean, and no component changes.
+   * Adds inputs the form does not render, just before a create or edit is sent. `previous` is the
+   * stored `inputs` on an edit.
    */
+  deriveInputs?: (
+    inputs: Record<string, unknown>,
+    previous?: Record<string, unknown>,
+  ) => Record<string, unknown>
+  /** Rendered masked. */
+  authFields: FieldSpec[]
+  configFields: FieldSpec[]
+  credentialHelp?: { title: string; steps: string[]; scopes?: string[] }
+  /** The provider's server-side id. */
   oauth?: { provider: string }
+  resultFields?: ResultFieldSpec[]
+  groupNoun?: { one: string; many: string }
+  /**
+   * Mirrors the connector's `defaultRetention()`, so an empty retention field can say what it
+   * inherits.
+   */
+  defaultRetention?: string
 }
 
 export const googleAuthFields: FieldSpec[] = [
@@ -101,6 +106,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: Folder,
     implemented: true,
     requiresConnection: false,
+    groupNoun: { one: 'Folder', many: 'Folders' },
     inputFields: [
       {
         name: 'rootPath',
@@ -117,6 +123,7 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: [],
     configFields: [],
+    resultFields: [{ key: 'modifiedAt', kind: 'date', label: 'Modified' }],
   },
   {
     id: 'GMAIL',
@@ -125,6 +132,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: Mail,
     implemented: true,
     requiresConnection: true,
+    groupNoun: { one: 'Label', many: 'Labels' },
     inputFields: [
       {
         name: 'labelIds',
@@ -149,6 +157,10 @@ export const connectors: ConnectorDescriptor[] = [
       steps: googleHelpSteps,
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
     },
+    resultFields: [
+      { key: 'from', kind: 'text' },
+      { key: 'modifiedAt', kind: 'date', label: 'Received' },
+    ],
   },
   {
     id: 'GOOGLE_DRIVE',
@@ -157,6 +169,7 @@ export const connectors: ConnectorDescriptor[] = [
     icon: HardDrive,
     implemented: true,
     requiresConnection: true,
+    groupNoun: { one: 'Folder', many: 'Folders' },
     inputFields: [
       {
         name: 'folderIds',
@@ -174,6 +187,7 @@ export const connectors: ConnectorDescriptor[] = [
       steps: googleHelpSteps,
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],
     },
+    resultFields: [{ key: 'modifiedAt', kind: 'date', label: 'Modified' }],
   },
   {
     id: 'JOB_BOARDS',
@@ -183,17 +197,19 @@ export const connectors: ConnectorDescriptor[] = [
     implemented: true,
     requiresConnection: false,
     companyResolver: true,
+    deriveInputs: withCompanyLabels,
+    groupNoun: { one: 'Company', many: 'Companies' },
+    // Mirrors JobBoardsConnector.defaultRetention().
+    defaultRetention: '14d',
     inputFields: [
       {
         name: 'companies',
         kind: 'picklist',
         label: 'Companies',
-        hint: 'Tick the ones you want. Anything not listed can be typed in — use the name as it appears in their careers URL, prefix it to pin a platform (lever:paytm), and paste the full address for Workday (adobe/external_experienced/wd5) or Oracle HCM (eofe.fa.us2.oraclecloud.com/BNY-Careers). Check an unfamiliar name above before adding it.',
+        hint: 'Tick the ones you want. Anything not listed can be typed in — use the name as it appears in their careers URL, prefix it to pin a platform (lever:paytm), and for Workday, Oracle HCM, iCIMS, Keka, Freshteam, TurboHire, Zwayam or Eightfold paste the address of any one of their jobs. Check an unfamiliar name above before adding it.',
         placeholder: 'Or type another name — e.g. lever:paytm',
         addOwnLabel: 'Add',
         browseNoun: 'companies we have checked',
-        // Display only: `note` says which board the name resolved against, so ticking a row tells
-        // the user what they are about to read from.
         options: knownCompanies.map((company) => ({
           value: company.handle,
           label: company.label,
@@ -239,8 +255,8 @@ export const connectors: ConnectorDescriptor[] = [
       {
         name: 'includeRemote',
         kind: 'boolean',
-        label: 'Keep remote roles wherever they are filed',
-        hint: 'A role the board marks remote is kept even when its location does not match the places above. Off means a remote role listed under London is dropped by an India filter.',
+        label: 'Keep remote roles that name no place',
+        hint: 'A role the board marks remote is kept when its location names no place (just "Remote" or "Anywhere"). A remote role that names a place — "Remote - US", "Czech Republic" — still has to match the places above.',
         placeholder: 'Include remote roles',
       },
       {
@@ -255,6 +271,13 @@ export const connectors: ConnectorDescriptor[] = [
     ],
     authFields: [],
     configFields: [],
+    resultFields: [
+      { key: 'company', kind: 'text' },
+      { key: 'location', kind: 'text' },
+      { key: 'seniority', kind: 'option', options: seniorityOptions },
+      { key: 'remote', kind: 'flag', label: 'Remote' },
+      { key: 'postedAt', kind: 'date', label: 'Posted' },
+    ],
   },
   {
     id: 'SLACK',
@@ -282,10 +305,7 @@ export const connectors: ConnectorDescriptor[] = [
 
 const byId = new Map(connectors.map((c) => [c.id, c]))
 
-/**
- * Look up a descriptor. Falls back to a synthetic one so an unknown SourceType from the backend
- * renders as itself rather than crashing the page.
- */
+/** Falls back to a synthetic descriptor, so an unknown SourceType renders as itself. */
 export function connectorFor(type: SourceType | string): ConnectorDescriptor {
   return (
     byId.get(type as SourceType) ?? {
@@ -304,6 +324,5 @@ export function connectorFor(type: SourceType | string): ConnectorDescriptor {
 
 export const availableConnectors = () => connectors.filter((c) => c.implemented)
 
-/** Connectors that need an Account — drives whether the Accounts screen is relevant at all. */
 export const connectorsNeedingAccounts = () =>
   connectors.filter((c) => c.implemented && c.requiresConnection)

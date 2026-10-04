@@ -8,43 +8,21 @@ import type {
   Delivery,
   DeliveryStatus,
   EntityItem,
-  EntityStatus,
   Knowledge,
 } from '@/api/types'
 import { relativeTime } from '@/lib/utils'
 
-/**
- * Translation from the backend's internal state machines to what a user is shown.
- *
- * The domain has five status enums, two cursor directions, leases, checksums and generations.
- * A user needs none of that — they need to know whether their stuff is searchable yet, and
- * whether anything needs their attention. Everything in this file is a lookup table with a safe
- * fallback, never a `switch` with exhaustive cases: the backend can add an enum constant and the
- * worst that happens is a neutral badge showing the raw name.
- */
-
-/** The only four colours in the app. A user learns them once and they mean the same everywhere. */
 export type Tone = 'ok' | 'busy' | 'wait' | 'alert' | 'neutral'
 
 export interface Presented {
-  /** What the user reads. */
   label: string
   tone: Tone
-  /** One sentence of plain-English explanation, shown as a subtitle or tooltip. */
   hint?: string
-  /** The raw enum name, surfaced only when Technical details is on. */
   raw?: string
 }
 
 const neutral = (raw: string): Presented => ({ label: raw, tone: 'neutral', raw })
 
-// ---- Source (Knowledge) state ---------------------------------------------------------------
-
-/**
- * The single derived state shown for a source. This intentionally folds together three separate
- * backend facts — `status`, the cursor states, and the entity counters — because "is my stuff
- * searchable?" cannot be answered by any one of them alone.
- */
 export type SourceState =
   | 'setting-up'
   | 'importing'
@@ -70,10 +48,7 @@ const sourceStates: Record<SourceState, Presented> = {
   removed: { label: 'Removed', tone: 'neutral' },
 }
 
-/**
- * Derive the state to show. `cursors` is optional — the list view doesn't fetch them, so without
- * them "importing" collapses into "processing", which is the honest reading of what's known.
- */
+/** Without `cursors` (the list view has none), "importing" reads as "processing". */
 export function sourceState(knowledge: Knowledge, cursors?: CursorInfo[]): SourceState {
   const { status, stats } = knowledge
 
@@ -85,15 +60,11 @@ export function sourceState(knowledge: Knowledge, cursors?: CursorInfo[]): Sourc
 
   const pending = stats.entities - stats.indexed - stats.failed
 
-  // Throttled outranks "importing": a held stream is not making progress, and saying so is the
-  // whole point of the state — the fix, if the wait is intolerable, is the user's (raise the
-  // account's limit). Anything still running takes precedence, since that is real progress.
+  // Throttled outranks importing, since a held stream is not progressing; anything running outranks
+  // both.
   const running = cursors?.some((c) => c.status === 'IN_PROGRESS')
   if (!running && cursors?.some((c) => c.status === 'RATE_LIMITED')) return 'throttled'
 
-  // A backward cursor that hasn't EXHAUSTED means history is still being walked. That is a
-  // different, and much longer, wait than "a few items are still being indexed" — worth its own
-  // state so a big first import doesn't look stuck.
   const stillImporting = cursors?.some(
     (c) => c.direction === 'BACKWARD' && c.status !== 'EXHAUSTED' && c.status !== 'RETIRED',
   )
@@ -109,21 +80,24 @@ export function presentSource(knowledge: Knowledge, cursors?: CursorInfo[]): Pre
   return { ...sourceStates[state], raw: knowledge.status }
 }
 
-// ---- Item (Entity) state --------------------------------------------------------------------
-
-/** `DELETED` is absent on purpose: removed items are not listed rather than shown as a state. */
-export type ItemState = 'searchable' | 'processing' | 'failed'
+/**
+ * No DELETED: the listing hides tombstones. No "retrying" either: a failed-once item is queued, and
+ * the row's warning icon shows the failure.
+ */
+export type ItemState = 'queued' | 'indexing' | 'indexed' | 'failed'
 
 const itemStates: Record<ItemState, Presented> = {
-  searchable: { label: 'Searchable', tone: 'ok', hint: 'Indexed and returned in results' },
-  processing: { label: 'Processing', tone: 'busy', hint: 'Waiting to be read and indexed' },
-  failed: { label: "Couldn't process", tone: 'alert', hint: 'This item could not be read' },
+  queued: { label: 'Queued', tone: 'busy', hint: 'Waiting to be read and indexed' },
+  indexing: { label: 'Indexing', tone: 'busy', hint: 'Being read and indexed right now' },
+  indexed: { label: 'Indexed', tone: 'ok', hint: 'Indexed and returned in results' },
+  failed: { label: 'Failed', tone: 'alert', hint: 'This item could not be read' },
 }
 
 export function itemState(item: Pick<EntityItem, 'status' | 'needsReindex'>): ItemState {
   if (item.status === 'FAILED') return 'failed'
-  if (item.status === 'INDEXED') return item.needsReindex ? 'processing' : 'searchable'
-  return 'processing'
+  if (item.status === 'INDEXING') return 'indexing'
+  if (item.status === 'INDEXED') return item.needsReindex ? 'queued' : 'indexed'
+  return 'queued'
 }
 
 export function presentItem(item: Pick<EntityItem, 'status' | 'needsReindex'>): Presented {
@@ -131,44 +105,28 @@ export function presentItem(item: Pick<EntityItem, 'status' | 'needsReindex'>): 
   return { ...itemStates[state], raw: item.status ?? undefined }
 }
 
-/** Maps the UI's filter tabs onto the `status` query param the API actually accepts. */
-export const itemFilters: { id: string; label: string; status: EntityStatus | null }[] = [
-  { id: 'all', label: 'All', status: null },
-  { id: 'searchable', label: 'Searchable', status: 'INDEXED' },
-  { id: 'processing', label: 'Processing', status: 'INGESTED' },
-  { id: 'failed', label: "Couldn't process", status: 'FAILED' },
-]
-
-// ---- Sync activity (Cursor) -----------------------------------------------------------------
-
-/**
- * Cursor status in plain language. Note the words "cursor", "lease" and "position" never appear —
- * a user is being told whether a stream of content is finished, waiting, or broken.
- */
 const cursorStates: Record<CursorStatus, Presented> = {
-  EXHAUSTED: { label: 'Complete', tone: 'ok', hint: 'Everything here has been imported' },
-  IDLE: { label: 'Waiting for the next check', tone: 'wait' },
+  EXHAUSTED: { label: 'Synced', tone: 'ok', hint: 'Everything here has been imported' },
+  IDLE: { label: 'Synced', tone: 'ok', hint: 'Up to date. Waiting for the next check.' },
   AVAILABLE: { label: 'Queued', tone: 'busy', hint: 'Will be picked up shortly' },
-  IN_PROGRESS: { label: 'Importing now', tone: 'busy' },
+  IN_PROGRESS: { label: 'Syncing', tone: 'busy' },
   SUSPENDED: { label: 'Paused', tone: 'wait' },
   RATE_LIMITED: {
-    label: 'Waiting on a rate limit',
-    tone: 'wait',
+    label: 'Syncing',
+    tone: 'busy',
     hint: 'The service is only letting us read so fast. This picks up again by itself.',
   },
   RETIRED: {
-    label: 'No longer in this source',
+    label: 'Removed at source',
     tone: 'wait',
     hint: 'It disappeared at the source. What was already imported is kept.',
   },
-  FAILED: { label: 'Stopped after repeated errors', tone: 'alert' },
+  FAILED: { label: 'Failed', tone: 'alert', hint: 'Stopped after repeated errors' },
 }
 
 /**
- * Takes the cursor rather than the bare status because `RATE_LIMITED` has two readings. Nothing
- * writes the status back when a hold elapses — the backend's claim query simply stops excluding the
- * stream — so between the limit reopening and the next poll it is still `RATE_LIMITED` while
- * genuinely queued. Reading the instant is what keeps the badge honest in both directions.
+ * Takes the cursor: nothing writes RATE_LIMITED back when a hold elapses, so `nextAttemptAt`
+ * decides whether it is still held.
  */
 export function presentCursorStatus(cursor: Pick<CursorInfo, 'status' | 'nextAttemptAt'>): Presented {
   const { status, nextAttemptAt } = cursor
@@ -196,7 +154,65 @@ export function presentDirection(direction: CursorDirection): string {
   return directionLabels[direction] ?? direction
 }
 
-// ---- Account (Connection) state ---------------------------------------------------------------
+export type GroupState = 'failed' | 'syncing' | 'queued' | 'paused' | 'removed' | 'synced'
+
+const groupStates: Record<GroupState, Presented> = {
+  failed: { label: 'Failed', tone: 'alert', hint: 'Stopped after repeated errors' },
+  syncing: { label: 'Syncing', tone: 'busy', hint: 'Reading from the source now' },
+  queued: { label: 'Queued', tone: 'busy', hint: 'Will be picked up shortly' },
+  paused: { label: 'Paused', tone: 'wait', hint: 'Not checking until the source is resumed' },
+  removed: {
+    label: 'Removed at source',
+    tone: 'wait',
+    hint: 'It disappeared at the source. What was already imported is kept.',
+  },
+  synced: { label: 'Synced', tone: 'ok', hint: 'Up to date. Waiting for the next check.' },
+}
+
+function onHold(cursor: CursorInfo): boolean {
+  if (cursor.status !== 'RATE_LIMITED') return false
+  const until = cursor.nextAttemptAt ? new Date(cursor.nextAttemptAt).getTime() : null
+  return until !== null && !Number.isNaN(until) && until > Date.now()
+}
+
+/** Worst news first; "synced" only when nothing else is true of either direction. */
+export function groupState(cursors: CursorInfo[]): GroupState {
+  const has = (status: CursorStatus) => cursors.some((cursor) => cursor.status === status)
+
+  if (has('FAILED')) return 'failed'
+  if (has('IN_PROGRESS') || cursors.some(onHold)) return 'syncing'
+  if (has('AVAILABLE') || has('RATE_LIMITED')) return 'queued'
+  if (has('SUSPENDED')) return 'paused'
+  if (cursors.length > 0 && cursors.every((cursor) => cursor.status === 'RETIRED')) return 'removed'
+  return 'synced'
+}
+
+export function presentGroup(cursors: CursorInfo[]): Presented {
+  const state = groupState(cursors)
+  return { ...groupStates[state], raw: cursors.map((cursor) => cursor.status).join(' / ') }
+}
+
+export function groupAlert(cursors: CursorInfo[]): string | null {
+  const failed = cursors.find((cursor) => cursor.lastError);
+  if (failed?.lastError) return failed.lastError
+  const held = cursors.find(onHold)
+  if (held) {
+    const when = relativeTime(held.nextAttemptAt)
+    return when
+      ? `The service is only letting us read so fast. Next try ${when}.`
+      : 'The service is only letting us read so fast.'
+  }
+  return null
+}
+
+export function isImportingHistory(cursors: CursorInfo[]): boolean {
+  return cursors.some(
+    (cursor) =>
+      cursor.direction === 'BACKWARD' &&
+      cursor.status !== 'EXHAUSTED' &&
+      cursor.status !== 'RETIRED',
+  )
+}
 
 const connectionStates: Record<ConnectionStatus, Presented> = {
   ACTIVE: { label: 'Connected', tone: 'ok' },
@@ -208,13 +224,12 @@ export function presentConnection(status: ConnectionStatus): Presented {
   return connectionStates[status] ? { ...connectionStates[status], raw: status } : neutral(status)
 }
 
-// ---- Item kind --------------------------------------------------------------------------------
-
 const entityTypeLabels: Record<string, string> = {
   FILE: 'File',
   MESSAGE: 'Message',
   EMAIL: 'Email',
   PAGE: 'Page',
+  JOB_POSTING: 'Job posting',
   OTHER: 'Other',
 }
 
@@ -224,8 +239,8 @@ export function presentEntityType(type: string | null | undefined): string {
 }
 
 /**
- * A readable name for an iterable. Connectors encode structure into the id (`folder:/path`,
- * `label:INBOX`, `root`), so this unpacks the common shapes and otherwise falls back to the id.
+ * Connectors encode structure into the id (`folder:/path`, `label:INBOX`, `root`); other shapes
+ * fall back to the id.
  */
 export function presentIterableId(iterableId: string, fallback: string): string {
   if (!iterableId || iterableId === 'root' || iterableId === 'all') return fallback
@@ -237,7 +252,10 @@ export function presentIterableId(iterableId: string, fallback: string): string 
   return iterableId
 }
 
-// ---- Publishing channel + delivery state ------------------------------------------------------
+export function groupName(iterableId: string, cursors: CursorInfo[] | undefined, fallback: string): string {
+  const named = cursors?.find((cursor) => cursor.iterableId === iterableId && cursor.iterableName)
+  return named?.iterableName ?? presentIterableId(iterableId, fallback)
+}
 
 const channelStates: Record<ChannelStatus, Presented> = {
   ACTIVE: { label: 'Working', tone: 'ok' },
@@ -267,7 +285,6 @@ const deliveryStates: Record<DeliveryStatus, Presented> = {
   },
 }
 
-/** A queued delivery that has already failed is retrying, which reads differently from waiting. */
 export function presentDelivery(delivery: Pick<Delivery, 'status' | 'attempts' | 'nextAttemptAt'>): Presented {
   const { status, attempts, nextAttemptAt } = delivery
   if (status === 'PENDING' && attempts > 0) {

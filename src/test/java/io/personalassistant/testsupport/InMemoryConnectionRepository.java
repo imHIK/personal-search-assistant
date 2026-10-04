@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** Simple in-memory {@link ConnectionRepository} for unit tests (no Mongo). */
 public class InMemoryConnectionRepository implements ConnectionRepository {
 
     public final Map<String, Connection> store = new LinkedHashMap<>();

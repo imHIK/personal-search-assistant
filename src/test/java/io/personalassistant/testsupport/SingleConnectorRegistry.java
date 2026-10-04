@@ -4,7 +4,6 @@ import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.ingestion.connector.ConnectorRegistry;
 import io.personalassistant.ingestion.connector.SourceConnector;
 
-/** A {@link ConnectorRegistry} backed by a single connector, for tests. */
 public class SingleConnectorRegistry implements ConnectorRegistry {
 
     private final SourceConnector connector;

@@ -1,10 +1,5 @@
 package io.personalassistant.ingestion.connector.ats;
 
-/**
- * Failure talking to an applicant-tracking board API. Carries the HTTP status when there was one so
- * callers can distinguish "this board token does not exist" (404 during {@code verify}) from a
- * transient outage, which the ingestion retry/backoff path should simply re-attempt.
- */
 public class AtsApiException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
@@ -26,7 +21,7 @@ public class AtsApiException extends RuntimeException {
         this.status = status;
     }
 
-    /** HTTP status, or {@code 0} when the call failed before a response arrived. */
+    /** 0 when the call failed before a response arrived. */
     public int status() {
         return status;
     }

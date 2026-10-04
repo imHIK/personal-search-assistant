@@ -1,5 +1,5 @@
 import { Copy, ExternalLink } from 'lucide-react'
-import { forwardRef } from 'react'
+import { forwardRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { SearchHit } from '@/api/types'
@@ -9,38 +9,51 @@ import { Card } from '@/components/ui/Card'
 import { connectorFor } from '@/config/connectors'
 import { labels } from '@/config/labels'
 import { useKnowledgeList } from '@/hooks/queries'
+import { resultFacts } from '@/lib/resultFacts'
 import { cn, copyToClipboard, displayName, highlightSegments } from '@/lib/utils'
 
-/**
- * One result.
- *
- * The relevance bar is deliberately relative to the top hit rather than absolute: the score is a
- * raw RRF value with no calibration behind it (the reranker is a passthrough), so an absolute
- * number would imply a precision that isn't there. The raw score is available under Technical
- * details for anyone who wants it.
- */
+function rankLabel(rank: number | null): string {
+  return rank === null ? '—' : `#${rank}`
+}
+
+function Excerpt({ text, query }: { text: string; query: string }) {
+  return (
+    <>
+      {highlightSegments(text, query).map((segment, index) => (
+        <span
+          key={index}
+          className={cn(
+            segment.match && 'rounded bg-[var(--tone-wait-bg)] px-0.5 font-medium text-[var(--text)]',
+          )}
+        >
+          {segment.text}
+        </span>
+      ))}
+    </>
+  )
+}
+
 export const ResultCard = forwardRef<HTMLElement, {
   hit: SearchHit
   rank: number
   query: string
   topScore: number
-  /** Briefly set after a citation in the answer jumps here, so the arrival is visible. */
   highlighted?: boolean
 }>(function ResultCard({ hit, rank, query, topScore, highlighted }, ref) {
   const technical = useTechnicalDetails()
   const { data: sources } = useKnowledgeList()
+  const [showMatches, setShowMatches] = useState(false)
 
   const source = sources?.find((knowledge) => knowledge.id === hit.knowledgeId)
   const descriptor = source ? connectorFor(source.connectorDetails.type) : null
   const Icon = descriptor?.icon
   const name = displayName(hit)
+  const facts = resultFacts(descriptor?.resultFields, hit.metadata)
   const relative = topScore > 0 ? Math.max(6, Math.round((hit.score / topScore) * 100)) : 0
 
   return (
     <Card
       ref={ref as React.Ref<HTMLDivElement>}
-      // Focusable but not in the tab order: a citation jump moves focus here so a screen reader and
-      // the keyboard both follow the scroll, without adding a stop to every card on the page.
       id={`hit-${rank}`}
       tabIndex={-1}
       className={cn(
@@ -58,6 +71,10 @@ export const ResultCard = forwardRef<HTMLElement, {
               {name}
             </h3>
           </div>
+
+          {facts.length > 0 && (
+            <p className="text-xs text-[var(--text-muted)]">{facts.join(' · ')}</p>
+          )}
 
           {source && (
             <Link
@@ -98,17 +115,35 @@ export const ResultCard = forwardRef<HTMLElement, {
 
       {hit.snippet && (
         <p className="mt-2.5 line-clamp-3 text-sm leading-relaxed text-[var(--text-muted)]">
-          {highlightSegments(hit.snippet, query).map((segment, index) => (
-            <span
-              key={index}
-              className={cn(
-                segment.match && 'rounded bg-[var(--tone-wait-bg)] px-0.5 font-medium text-[var(--text)]',
-              )}
-            >
-              {segment.text}
-            </span>
-          ))}
+          <Excerpt text={hit.snippet} query={query} />
         </p>
+      )}
+
+      {hit.moreMatches.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowMatches((open) => !open)}
+            aria-expanded={showMatches}
+            className="text-xs text-[var(--text-subtle)] transition-colors hover:text-[var(--accent)]"
+          >
+            {showMatches ? labels.search.hideMatches : labels.search.moreMatches(hit.moreMatches.length)}
+          </button>
+          {showMatches && (
+            <ul className="mt-2 space-y-2 border-l-2 border-[var(--border)] pl-3">
+              {hit.moreMatches.map((match) =>
+                match.snippet ? (
+                  <li
+                    key={match.chunkId}
+                    className="line-clamp-3 text-sm leading-relaxed text-[var(--text-muted)]"
+                  >
+                    <Excerpt text={match.snippet} query={query} />
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          )}
+        </div>
       )}
 
       <div className="mt-3 flex items-center gap-3">
@@ -143,6 +178,17 @@ export const ResultCard = forwardRef<HTMLElement, {
             ['entityId', hit.entityId],
             ['knowledgeId', hit.knowledgeId],
             ['ordinal', String(hit.ordinal)],
+            ['lexicalRank', rankLabel(hit.ranking.lexicalRank)],
+            ['vectorRank', rankLabel(hit.ranking.vectorRank)],
+            ['retrievalScore', hit.ranking.retrievalScore.toFixed(6)],
+            ['groupedScore', hit.ranking.groupedScore.toFixed(6)],
+            ['recencyFactor', `×${hit.ranking.recencyFactor.toFixed(3)}`],
+            [
+              'matchedChunks',
+              [hit, ...hit.moreMatches]
+                .map((match) => `#${match.ordinal} (${(match === hit ? hit.ranking.retrievalScore : match.score).toFixed(4)})`)
+                .join(', '),
+            ],
             ['score', hit.score.toFixed(6)],
             ['uri', hit.uri ?? '—'],
             ['metadata', JSON.stringify(hit.metadata)],

@@ -6,7 +6,6 @@ import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Scriptable {@link LeverApi} for connector tests — no network. */
 public class FakeLeverApi implements LeverApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

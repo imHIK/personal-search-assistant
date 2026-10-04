@@ -35,7 +35,7 @@ export function OverviewTab({
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile
-          label={labels.detail.searchable}
+          label={labels.detail.indexed}
           value={formatNumber(indexed)}
           tone="ok"
           onClick={onOpenItems}
@@ -116,6 +116,7 @@ export function OverviewTab({
             ['connectorDetails.connectionId', knowledge.connectorDetails.connectionId ?? 'null'],
             ['inputs', JSON.stringify(knowledge.inputs)],
             ['config.chunking', JSON.stringify(knowledge.config.chunking)],
+            ['config.retention', JSON.stringify(knowledge.config.retention)],
             ['config.scheduleSettings', JSON.stringify(knowledge.config.scheduleSettings)],
             ['config.backfill', JSON.stringify(knowledge.config.backfill)],
             ['derived state', presentSource(knowledge, cursors).label],
@@ -137,7 +138,6 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-/** Turn the schedule settings into a sentence rather than exposing cron/interval strings. */
 function describeSchedule(knowledge: Knowledge): string {
   const { cron, interval, enabled } = knowledge.config.scheduleSettings
   if (!enabled) return labels.schedule.manual
@@ -152,7 +152,6 @@ function describeSchedule(knowledge: Knowledge): string {
   return readable[interval] ?? `Every ${interval}`
 }
 
-/** Summarise `inputs` using the connector's own field labels, not raw keys. */
 function describeInputs(knowledge: Knowledge): string {
   const descriptor = connectorFor(knowledge.connectorDetails.type)
   const parts: string[] = []

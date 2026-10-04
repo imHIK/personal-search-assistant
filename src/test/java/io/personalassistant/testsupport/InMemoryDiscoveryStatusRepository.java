@@ -12,9 +12,8 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * In-memory {@link DiscoveryStatusRepository} mirroring the Mongo adapter's fold semantics:
- * accumulate run/failure counters, and on a {@code FAILED} run keep the last good
- * {@code iterablesFound}/{@code lastCounts} rather than overwriting them.
+ * Mirrors the Mongo fold: counters accumulate, and a {@code FAILED} run keeps the last good
+ * {@code iterablesFound} and {@code lastCounts}.
  */
 public class InMemoryDiscoveryStatusRepository implements DiscoveryStatusRepository {
 

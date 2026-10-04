@@ -4,20 +4,9 @@ import io.personalassistant.domain.model.PublishMessage;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Wire shape for a message to publish. Plain text except {@code summary} — each channel renders it.
- *
- * @param title   subject line / heading
- * @param intro   text above the items, or null
- * @param items   results to list, or null
- * @param link    where to read more, or null
- * @param summary prose about the items, as Markdown, or null
- */
+/** Plain text except {@code summary}, which is Markdown. */
 public record PublishMessageDto(String title, String intro, List<Item> items, String link, String summary) {
 
-    /**
-     * @param fields labelled values shown beside the item
-     */
     public record Item(String title, String uri, String text, Map<String, Object> fields) {
     }
 

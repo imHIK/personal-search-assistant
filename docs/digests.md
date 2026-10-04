@@ -3,7 +3,7 @@
 A **digest** is a saved search plus a schedule, a look-back window, and an optional prompt-catalogue
 task over the results. Each execution is kept as a **run**.
 
-It is deliberately generic. The job-hunt case that motivated it — new postings scored against a CV —
+It is deliberately generic. The job-hunt case that motivated it — new postings scored by a task —
 is one row of the `digests` collection, not a feature: see [`job-discovery.md`](./job-discovery.md).
 The same shape gives "everything new in Drive about project X, weekly" with no code involved.
 
@@ -14,13 +14,13 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
 ```jsonc
 {
   "name": "New backend roles",
-  "query": "roles I could do next",   // with sourceEntityId set, this is INTENT, not the search text
-  "sourceEntityId": "ent_…",          // search BY a document instead of by text; optional
+  "query": "backend engineer java",   // required
   "knowledgeIds": ["kn_…"],           // empty searches everything
   "filters": { "metadata.remote": true },
   "window": null,                     // how far back a run looks; null = no time bound (the default)
   "interval": "1d",                   // or "cron"; resolved by the same ScheduleResolver as ingestion
   "taskId": "job-fit",                // a prompt-catalogue task over the results; null = results only
+  "useLlm": true,                     // false skips the task without forgetting it; default true
   "topK": 10,
   "collapseDuplicates": true,
   "maxChunksPerEntity": 1,
@@ -30,8 +30,7 @@ The same shape gives "everything new in Drive about project X, weekly" with no c
 }
 ```
 
-A digest needs **either** `query` **or** `sourceEntityId`; neither is a 400. Everything else has a
-default.
+A digest needs a `query`; a blank one is a 400. Everything else has a default.
 
 > **Scope it with `knowledgeIds`.** Empty means every source, which is the search API's own default and
 > is usually wrong for a digest. A one-off search is read by someone who can see what came back; a
@@ -66,8 +65,10 @@ candidates. Without over-fetching, a digest whose top results are all familiar r
 new items sit just below the cut.
 
 **3. Optionally run a task.** Any task in the library — bundled or user-written, see
-[`tasks.md`](./tasks.md) — via `SearchAgent.runTaskWithSources`. An empty result set skips the call
-rather than spending it on a prompt with no sources.
+[`tasks.md`](./tasks.md) — via `SearchAgent.runTask`. An empty result set skips the call rather than
+spending it on a prompt with no sources, and `useLlm: false` skips it while keeping `taskId`, so the
+task comes back when the switch does. The task is the only LLM call a digest makes; with no task, or
+with the switch off, a run never reaches the LLM.
 
 ## Annotations: joining a reply back to the results
 
@@ -121,10 +122,15 @@ sends people to rewrite a query that was never the problem.
 
 ## Failures are recorded, not thrown
 
-A search or task failure is stored on the run as `error` and the run is saved anyway. A scheduled job
-that throws leaves no trace a user will ever see; "this digest has been broken for a week" has to be
-visible in the history, and the console shows a failed run rather than an empty one. A failed run
-records no items, so it also cannot poison the already-seen set.
+A search failure is stored on the run as `error` and the run is saved anyway. A scheduled job that
+throws leaves no trace a user will ever see; "this digest has been broken for a week" has to be visible
+in the history, and the console shows a failed run rather than an empty one. A failed run records no
+items, so it also cannot poison the already-seen set.
+
+A **task** failure is different: the search already succeeded, so the run keeps its items and records
+why the task failed as `taskError`, the way a search keeps its hits and reports `answerError`. Those
+items were delivered, so they count as reported; **reset history** replays them if you want them
+scored.
 
 ## Scheduling
 
@@ -175,7 +181,7 @@ with a 200 either way.
 | Endpoint | Effect |
 |---|---|
 | `GET /api/digests` | list |
-| `POST /api/digests` | create; 400 if it names neither a query nor a source document |
+| `POST /api/digests` | create; 400 on a blank query |
 | `GET /api/digests/{id}` | read one |
 | `PATCH /api/digests/{id}` | edit any field; **absent** = unchanged, **`null`** = clear. So `{"enabled": false}` still pauses, and `{"window": null}` really does remove the look-back |
 | `POST /api/digests/{id}/reset-history` | forget what has been reported, keeping the runs |
@@ -185,10 +191,6 @@ with a 200 either way.
 | `GET /api/digests/{id}/runs/{runId}` | one run; 404 when it belongs to another digest |
 | `GET /api/digests/{id}/runs/latest` | the most recent run, 404 if it has never run |
 | `GET /api/deliveries?refId={runId}` | what one run was sent to (see *Sending results to channels*) |
-
-`GET /api/entities/{id}` is adjacent rather than part of this API, but exists for it: a digest that
-searches *by* a document holds only `sourceEntityId`, and the console was rendering "Like ent_3f9…"
-as the digest's description.
 
 ## Storage
 
@@ -207,7 +209,7 @@ queued once per channel when it is worth a message:
 
 | run | sent? |
 |---|---|
-| found items | yes — the items with their annotations, and the task's reply as a summary when it annotated nothing |
+| found items | yes — the items with their annotations, and the task's reply as a summary when it annotated nothing. A `taskError` goes in the intro |
 | failed | yes — a short "*name* failed" notice carrying the error |
 | quiet (nothing new) | no |
 
@@ -229,5 +231,5 @@ deleted (409) — dropping it from the digest instead would turn its emails off 
 
 > **Citations in the email.** The summary's `[n]` markers are rendered as written. The console resolves
 > them through the task's source mode; the email does not, so under a whole-document task a run holding
-> several chunks of one document can cite a number that differs from the item's position. Digests default
-> to one result per document, which avoids it.
+> several chunks of one document can cite a number that differs from the item's position. Search results
+> are one per entity, so a run never holds two chunks of one document as separate items, which avoids it.

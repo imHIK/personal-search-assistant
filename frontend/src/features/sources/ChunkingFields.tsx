@@ -2,14 +2,6 @@ import { SchemaForm, type FormValues } from '@/components/SchemaForm'
 import { chunkingStrategies } from '@/config/constants'
 import type { FieldSpec } from '@/config/fields'
 
-/**
- * Chunking controls. Deliberately kept behind an "Advanced" disclosure everywhere it appears:
- * chunk size and overlap are indexing-quality tuning knobs, not something a user has an opinion
- * about, and the server-side defaults are already the right answer for almost everything.
- *
- * Changing these does NOT re-chunk what is already indexed — the backend treats a chunking edit
- * as a direct update, and existing items keep their old chunks until individually reprocessed.
- */
 export const chunkingFields: FieldSpec[] = [
   {
     name: 'chunkingStrategy',

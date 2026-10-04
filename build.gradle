@@ -36,6 +36,9 @@ dependencies {
     // MongoDB (source of truth).
     implementation 'io.quarkus:quarkus-mongodb-client'
 
+    // Redis — outbound rate-limit counters, so a restart doesn't reset a daily window.
+    implementation 'io.quarkus:quarkus-redis-client'
+
     // Health / readiness probes (used by k8s later).
     implementation 'io.quarkus:quarkus-smallrye-health'
 

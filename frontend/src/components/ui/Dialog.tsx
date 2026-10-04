@@ -62,10 +62,7 @@ export function Dialog({
   )
 }
 
-/**
- * Destructive confirmation. When `confirmText` is given the action stays disabled until the user
- * types it — reserved for things that delete indexed data, so it can't happen on a stray click.
- */
+/** With `confirmText`, the action stays disabled until the user types it. */
 export function ConfirmDialog({
   open,
   onOpenChange,

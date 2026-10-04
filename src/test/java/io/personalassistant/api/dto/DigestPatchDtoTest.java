@@ -11,15 +11,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The three states a PATCH body can express, at the layer that gets them wrong.
- *
- * <p>This is the seam the console's "turn it off" controls broke on, and no service-level test could
- * have caught it: by the time a {@link DigestPatch} exists the distinction has already been made or
- * lost. Both wrong answers are cheap to reintroduce — binding to plain fields collapses "cleared" into
- * "unchanged", binding to {@code Optional} collapses "unchanged" into "cleared" — so both are asserted
- * here rather than only the happy path.
- */
 class DigestPatchDtoTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -33,9 +24,9 @@ class DigestPatchDtoTest {
         }
     }
 
-    /** A fully-populated digest, so "unchanged" is visibly different from "cleared". */
+    /** Every field set, so "unchanged" is distinguishable from "cleared". */
     private static Digest existing() {
-        return new Digest("dig_1", "Roles", "engineer", "ent_cv", List.of("kn_1"),
+        return new Digest("dig_1", "Roles", "engineer", List.of("kn_1"),
                 Map.of("metadata.remote", true), "7d", SyncSchedule.ofInterval(Duration.ofDays(1)),
                 "job-fit", 5, true, 1, true, true, null, null, null, null);
     }
@@ -48,13 +39,10 @@ class DigestPatchDtoTest {
         Assertions.assertEquals("7d", edited.window());
         Assertions.assertEquals("job-fit", edited.taskId());
         Assertions.assertEquals(1, edited.maxChunksPerEntity());
-        Assertions.assertEquals("ent_cv", edited.sourceEntityId());
     }
 
     @Test
     void anExplicitNullClearsTheField() {
-        // "Look back: no time limit", "Then: nothing", "One result per document: off" — every one of
-        // these sends a null, and every one of them used to be answered with 200 and no change.
         Digest edited = patch("{\"window\": null, \"taskId\": null, \"maxChunksPerEntity\": null}")
                 .applyTo(existing());
 
@@ -62,6 +50,14 @@ class DigestPatchDtoTest {
         Assertions.assertNull(edited.taskId());
         Assertions.assertNull(edited.maxChunksPerEntity());
         Assertions.assertEquals("engineer", edited.query(), "a key nobody sent is still untouched");
+    }
+
+    @Test
+    void useLlmIsKeptWhenAbsentSetWhenSentAndDefaultsOnWhenCleared() {
+        Assertions.assertTrue(patch("{\"name\": \"Renamed\"}").applyTo(existing()).useLlm());
+        Digest off = patch("{\"useLlm\": false}").applyTo(existing());
+        Assertions.assertFalse(off.useLlm());
+        Assertions.assertTrue(patch("{\"useLlm\": null}").applyTo(off).useLlm());
     }
 
     @Test
@@ -92,8 +88,6 @@ class DigestPatchDtoTest {
 
     @Test
     void clearingAFieldWithNoOffFallsBackToItsDefault() {
-        // These are primitives on the digest; there is no unset to write, and an NPE on unboxing is
-        // not an answer to "the user cleared the box".
         Digest edited = patch("{\"topK\": null, \"onlyNew\": null, \"enabled\": null}")
                 .applyTo(existing());
 
@@ -104,7 +98,6 @@ class DigestPatchDtoTest {
 
     @Test
     void aWrongTypedFieldIsRejectedRatherThanDropped() {
-        // Dropping it would be the same silent no-op this whole class exists to prevent.
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"topK\": \"ten\"}"));
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"name\": 7}"));
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"onlyNew\": \"yes\"}"));

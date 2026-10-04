@@ -5,17 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Optional;
 
 /**
- * Reads a JSON object out of an LLM reply that was <em>asked</em> to be JSON.
- *
- * <p>{@code response_format} is a request, not a contract: not every OpenAI-compatible vendor honours
- * it, and models that do still wrap the object in a ```json fence or preface it with a sentence often
- * enough to matter. A caller that simply calls {@code readTree} on the raw reply therefore fails on
- * output that is perfectly usable — and for a bulk task scored per item, one such failure should cost
- * that item, not the run.
- *
- * <p>So this is deliberately forgiving in one direction only: it will find an object inside noise, but
- * it will not invent one. A reply with no balanced object yields {@link Optional#empty()}, which the
- * caller reports as "unscored" rather than substituting a default that would look like a real result.
+ * Finds the JSON object in an LLM reply that was asked for JSON; models still wrap it in fences or prose.
+ * Never invents one: a reply with no balanced object is empty, not a default.
  */
 public final class JsonReplies {
 
@@ -24,7 +15,6 @@ public final class JsonReplies {
     private JsonReplies() {
     }
 
-    /** The first balanced JSON object in {@code reply}, or empty when there is none. */
     public static Optional<JsonNode> object(String reply) {
         if (reply == null || reply.isBlank()) {
             return Optional.empty();
@@ -48,7 +38,6 @@ public final class JsonReplies {
         return Optional.empty();
     }
 
-    /** Convenience: a text field from the object, or null. */
     public static String text(JsonNode object, String field) {
         JsonNode value = object == null ? null : object.get(field);
         return value == null || value.isNull() ? null : value.asText();
@@ -63,7 +52,6 @@ public final class JsonReplies {
         }
     }
 
-    /** Drop a surrounding ```json … ``` fence if one is present. */
     private static String stripFence(String reply) {
         if (!reply.startsWith("```")) {
             return reply;
@@ -76,10 +64,7 @@ public final class JsonReplies {
         return reply.substring(firstNewline + 1, closing).trim();
     }
 
-    /**
-     * Index of the brace closing the one at {@code start}, or -1. String literals are tracked so a brace
-     * inside a quoted value — a reason field quoting the posting, say — does not end the object early.
-     */
+    /** String literals are tracked, so a brace inside a quoted value does not close the object. */
     private static int matchingBrace(String text, int start) {
         int depth = 0;
         boolean inString = false;

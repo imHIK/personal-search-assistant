@@ -1,113 +1,78 @@
 package io.personalassistant.agent.llm;
 
-import io.personalassistant.common.ratelimit.RateLimitMode;
+import io.personalassistant.agent.prompt.PromptCatalog;
+import io.personalassistant.agent.prompt.TaskSpec;
+import io.personalassistant.domain.model.Connection;
+import io.personalassistant.domain.model.enums.ConnectionStatus;
+import io.personalassistant.storage.repository.ConnectionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Logger;
-import org.eclipse.microprofile.config.Config;
+import java.util.Set;
 
 /**
- * Resolves {@link LlmProfile}s from {@code app.llm.profile.<name>.<key>} configuration.
- *
- * <p>Deliberately <em>not</em> a fixed set of {@code @ConfigProperty} fields. Keys are looked up
- * dynamically through {@link Config}, so a new profile is created by adding properties — no new bean,
- * no new injection point, no code change. That is the whole point: the roadmap adds an LLM call for
- * reranking, one for query rephrasing and one for index-time enrichment, and each of those wants its
- * own model without dragging a config refactor along with it.
- *
- * <p>Recognised sub-keys, all optional: {@code base-url}, {@code model}, {@code temperature},
- * {@code max-tokens}, {@code api-key}, and {@code rate-limit-mode} ({@code wait} or {@code fail-fast}).
- * An absent or blank value means "inherit the provider default" (see {@link LlmProfile}), which is also
- * why blank is treated as absent — SmallRye converts an empty property to null, and a
- * {@code ${ENV_VAR:}}-backed key is empty exactly when the variable is unset.
- *
- * <p>An unknown profile name resolves to {@link LlmProfile#inherit} with a warning rather than
- * throwing. A missing profile means the call runs on the provider's configured model — degraded, but
- * working — whereas failing hard would take out answering because a reranker's profile was misspelled.
+ * Resolves a profile name to an LLM connection: the one serving that profile, else the default. Read on every
+ * call, so an edit in the console applies to the next one. There is no configuration fallback.
  */
 @ApplicationScoped
 public class LlmProfiles {
 
-    private static final Logger LOG = Logger.getLogger(LlmProfiles.class.getName());
+    private static final String DEFAULT = "default";
 
-    private static final String PREFIX = "app.llm.profile.";
-
-    private final Config config;
-
-    /** Resolved profiles are immutable and re-read per call otherwise; cache to keep lookups cheap. */
-    private final ConcurrentHashMap<String, LlmProfile> cache = new ConcurrentHashMap<>();
+    private final ConnectionRepository connections;
+    private final PromptCatalog catalog;
 
     @Inject
-    public LlmProfiles(Config config) {
-        this.config = config;
+    public LlmProfiles(ConnectionRepository connections, PromptCatalog catalog) {
+        this.connections = connections;
+        this.catalog = catalog;
     }
 
-    /**
-     * The profile configured under {@code name}. Never null: a name with no properties at all yields an
-     * inherit-everything profile, so a caller can always name the role it is playing.
-     */
+    /** @throws IllegalStateException when no usable LLM connection exists, naming where to add one */
     public LlmProfile get(String name) {
-        if (name == null || name.isBlank()) {
-            return LlmProfile.inherit("default");
+        String wanted = name == null || name.isBlank() ? DEFAULT : name;
+        Connection c = connectionFor(wanted).orElseThrow(() -> new IllegalStateException(
+                "No LLM connection serves the profile \"" + wanted + "\" and there is no default one; "
+                        + "add one under Accounts → LLM"));
+        return new LlmProfile(wanted, c.id(),
+                LlmConnections.baseUrl(c).orElseThrow(() -> incomplete(c, LlmConnections.BASE_URL)),
+                LlmConnections.model(c).orElseThrow(() -> incomplete(c, LlmConnections.MODEL)),
+                LlmConnections.temperature(c),
+                LlmConnections.maxTokens(c),
+                LlmConnections.apiKey(c),
+                c.rateLimit(),
+                Optional.empty());
+    }
+
+    /** The profiles connections serve, plus those the bundled tasks ask for, so a picker can offer both. */
+    public List<String> names() {
+        Set<String> out = new LinkedHashSet<>();
+        for (Connection c : connections.findByType(LlmConnections.TYPE)) {
+            LlmConnections.profile(c).ifPresent(out::add);
         }
-        return cache.computeIfAbsent(name, this::resolve);
+        for (TaskSpec task : catalog.tasks()) {
+            out.add(task.llmProfile());
+        }
+        return List.copyOf(out);
     }
 
     /**
-     * Every profile name the configuration defines, in encounter order.
-     *
-     * <p>Derived by scanning property names rather than kept as a list, for the same reason
-     * {@link #get} looks keys up dynamically: a profile is created by adding properties, so any
-     * declared set would be a second place to remember. This exists so a user choosing which model
-     * runs their task can be offered the real options instead of typing a name.
+     * A connection in ERROR is still used: with no fallback, skipping it would turn a failed health check —
+     * possibly transient — into a certain failure. Only DISABLED, an operator decision, takes it out.
      */
-    public java.util.List<String> names() {
-        java.util.Set<String> out = new java.util.LinkedHashSet<>();
-        for (String property : config.getPropertyNames()) {
-            if (!property.startsWith(PREFIX)) {
-                continue;
-            }
-            String rest = property.substring(PREFIX.length());
-            int dot = rest.indexOf('.');
-            if (dot > 0) {
-                out.add(rest.substring(0, dot));
-            }
-        }
-        return java.util.List.copyOf(out);
+    private Optional<Connection> connectionFor(String name) {
+        List<Connection> usable = connections.findByType(LlmConnections.TYPE).stream()
+                .filter(c -> c.status() != ConnectionStatus.DISABLED)
+                .toList();
+        return usable.stream()
+                .filter(c -> LlmConnections.profile(c).filter(name::equals).isPresent())
+                .findFirst()
+                .or(() -> usable.stream().filter(Connection::isDefault).findFirst());
     }
 
-    private LlmProfile resolve(String name) {
-        Optional<String> baseUrl = text(name, "base-url");
-        Optional<String> model = text(name, "model");
-        Optional<Double> temperature = text(name, "temperature").map(Double::valueOf);
-        Optional<Integer> maxTokens = text(name, "max-tokens").map(Integer::valueOf);
-        Optional<String> apiKey = text(name, "api-key");
-        Optional<RateLimitMode> rateLimitMode = text(name, "rate-limit-mode").map(LlmProfiles::mode);
-
-        if (baseUrl.isEmpty() && model.isEmpty() && temperature.isEmpty()
-                && maxTokens.isEmpty() && apiKey.isEmpty() && rateLimitMode.isEmpty()) {
-            LOG.warning("No configuration found for LLM profile \"" + name + "\" (expected "
-                    + PREFIX + name + ".model or similar); falling back to the provider defaults");
-            return LlmProfile.inherit(name);
-        }
-        LOG.fine(() -> "LLM profile \"" + name + "\": model=" + model.orElse("<provider default>")
-                + ", temperature=" + temperature.map(String::valueOf).orElse("<provider default>")
-                + ", max-tokens=" + maxTokens.map(String::valueOf).orElse("<unset>")
-                + ", endpoint=" + (baseUrl.isPresent() ? baseUrl.get() : "<provider default>"));
-        return new LlmProfile(name, baseUrl, model, temperature, maxTokens, apiKey, rateLimitMode);
-    }
-
-    /** Accepts the kebab-case spelling used everywhere else in {@code application.properties}. */
-    private static RateLimitMode mode(String value) {
-        return RateLimitMode.valueOf(value.trim().toUpperCase().replace('-', '_'));
-    }
-
-    /** Blank is treated as absent — see the class Javadoc on empty values and {@code ${ENV_VAR:}}. */
-    private Optional<String> text(String profile, String key) {
-        return config.getOptionalValue(PREFIX + profile + "." + key, String.class)
-                .map(String::trim)
-                .filter(v -> !v.isEmpty());
+    private static IllegalStateException incomplete(Connection c, String field) {
+        return new IllegalStateException("The LLM connection \"" + c.name() + "\" has no " + field);
     }
 }

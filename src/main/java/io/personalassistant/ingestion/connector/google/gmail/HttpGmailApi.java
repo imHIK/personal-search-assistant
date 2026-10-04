@@ -11,11 +11,6 @@ import java.util.List;
 import java.util.StringJoiner;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * {@link GmailApi} backed by the Gmail REST API v1 ({@code gmail.googleapis.com}). All calls target
- * the authenticated user ({@code users/me}). This adapter is pure transport + URL building: no
- * pagination or mapping policy lives here — that is the connector's job.
- */
 @ApplicationScoped
 public class HttpGmailApi implements GmailApi {
 

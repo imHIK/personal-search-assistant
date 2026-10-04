@@ -11,16 +11,9 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Token-based chunking sized by the same family of tokenizer the embedding model uses, so chunks fit
- * the model's token window precisely instead of guessing from character length. It uses the
- * HuggingFace tokenizer already on the classpath (via DJL) to measure the document's token density,
- * then slides a window over the <em>original</em> text calibrated to that density — the chunk text is
- * always a verbatim substring (good for display/citation and for the embedder to re-encode), while
- * {@code maxSize}/{@code overlap} are honoured in tokens rather than characters.
- *
- * <p>The tokenizer is loaded lazily and, if unavailable (offline, missing model), the strategy
- * degrades gracefully to a ~4-chars-per-token approximation so indexing never breaks. Density is
- * estimated from a sample of the document head, keeping this O(1) tokenizer calls per document.
+ * Measures the document's token density with the embedding model's tokenizer family, then slides a character
+ * window calibrated to it: chunks are verbatim substrings sized in tokens. Without the tokenizer (offline) it
+ * assumes about 4 characters per token.
  */
 @ApplicationScoped
 public class TokenChunkingStrategy implements ChunkingStrategy {
@@ -29,19 +22,16 @@ public class TokenChunkingStrategy implements ChunkingStrategy {
 
     private static final Logger LOG = Logger.getLogger(TokenChunkingStrategy.class.getName());
 
-    /** Chars per token-count probe — small enough that no single probe hits a tokenizer length cap. */
+    /** Small enough that no probe hits a tokenizer length cap. */
     private static final int PROBE_WINDOW = 1000;
 
-    /** Chars sampled from the head to estimate token density; density is ~uniform within a document. */
     private static final int DENSITY_SAMPLE = 20_000;
 
     @ConfigProperty(name = "app.chunking.token.tokenizer", defaultValue = "bert-base-uncased")
     String tokenizerId;
 
-    /** Lazily initialised token counter; HF-backed when available, else an approximation. Package-private for tests. */
     volatile TokenCounter counter;
 
-    /** How chunk size is measured: number of tokens in a piece of text. */
     interface TokenCounter {
         int count(String text);
     }
@@ -72,7 +62,6 @@ public class TokenChunkingStrategy implements ChunkingStrategy {
         return ChunkSupport.toChunks(entity, sourceType, pieces);
     }
 
-    /** Estimate characters-per-token from a head sample, so window sizing tracks the real token rate. */
     private double charsPerToken(String text) {
         int sampleChars = Math.min(text.length(), DENSITY_SAMPLE);
         int tokens = countTokens(text.substring(0, sampleChars));
@@ -106,8 +95,7 @@ public class TokenChunkingStrategy implements ChunkingStrategy {
         try {
             HuggingFaceTokenizer tokenizer = HuggingFaceTokenizer.newInstance(tokenizerId);
             LOG.info("Token chunking using HuggingFace tokenizer '" + tokenizerId + "'");
-            // encode(String) is the version-stable overload; the few special tokens it adds are a
-            // negligible constant for the density estimate this feeds.
+            // encode(String) is the version-stable overload.
             return text -> tokenizer.encode(text).getIds().length;
         } catch (Throwable t) {
             LOG.warning("HuggingFace tokenizer '" + tokenizerId + "' unavailable (" + t.getMessage()

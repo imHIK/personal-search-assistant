@@ -12,17 +12,12 @@ export const channelsApi = {
 
   get: (id: string) => http<Channel>(`/api/channels/${encodeURIComponent(id)}`),
 
-  /** The channel's publisher validates `target`; a refusal comes back as a 400 with the reason. */
   create: (body: CreateChannelBody) => http<Channel>('/api/channels', { method: 'POST', body }),
 
-  /** A new `target` is re-validated, so this can also 400. */
   patch: (id: string, body: PatchChannelBody) =>
     http<Channel>(`/api/channels/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
 
-  /**
-   * Send a sample message now. Always 200 with the refreshed channel — read `status` and
-   * `lastError` rather than catching. A failed send is a result to display, not a failure.
-   */
+  /** Always 200: a failed send shows as `status` and `lastError` on the returned channel. */
   test: (id: string) =>
     http<Channel>(`/api/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }),
 

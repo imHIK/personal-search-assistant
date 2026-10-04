@@ -1,6 +1,6 @@
 import { HelpCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { isDefaultConnection } from '@/api/connections'
 import type { RateLimitPolicy } from '@/api/types'
@@ -12,20 +12,13 @@ import { Field, Input, Select } from '@/components/ui/Input'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Toggle } from '@/components/ui/Toggle'
 import { ErrorState, SkeletonList } from '@/components/ui/States'
-import { accountFor, accountTypes } from '@/config/accounts'
+import { accountFor, accountTypes, sectionOf } from '@/config/accounts'
 import { initialValues, pruneEmpty, type FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnection, useConnectionMutations } from '@/hooks/queries'
 import { ConnectAccountButton } from './ConnectAccountButton'
 import { RateLimitFields } from './RateLimitFields'
 
-/**
- * Create or edit an account. Both modes render the same descriptor-driven form — the only
- * differences are that `type` is fixed on edit, and that saving goes to POST vs PATCH.
- *
- * The whole form body comes from `descriptor.authFields` / `configFields`, so a new connector's
- * credential shape needs no work here at all.
- */
 export function AccountFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit = Boolean(id)
@@ -34,8 +27,11 @@ export function AccountFormPage() {
   const { data: existing, isLoading, error: loadError } = useConnection(id)
   const { create, patch } = useConnectionMutations()
 
+  const [params] = useSearchParams()
   const candidates = useMemo(() => accountTypes(), [])
-  const [type, setType] = useState<string>(candidates[0]?.id ?? 'GMAIL')
+  const [type, setType] = useState<string>(
+    candidates.find((c) => c.id === params.get('type'))?.id ?? candidates[0]?.id ?? 'GMAIL',
+  )
   const [name, setName] = useState('')
   const [makeDefault, setMakeDefault] = useState(false)
   const [auth, setAuth] = useState<FormValues>({})
@@ -45,8 +41,6 @@ export function AccountFormPage() {
 
   const descriptor = accountFor(isEdit && existing ? existing.type : type)
 
-  // Seed the form once the existing account arrives. Secrets round-trip from the server
-  // unredacted, so they land in the masked `secret` controls rather than plain text.
   useEffect(() => {
     if (!existing) return
     setName(existing.name)
@@ -55,13 +49,9 @@ export function AccountFormPage() {
     const d = accountFor(existing.type)
     setAuth(initialValues(d.authFields, existing.auth as Record<string, unknown>))
     setConfig(initialValues(d.configFields, existing.config as Record<string, unknown>))
-    // Rebuilt rather than assigned: the response also carries a derived `unlimited` flag (Jackson
-    // reads the record's isUnlimited() as a getter), and echoing unknown keys back on PATCH is
-    // sloppy even though the server tolerates them.
     setRateLimit({ rules: existing.rateLimit?.rules ?? [] })
   }, [existing])
 
-  // Reset the credential fields when the type changes on a new account — the field set differs.
   useEffect(() => {
     if (isEdit) return
     const d = accountFor(type)
@@ -80,8 +70,7 @@ export function AccountFormPage() {
     }
     setNameError(undefined)
 
-    // Sent on every save, empty list included: absent means "unchanged" server-side, so an empty
-    // list is the only way to express that the user removed the limit they had.
+    // Always sent, even empty: absent means unchanged, so `[]` is how a removed limit is saved.
     const body = {
       name: name.trim(),
       auth: pruneEmpty(auth),
@@ -189,11 +178,6 @@ export function AccountFormPage() {
               {descriptor.credentialHelp && <CredentialHelp descriptor={descriptor} />}
             </CardHeader>
             <CardBody className="space-y-4">
-              {/*
-                When the connector supports it, signing in is the primary path and the token fields
-                are a fallback for someone who obtained one by hand — which is why those fields are
-                marked `technical` in the descriptor and only appear behind the details toggle.
-              */}
               {descriptor.oauth && (
                 <ConnectAccountButton
                   descriptor={descriptor}
@@ -213,13 +197,15 @@ export function AccountFormPage() {
         {descriptor.configFields.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>OAuth application</CardTitle>
+              <CardTitle>{descriptor.configTitle ?? 'OAuth application'}</CardTitle>
             </CardHeader>
             <CardBody className="space-y-4">
-              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                Only needed if the server has no OAuth client configured. Leave blank to use the
-                server's.
-              </p>
+              {!descriptor.configTitle && (
+                <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                  Only needed if the server has no OAuth client configured. Leave blank to use the
+                  server's.
+                </p>
+              )}
               <SchemaForm fields={descriptor.configFields} values={config} onChange={setConfig} />
               <Technical>
                 <RawBlobEditor label="Extra auth keys" values={auth} onChange={setAuth} />
@@ -239,7 +225,9 @@ export function AccountFormPage() {
             <RateLimitFields value={rateLimit} onChange={setRateLimit} disabled={pending} />
             {rateLimit.rules.length > 0 && (
               <p className="text-xs leading-relaxed text-[var(--text-subtle)]">
-                {labels.accounts.rateLimitWarning}
+                {sectionOf(descriptor) === 'llm'
+                  ? labels.accounts.llmRateLimitWarning
+                  : labels.accounts.rateLimitWarning}
               </p>
             )}
           </CardBody>
@@ -249,8 +237,6 @@ export function AccountFormPage() {
           <ErrorState
             error={saveError}
             compact
-            // The backend verifies credentials before saving, so this is nearly always a
-            // rejected-token 400 rather than a bug.
           />
         )}
 
@@ -267,7 +253,6 @@ export function AccountFormPage() {
   )
 }
 
-/** Collapsible, connector-specific instructions sourced from the descriptor. */
 function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof accountFor> }) {
   const [open, setOpen] = useState(false)
   const help = descriptor.credentialHelp
@@ -305,10 +290,6 @@ function CredentialHelp({ descriptor }: { descriptor: ReturnType<typeof accountF
   )
 }
 
-/**
- * Escape hatch for credential keys no descriptor names yet — the backend treats `auth` and
- * `config` as opaque blobs, so a new connector can be exercised before it has a descriptor.
- */
 function RawBlobEditor({
   label,
   values,

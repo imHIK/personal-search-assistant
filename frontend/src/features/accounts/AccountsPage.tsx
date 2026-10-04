@@ -12,7 +12,7 @@ import { ConfirmDialog } from '@/components/ui/Dialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
-import { accountFor, accountTypes } from '@/config/accounts'
+import { accountFor, accountSections, accountTypes, sectionOf } from '@/config/accounts'
 import { friendlyError, friendlyLastError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { presentConnection } from '@/config/presentation'
@@ -28,23 +28,14 @@ export function AccountsPage() {
 
   const needsAccounts = accountTypes()
 
-  // This page doubles as the landing spot for an OAuth callback, which arrives as a plain redirect
-  // carrying its result in the query string. Report it once, then strip the parameters so a reload
-  // or a back-navigation doesn't replay a stale outcome.
-  //
-  // The timeout is load-bearing, not defensive padding. An OAuth callback is a *fresh page load*, so
-  // this effect runs during the first commit — and React runs effects child-first, so it fires before
-  // <Toaster/> (a sibling of the router, mounted in main.tsx) has subscribed to sonner's store. A
-  // toast emitted in that gap is published to nobody and silently lost, which is exactly the message
-  // the user needs most: whether their reconnect actually worked. Deferring by a macrotask puts it
-  // after every effect in the commit, Toaster's included.
+  // The OAuth callback lands here with its result in the query string: report it once, then strip
+  // it. The timeout matters: on this fresh page load the effect runs before <Toaster/> subscribes,
+  // and an earlier toast is lost.
   useEffect(() => {
     const outcome = readOAuthOutcome(location.search)
     if (!outcome) return
-    //
-    // Deliberately not cleaned up on unmount: the `navigate` below changes `location.search`, which
-    // re-runs this effect — and a cleanup would cancel the very toast the previous run scheduled. A
-    // toast is global state in sonner rather than this component's, so letting it land is correct.
+    // No cleanup: the navigate below re-runs this effect, and a cleanup would cancel the toast just
+    // scheduled.
     window.setTimeout(() => {
       if (outcome.status === 'ok') {
         toast.success(labels.accounts.connectOk)
@@ -73,59 +64,83 @@ export function AccountsPage() {
         <SkeletonList rows={2} />
       ) : error ? (
         <ErrorState error={error} onRetry={() => void refetch()} />
-      ) : !data || data.length === 0 ? (
-        <EmptyState
-          icon={Plug}
-          title={labels.accounts.empty}
-          description={
-            needsAccounts.length > 0
-              ? `${needsAccounts.map((c) => c.label).join(' and ')} need an account before they can be connected.`
-              : labels.accounts.emptyHint
-          }
-          action={
-            <Button variant="primary" onClick={() => navigate('/connections/new')}>
-              <Plus />
-              {labels.accounts.add}
-            </Button>
-          }
-        />
       ) : (
-        <div className="space-y-3">
-          {data.map((connection) => (
-            <AccountRow
-              key={connection.id}
-              connection={connection}
-              testing={test.isPending && test.variables === connection.id}
-              onTest={() =>
-                test.mutate(connection.id, {
-                  // The endpoint always resolves; a broken account comes back as ERROR on the body,
-                  // so the outcome is read from the result rather than caught.
-                  onSuccess: (checked) =>
-                    checked.status === 'ERROR'
-                      ? toast.error(labels.accounts.testFailed(checked.name), {
-                          description: checked.lastError
-                            ? friendlyLastError(checked.lastError).detail
-                            : undefined,
+        <div className="space-y-8">
+          {accountSections.map((section) => {
+            const rows = (data ?? []).filter(
+              (connection) => sectionOf(accountFor(connection.type)) === section.id,
+            )
+            return (
+              <section key={section.id} className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-[var(--text)]">
+                    {labels.accounts.sections[section.id]}
+                  </h2>
+                  {section.addType && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => navigate(`/connections/new?type=${section.addType}`)}
+                    >
+                      <Plus />
+                      {labels.accounts.addLlm}
+                    </Button>
+                  )}
+                </div>
+                {rows.length === 0 ? (
+                  section.id === 'accounts' ? (
+                    <EmptyState
+                      icon={Plug}
+                      title={labels.accounts.empty}
+                      description={
+                        needsAccounts.length > 0
+                          ? `${needsAccounts.map((c) => c.label).join(' and ')} need an account before they can be connected.`
+                          : labels.accounts.emptyHint
+                      }
+                    />
+                  ) : (
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {labels.accounts.sectionEmpty[section.id]}
+                    </p>
+                  )
+                ) : (
+                  rows.map((connection) => (
+                    <AccountRow
+                      key={connection.id}
+                      connection={connection}
+                      testing={test.isPending && test.variables === connection.id}
+                      onTest={() =>
+                        test.mutate(connection.id, {
+                          onSuccess: (checked) =>
+                            checked.status === 'ERROR'
+                              ? toast.error(labels.accounts.testFailed(checked.name), {
+                                  description: checked.lastError
+                                    ? friendlyLastError(checked.lastError).detail
+                                    : undefined,
+                                })
+                              : toast.success(labels.accounts.testOk(checked.name)),
+                          onError: (mutationError) =>
+                            toast.error(friendlyError(mutationError).title, {
+                              description: friendlyError(mutationError).detail,
+                            }),
                         })
-                      : toast.success(labels.accounts.testOk(checked.name)),
-                  onError: (mutationError) =>
-                    toast.error(friendlyError(mutationError).title, {
-                      description: friendlyError(mutationError).detail,
-                    }),
-                })
-              }
-              onMakeDefault={() => {
-                makeDefault.mutate(connection.id, {
-                  onSuccess: () => toast.success(`"${connection.name}" is now the default`),
-                  onError: (mutationError) =>
-                    toast.error(friendlyError(mutationError).title, {
-                      description: friendlyError(mutationError).detail,
-                    }),
-                })
-              }}
-              onRemove={() => setPendingRemoval(connection)}
-            />
-          ))}
+                      }
+                      onMakeDefault={() => {
+                        makeDefault.mutate(connection.id, {
+                          onSuccess: () => toast.success(`"${connection.name}" is now the default`),
+                          onError: (mutationError) =>
+                            toast.error(friendlyError(mutationError).title, {
+                              description: friendlyError(mutationError).detail,
+                            }),
+                        })
+                      }}
+                      onRemove={() => setPendingRemoval(connection)}
+                    />
+                  ))
+                )}
+              </section>
+            )
+          })}
         </div>
       )}
 
@@ -145,8 +160,6 @@ export function AccountsPage() {
             },
             onError: (mutationError) => {
               const friendly = friendlyError(mutationError)
-              // A 409 here always means a source still binds this account — say that, rather
-              // than showing the raw IllegalStateException text.
               toast.error(friendly.title, {
                 description:
                   mutationError instanceof Error && mutationError.name === 'ApiError'

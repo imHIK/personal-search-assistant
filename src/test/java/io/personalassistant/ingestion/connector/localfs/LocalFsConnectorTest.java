@@ -54,7 +54,6 @@ class LocalFsConnectorTest {
         return iterable(kn, "root");
     }
 
-    /** A cursor is self-contained, so grab() takes the iterable's id + attributes — not the whole record. */
     private static GrabContext req(Knowledge kn, SourceIterable it, CursorDirection dir, CursorPosition pos, int cap) {
         TimeWindow seed = dir == CursorDirection.BACKWARD
                 ? TimeWindow.before(kn.anchor()) : TimeWindow.atOrAfter(kn.anchor());
@@ -67,8 +66,6 @@ class LocalFsConnectorTest {
         return out;
     }
 
-    // ---- discovery ---------------------------------------------------------------------------
-
     @Test
     void discoversRootAndSubdirectoryIterables(@TempDir Path root) throws IOException {
         Files.createDirectory(root.resolve("sub"));
@@ -80,12 +77,9 @@ class LocalFsConnectorTest {
         assertTrue(iterables.stream().anyMatch(i -> i.iterableId().equals("sub")));
     }
 
-    // ---- forward: mtime-ordered incremental --------------------------------------------------
-
     @Test
     void forwardGrabReturnsItemsAtOrAfterAnchorWithPaging(@TempDir Path root) throws IOException {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-        // two files after the anchor (forward), one before (excluded from forward)
         write(root.resolve("new1.txt"), "one", anchor.plusSeconds(10));
         write(root.resolve("new2.txt"), "two", anchor.plusSeconds(20));
         write(root.resolve("old.txt"), "old", anchor.minusSeconds(60));
@@ -113,7 +107,7 @@ class LocalFsConnectorTest {
     @Test
     void forwardBoundedHeapSelectsOldestCapAndReportsHasMore(@TempDir Path root) throws IOException {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-        // five files after the anchor, written out of order to exercise the bounded selection
+        // Written out of order to exercise the bounded selection.
         write(root.resolve("e.txt"), "e", anchor.plusSeconds(50));
         write(root.resolve("a.txt"), "a", anchor.plusSeconds(10));
         write(root.resolve("c.txt"), "c", anchor.plusSeconds(30));
@@ -137,16 +131,13 @@ class LocalFsConnectorTest {
                 "forward pages walk the whole set once, oldest-first, with no gaps or repeats");
     }
 
-    // ---- backward: path-ordered backfill -----------------------------------------------------
-
     @Test
     void backwardGrabReturnsHistoryBeforeAnchorInPathOrder(@TempDir Path root) throws IOException {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-        // path order (a before z) is the OPPOSITE of mtime order here, proving we sort by path:
-        // a.txt is the oldest, z.txt the newest-of-the-old.
+        // Path order is deliberately the opposite of mtime order.
         write(root.resolve("a.txt"), "a", anchor.minusSeconds(200));
         write(root.resolve("z.txt"), "z", anchor.minusSeconds(10));
-        write(root.resolve("future.txt"), "future", anchor.plusSeconds(30)); // excluded from backward
+        write(root.resolve("future.txt"), "future", anchor.plusSeconds(30));
 
         Knowledge kn = knowledgeAt(root, anchor);
         GrabResult page = connector.grab(req(kn, rootIterable(kn), CursorDirection.BACKWARD, CursorPosition.start(), 10));
@@ -158,8 +149,8 @@ class LocalFsConnectorTest {
     void backwardOrdersDirectoryContentsBeforeSiblingFileComponentWise(@TempDir Path root) throws IOException {
         Instant anchor = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant old = anchor.minusSeconds(100);
-        // Under a recursive sub-iterable "docs": a directory "m" and a file "m.txt" are siblings.
-        // Component-wise order puts everything under m/ before m.txt, and m.txt before mz.txt.
+        // A directory "m" and a file "m.txt" are siblings: component-wise order puts all of m/ before m.txt,
+        // and m.txt before mz.txt.
         write(root.resolve("docs/a.txt"), "a", old);
         write(root.resolve("docs/m/x.txt"), "x", old);
         write(root.resolve("docs/m/y.txt"), "y", old);
@@ -186,8 +177,6 @@ class LocalFsConnectorTest {
         Knowledge kn = knowledgeAt(root, anchor);
         SourceIterable docs = iterable(kn, "docs");
 
-        // Page through in steps of 2; the cursor must skip the consumed spine (e.g. all of m/)
-        // and resume exactly where it left off.
         List<String> all = new ArrayList<>();
         CursorPosition pos = CursorPosition.start();
         int pages = 0;
@@ -217,7 +206,6 @@ class LocalFsConnectorTest {
         assertEquals(List.of("only.txt"), titles(page));
         assertFalse(page.hasMore());
 
-        // resuming past the last item yields nothing and stays terminal
         GrabResult drained = connector.grab(req(kn, rootIt, CursorDirection.BACKWARD, page.cursor(), 10));
         assertTrue(drained.items().isEmpty());
         assertFalse(drained.hasMore());
@@ -237,8 +225,6 @@ class LocalFsConnectorTest {
 
     @Test
     void reIndexesFromTheStoredPathWithoutFetching() {
-        // Nothing here is a copy: externalId and fileRef are the user's own file, which is exactly
-        // what a staging connector cannot claim.
         assertEquals(ReindexMode.REINDEX_ONLY, connector.defaultReindexMode());
     }
 
@@ -269,7 +255,6 @@ class LocalFsConnectorTest {
                 "no connector emits tombstones, so this is the one place a removal is noticed");
     }
 
-    /** The entity the walk would have produced — all fetchOne reads is externalId. */
     private static io.personalassistant.domain.model.Entity entityFor(RawItem item) {
         return TestData.ingestedFile("ent_fs", "kn_fs", item.externalId(), item.fileRef(),
                 item.contentType());

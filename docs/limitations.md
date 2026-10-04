@@ -307,29 +307,54 @@ digest that is appended to rather than recomputed.
 
 ## L9 — Rate-limit counters are per-process and lost on restart
 
-**Area:** Outbound rate limiting · `common.ratelimit.SlidingWindowRateLimiter`
+> **Closed.** The counters now live in Redis (`common.ratelimit.RedisRateLimiter`,
+> `app.ratelimit.store=redis`). What follows records the problem and the shape of the fix; the behaviour
+> is documented in [`providers.md`](./providers.md) § Rate limiting the model endpoints.
 
-**What:** The rolling windows and the `Retry-After` pauses live in a `ConcurrentHashMap` inside one
-`@ApplicationScoped` bean. Two consequences follow. A restart begins with every window empty, so the
-instant after a restart the app may send one full burst beyond what the window should have allowed.
-And a second node would keep its own counters, so an *n*-node deployment enforces roughly *n* times the
-configured rate.
+**Area:** Outbound rate limiting · `common.ratelimit` (`SlidingWindowRateLimiter`, `RedisRateLimiter`,
+`RateLimiterSelector`)
 
-The *policy* is not affected — that is stored on the connection in Mongo, or in `application.properties`
-— only the counters are.
+**What it was:** The rolling windows and the `Retry-After` pauses lived in a `ConcurrentHashMap` inside
+one `@ApplicationScoped` bean, so every restart began with every window empty, and a second node would
+have enforced *n* times the configured rate. The policy was never affected — only the counters.
 
-**Impact:** Low today, and deliberately so. This is the same single-node assumption `InMemoryPermitService`
-already makes (invariant 7), and the deployment is single-node; a one-off burst after a restart is well
-inside what any published quota tolerates. It becomes real the moment a second replica is added, which
-would also break permits.
+This entry used to call that "one extra burst, well inside any published quota". That is true of a
+per-second window and wrong for a daily one. With `app.ratelimit.embedding.rules=6/1m,60/1d`, each
+restart handed out a fresh day of allowance that the provider had not, while Gemini's own trailing day
+kept counting, so the calls after a restart were 429s the limiter believed it had avoided.
+`quarkusDev` live reload rebuilds `@ApplicationScoped` beans too, so in development every code edit did
+the same. The "hot-path write" objection did not hold either: one in-memory Redis round trip is small
+beside the outbound HTTP call it guards.
 
-**Why we left it:** persisting a counter that changes on every outbound call would put a write on the hot
-path of every request, to protect against an event (restart) that costs at most one window's worth of
-allowance. The `RateLimiter` port exists precisely so this can be swapped without touching a caller.
+**The fix.** `RedisRateLimiter` keeps one sorted set per (key, rule), `rl:w:<key>#<windowSeconds>`,
+scored by admission millis. A single Lua script per reservation reads Redis `TIME`, evicts expired
+admissions, checks every rule and records the admission in all windows or none. That keeps the
+all-or-nothing rule atomic across callers and processes, and clock skew between processes cannot split
+a window. Each write sets `PEXPIRE` to the window length, so idle windows expire without a sweeper. A
+penalty is `rl:p:<key>` with a `PX` TTL that a later, shorter `Retry-After` never shortens.
 
-**Candidate approach:** a Redis-backed `RateLimiter` (a Lua sorted-set window, or `INCR` plus `EXPIRE`
-if the fixed-window approximation is acceptable), introduced at the same time as the Redis `PermitService` the concurrency side already
-anticipates — they share the same trigger and should not be done separately.
+Everything outside the counting stayed in one place: waiting, fail-fast, deferral past
+`max-wait-seconds` and the `max-penalty-seconds` clamp moved into `AbstractRateLimiter`, which both
+stores extend. `RateLimiterSelector` picks the store from `app.ratelimit.store`. `memory` is kept for
+tests (`%test`) and for a setup without Redis. An unknown value fails startup, and a Redis outage
+propagates rather than falling back to memory, because a silent fallback is this exact bug with nothing
+to show for it. Redis runs from `docker-compose.yml` with `--appendonly yes`, so a daily window also
+survives `docker compose down`.
+
+**What remains:**
+
+- **Permits (invariant 7) and OAuth state (L12) are still per-process.** The original plan was to move
+  all three together. Only the counters had a single-node cost today, and losing permits on restart is
+  what you want anyway: a crashed holder's permits come back.
+- **Calls made with the same API key from outside this app are invisible** to any local counter. The
+  429 → `penalize` path still covers them.
+- **The script has no automated test**, since tests here run without external services. Check it by
+  hand: charge the embedding bucket until indexing defers, then confirm
+  `docker exec psa-redis redis-cli ZCARD 'rl:w:embedding:openai-embed#86400'` holds its count across a
+  restart, a live reload and `docker compose down`/`up`. `SlidingWindowRateLimiterTest` covers the shared
+  loop.
+- **Running with `app.ratelimit.store=memory` and no Redis** still has the Redis client on the classpath,
+  so its readiness check reports DOWN. Also set `quarkus.redis.health.enabled=false` in that setup.
 
 ---
 
@@ -347,7 +372,8 @@ tasks are user-written and a digest can be pointed at any of them.
 
 **Impact:** Low today, and grows with use.
 
-**Workaround:** Pause the digest, lower `maxSources`, or point the task at a cheaper profile.
+**Workaround:** Set the digest's `useLlm` to `false` (the task is kept for when it goes back on), lower
+`maxSources`, or point the task at a cheaper profile.
 
 ---
 
@@ -425,7 +451,8 @@ did not happen to reach the node that issued the token.
 
 **Impact:** Negligible today. The window is the seconds a user spends on a consent screen, the cost of
 losing it is one click on Connect, and the deployment is single-node — the same assumption
-`InMemoryPermitService` already makes (invariant 7) and `SlidingWindowRateLimiter` makes in L9. The
+`InMemoryPermitService` already makes (invariant 7), and that rate-limit counters made until L9 moved them
+to Redis. The
 security property the token exists for is unaffected: an unknown token is rejected either way, so a
 lost map fails closed, never open.
 

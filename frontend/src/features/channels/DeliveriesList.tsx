@@ -12,7 +12,6 @@ import { useDeliveries, useRetryDelivery } from '@/hooks/queries'
 import { absoluteTime, relativeTime } from '@/lib/utils'
 import { notifyMutationError } from './notifyTest'
 
-/** A channel's recent deliveries, newest first. Polls while any is still queued. */
 export function DeliveriesList({ channelId }: { channelId: string }) {
   const { data, isLoading, error, refetch } = useDeliveries(channelId)
   const retry = useRetryDelivery()

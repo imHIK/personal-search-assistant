@@ -1,11 +1,8 @@
 package io.personalassistant.ingestion.connector.google;
 
 /**
- * Raised when a Google REST call (Gmail / Drive / OAuth token) returns a non-2xx status or the
- * transport fails. Connectors let this propagate out of {@code grab}; the ingestion runner then
- * records the failure on the cursor and applies its retry/backoff policy — so a transient 429/5xx
- * is retried like any other ingestion error, and a hard 401/403 eventually parks the cursor
- * {@code FAILED} for intervention.
+ * Propagates out of grab so the runner's retry applies: a transient 429 or 5xx is retried, and a hard 401 or
+ * 403 eventually parks the cursor FAILED.
  */
 public class GoogleApiException extends RuntimeException {
 
@@ -21,16 +18,12 @@ public class GoogleApiException extends RuntimeException {
         this.statusCode = -1;
     }
 
-    /** HTTP status that triggered this, or {@code -1} for a transport-level failure. */
+    /** -1 for a transport-level failure. */
     public int statusCode() {
         return statusCode;
     }
 
-    /**
-     * Whether the id simply does not resolve any more. Only the re-list paths ({@code fetchOne})
-     * treat this as an answer rather than an error — a walk never asks for a specific id, so anywhere
-     * else a 404 is a genuine fault worth retrying.
-     */
+    /** Only fetchOne treats a 404 as an answer; anywhere else it is a fault worth retrying. */
     public boolean isNotFound() {
         return statusCode == 404;
     }

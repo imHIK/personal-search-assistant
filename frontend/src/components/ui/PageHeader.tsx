@@ -16,7 +16,6 @@ export function PageHeader({
   actions?: React.ReactNode
   backTo?: string
   backLabel?: string
-  /** Badges or state pills rendered beside the title. */
   meta?: React.ReactNode
   className?: string
 }) {

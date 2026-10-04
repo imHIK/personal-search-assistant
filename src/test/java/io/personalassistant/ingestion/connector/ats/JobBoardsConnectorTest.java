@@ -19,19 +19,14 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * Company-to-platform resolution, and the location filter that keeps a global board from costing ten
- * times what it is worth in embeddings.
- */
 class JobBoardsConnectorTest {
 
-    /** A platform that hosts a fixed set of handles and returns a fixed board for each. */
     private static final class StubPlatform implements BoardPlatform {
         private final String id;
         private final Map<String, List<RawItem>> boards;
         int probes;
-        /** Test observability: the filter the connector handed down as a hint. */
         BoardFilter lastFilter;
+        String lastCompany;
 
         StubPlatform(String id, Map<String, List<RawItem>> boards) {
             this.id = id;
@@ -51,8 +46,9 @@ class JobBoardsConnectorTest {
         }
 
         @Override
-        public List<RawItem> fetch(String handle, BoardFilter filter) {
+        public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
             lastFilter = filter;
+            lastCompany = company;
             return boards.getOrDefault(handle, List.of());
         }
     }
@@ -75,7 +71,6 @@ class JobBoardsConnectorTest {
                 "sum:" + id, postedAt, Map.of(), "body", null, metadata, null, false);
     }
 
-    /** Four postings spanning title, place, remote and age, used by the filter tests. */
     private static final List<RawItem> FILTERABLE = List.of(
             posting("engineer-blr", "Bengaluru, India", false, Instant.now()),
             posting("engineer-remote", "London, UK", true, Instant.now()),
@@ -85,7 +80,7 @@ class JobBoardsConnectorTest {
 
     private static final List<RawItem> BOARD = List.of(
             posting("bengaluru", "Bengaluru, India"),
-            posting("city-only", "Bengaluru"),   // no country — the common real-world shape
+            posting("city-only", "Bengaluru"),
             posting("newyork", "New York, NY"),
             posting("remote-us", "Remote - US"),
             posting("unstated", null));
@@ -110,7 +105,6 @@ class JobBoardsConnectorTest {
         return grab(company, knowledge(List.of(company), locations), connector());
     }
 
-    /** Grab with arbitrary inputs, for the filter dimensions beyond locations. */
     private List<String> grabWith(String company, Map<String, Object> extraInputs) {
         Map<String, Object> inputs = new java.util.LinkedHashMap<>(extraInputs);
         inputs.put(JobBoardsConnector.COMPANIES_INPUT, List.of(company));
@@ -126,8 +120,6 @@ class JobBoardsConnectorTest {
                 .items().stream().map(RawItem::externalId).toList();
     }
 
-    // ---- resolution --------------------------------------------------------------------------
-
     @Test
     void resolvesEachCompanyToThePlatformHostingIt() {
         List<SourceIterable> iterables = connector().discover(knowledge(List.of("acme", "globex"), null));
@@ -140,8 +132,6 @@ class JobBoardsConnectorTest {
 
     @Test
     void grabUsesTheResolvedPlatformFromAttributesWithoutReProbing() {
-        // Re-probing every platform on every lease would be quadratic; the attributes exist to
-        // carry the answer forward.
         JobBoardsConnector connector = connector();
         Knowledge kn = knowledge(List.of("globex"), null);
         SourceIterable iterable = connector.discover(kn).get(0);
@@ -155,8 +145,6 @@ class JobBoardsConnectorTest {
 
     @Test
     void anExplicitPlatformPrefixPinsTheChoice() {
-        // For a company with boards on two platforms mid-migration, probe order would otherwise
-        // decide silently.
         List<SourceIterable> iterables = connector().discover(knowledge(List.of("lever:globex"), null));
 
         Assertions.assertEquals("lever", iterables.get(0).attributes().get("platform"));
@@ -180,20 +168,15 @@ class JobBoardsConnectorTest {
 
     @Test
     void verifyRejectsAKnowledgeWhereNothingResolves() {
-        // All of them failing is a typo or an outage, not a real "none use a supported platform" —
-        // activating a knowledge that can never produce anything helps nobody.
         Assertions.assertThrows(IllegalArgumentException.class,
                 () -> connector().verify(knowledge(List.of("nowhere", "alsonowhere"), null)));
     }
 
     @Test
     void verifyAcceptsAPartialMiss() {
-        // Plenty of companies are on none of these platforms; that must not block the rest.
         Assertions.assertDoesNotThrow(
                 () -> connector().verify(knowledge(List.of("acme", "nowhere"), null)));
     }
-
-    // ---- connector shape ----------------------------------------------------------------------
 
     @Test
     void isForwardOnlyBecauseAJobBoardHasNoHistoryWorthWalking() {
@@ -203,14 +186,11 @@ class JobBoardsConnectorTest {
 
     @Test
     void optsIntoARetentionWindowLongerThanItsPollInterval() {
-        // A window shorter than the cadence would delete postings the very next poll re-creates.
         JobBoardsConnector connector = connector();
         Duration retention = connector.defaultRetention().orElseThrow();
 
         Assertions.assertTrue(retention.compareTo(connector.defaultSchedule().interval()) > 0);
     }
-
-    // ---- location filter ----------------------------------------------------------------------
 
     @Test
     void keepsOnlyPostingsMatchingATerm() {
@@ -219,23 +199,17 @@ class JobBoardsConnectorTest {
 
     @Test
     void theCountryAloneMissesCityOnlyLocations() {
-        // Measured on the live Stripe board: 27 of its 36 Indian roles are filed as plain "Bengaluru"
-        // with no country, so filtering on "India" alone keeps 3 of 36 — a 92% silent miss. The fix is
-        // to list cities, which is what the console hint says; the matching itself is correct.
         Assertions.assertFalse(grab("acme", List.of("India")).contains("city-only"));
         Assertions.assertTrue(grab("acme", List.of("India", "Bengaluru")).contains("city-only"));
     }
 
     @Test
     void remoteIsABluntTermThatAlsoMatchesOtherCountries() {
-        // "Remote" added ~100 non-India roles to Stripe by matching "Remote - US".
         Assertions.assertTrue(grab("acme", List.of("Remote")).contains("remote-us"));
     }
 
     @Test
     void aPostingWithNoLocationSurvivesTheFilter() {
-        // Boards leave the field blank often enough that dropping those would lose real roles on a
-        // missing value, and nothing distinguishes an irrelevant location from an unstated one.
         Assertions.assertTrue(grab("acme", List.of("India")).contains("unstated"));
         Assertions.assertTrue(grab("acme", List.of("nowhere-at-all")).contains("unstated"));
     }
@@ -252,12 +226,8 @@ class JobBoardsConnectorTest {
         Assertions.assertEquals(List.of("bengaluru", "unstated"), grab("acme", "India"));
     }
 
-    // ---- title / age / remote filters ----------------------------------------------------------
-
     @Test
     void aTitleIncludeListNarrowsTheBoard() {
-        // The strongest lever there is: on a real 71-board corpus the location terms alone leave
-        // ~34k chunks to embed and adding role terms takes it to ~7k.
         Assertions.assertEquals(List.of("engineer-blr", "engineer-remote", "engineer-stale"),
                 grabWith("filterable", Map.of(JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("engineer"))));
     }
@@ -271,16 +241,15 @@ class JobBoardsConnectorTest {
     }
 
     @Test
-    void includeRemoteAdmitsARemoteRoleFiledOutsideTheNamedPlaces() {
-        Assertions.assertEquals(List.of("engineer-blr", "manager-blr", "engineer-stale"),
-                grabWith("filterable", Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"))),
-                "the London remote role is out");
-        Assertions.assertEquals(
-                List.of("engineer-blr", "engineer-remote", "manager-blr", "engineer-stale"),
+    void includeRemoteDoesNotAdmitARemoteRoleFiledUnderAnotherPlace() {
+        List<String> expected = List.of("engineer-blr", "manager-blr", "engineer-stale");
+        Assertions.assertEquals(expected,
+                grabWith("filterable", Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"))));
+        Assertions.assertEquals(expected,
                 grabWith("filterable", Map.of(
                         JobBoardsConnector.LOCATIONS_INPUT, List.of("bengaluru"),
                         JobBoardsConnector.INCLUDE_REMOTE_INPUT, true)),
-                "and back in once remote counts as a place");
+                "London names a place, so the place terms still apply");
     }
 
     @Test
@@ -291,26 +260,34 @@ class JobBoardsConnectorTest {
 
     @Test
     void anUnparseableAgeLimitMeansNoLimitRatherThanAnEmptyBoard() {
-        // A knowledge that silently indexes nothing is far worse than one that ignores a bad setting.
         Assertions.assertEquals(4, grabWith("filterable",
                 Map.of(JobBoardsConnector.MAX_AGE_DAYS_INPUT, "not-a-number")).size());
     }
 
     @Test
     void theFilterIsHandedToThePlatformAsAHint() {
-        // The per-posting platforms use it to skip detail calls; Workday and Oracle turn the place
-        // terms into a server-side query. The connector still re-applies it authoritatively.
         grabWith("filterable", Map.of(JobBoardsConnector.TITLE_INCLUDE_INPUT, List.of("Engineer")));
 
         Assertions.assertEquals(List.of("engineer"), greenhouse.lastFilter.titleInclude());
     }
 
-    // ---- membershipSignature -------------------------------------------------------------------
+    @Test
+    void theCompanyLabelIsHandedToThePlatformUnderItsEntry() {
+        grabWith("lever:globex", Map.of(JobBoardsConnector.COMPANY_LABELS_INPUT,
+                Map.of("lever:globex", " Globex Corporation ", "globex", "wrong key")));
+
+        Assertions.assertEquals("Globex Corporation", lever.lastCompany);
+    }
+
+    @Test
+    void anEntryWithNoLabelHandsDownNull() {
+        grabWith("acme", Map.of(JobBoardsConnector.COMPANY_LABELS_INPUT, Map.of("globex", "Globex")));
+
+        Assertions.assertNull(greenhouse.lastCompany);
+    }
 
     @Test
     void signatureChangesWhenLocationsChange() {
-        // Without this a widened filter never re-walks, and postings that now match are silently never
-        // picked up — change detection alone never revisits a board it has already seen.
         JobBoardsConnector connector = connector();
 
         Assertions.assertNotEquals(
@@ -321,7 +298,6 @@ class JobBoardsConnectorTest {
 
     @Test
     void signatureIgnoresTheCompanyList() {
-        // Companies are a discovery-set dimension: adding one must not reset every surviving cursor.
         JobBoardsConnector connector = connector();
 
         Assertions.assertEquals(
@@ -343,12 +319,8 @@ class JobBoardsConnectorTest {
                         Map.of(JobBoardsConnector.LOCATIONS_INPUT, List.of("  india  "))));
     }
 
-    // ---- lookup --------------------------------------------------------------------------------
-
     @Test
     void lookupReportsThePlatformAndPostingCount() {
-        // The count is free — every platform's existence check already carries one — and it is what
-        // tells you whether a company is worth adding to the watchlist.
         List<JobBoardsConnector.CompanyLookup> found = connector().lookup(List.of("acme", "globex"));
 
         Assertions.assertEquals("greenhouse", found.get(0).platform());
@@ -358,7 +330,6 @@ class JobBoardsConnectorTest {
 
     @Test
     void lookupReportsAMissRatherThanOmittingIt() {
-        // Knowing a company is unreachable is the point of asking.
         List<JobBoardsConnector.CompanyLookup> found = connector().lookup(List.of("nowhere"));
 
         Assertions.assertEquals(1, found.size());

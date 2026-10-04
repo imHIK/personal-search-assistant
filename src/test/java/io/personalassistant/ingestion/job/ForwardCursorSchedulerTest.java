@@ -24,11 +24,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The scheduler must obey each knowledge's resolved cadence, not re-arm everything every tick:
- * arm only knowledges whose {@code nextSyncDueAt} has arrived, then roll that due time forward by
- * the resolved schedule — and never busy-loop (reschedule even when there was nothing to arm).
- */
 class ForwardCursorSchedulerTest {
 
     private static final SourceType TYPE = SourceType.LOCAL_FS;
@@ -41,8 +36,6 @@ class ForwardCursorSchedulerTest {
     void setUp() {
         knowledge = new InMemoryKnowledgeRepository();
         cursors = new InMemoryCursorRepository();
-        // Connector default = NONE, global default = 1 day; tests that need precise timing use a
-        // custom per-knowledge schedule so the assertion is exact.
         ScheduleResolver resolver =
                 new ScheduleResolver(new SingleConnectorRegistry(new StubConnector(TYPE, List.of())), "1d", "");
         scheduler = new ForwardCursorScheduler(knowledge, cursors, resolver);
@@ -67,7 +60,7 @@ class ForwardCursorSchedulerTest {
 
     @Test
     void armsDueKnowledgeAndRollsDueTimeForward() {
-        schedule("k1", null, "30m", true); // nextSyncDueAt null => due now
+        schedule("k1", null, "30m", true);
         forwardCursor("k1", CursorStatus.IDLE);
 
         Instant before = Instant.now();
@@ -109,8 +102,6 @@ class ForwardCursorSchedulerTest {
 
     @Test
     void reschedulesEvenWhenNothingWasArmed() {
-        // Forward cursor still AVAILABLE (not yet caught up to IDLE): nothing to arm, but the due
-        // time must still advance so the scheduler doesn't re-evaluate this knowledge every tick.
         schedule("k1", null, "30m", true);
         forwardCursor("k1", CursorStatus.AVAILABLE);
 
@@ -123,7 +114,7 @@ class ForwardCursorSchedulerTest {
 
     @Test
     void onlyArmsTheKnowledgeThatIsDue() {
-        schedule("due", null, "30m", true); // due now
+        schedule("due", null, "30m", true);
         schedule("later", null, "30m", true);
         knowledge.updateNextSyncDueAt("later", Instant.now().plus(Duration.ofHours(1)));
         forwardCursor("due", CursorStatus.IDLE);

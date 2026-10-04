@@ -15,19 +15,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Greenhouse job-board connector. One iterable per board token (the {@code <token>} in
- * {@code boards.greenhouse.io/<token>}); {@code jobs?content=true} returns the whole board with
- * descriptions in a single call, which is what makes the snapshot shape work — see
- * {@link SnapshotBoardConnector}.
- */
 @ApplicationScoped
 public class GreenhousePlatform implements BoardPlatform {
 
-    /**
-     * Preference order when the same role is found on several sources. A direct ATS board is the
-     * canonical listing and carries the real apply URL, so it outranks any aggregator.
-     */
+    /** A direct board outranks any aggregator. */
     private static final int SOURCE_RANK = 100;
 
     private final GreenhouseApi api;
@@ -46,10 +37,10 @@ public class GreenhousePlatform implements BoardPlatform {
     public OptionalInt countPostings(String handle) {
         try {
             JsonNode response = api.listJobs(handle);
-            if (response == null || !response.has("jobs")) {
-                return OptionalInt.empty();
-            }
-            return OptionalInt.of(response.path("jobs").size());
+            int jobs = response == null ? 0 : response.path("jobs").size();
+            // An empty board is a miss: a dormant one would otherwise shadow the company's live board
+            // on a platform probed later.
+            return jobs > 0 ? OptionalInt.of(jobs) : OptionalInt.empty();
         } catch (RuntimeException e) {
             // A miss is the normal outcome for all but one platform, so it must not propagate.
             return OptionalInt.empty();
@@ -57,13 +48,12 @@ public class GreenhousePlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, BoardFilter filter) {
-        // Hint ignored: one request returns the whole board either way, so filtering
-        // early would save nothing. The connector filters what comes back.
+    public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
+        // Hint ignored: one request returns the whole board either way.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
-            RawItem item = toItem(boardId, job);
+            RawItem item = toItem(boardId, company, job);
             if (item != null) {
                 items.add(item);
             }
@@ -71,7 +61,7 @@ public class GreenhousePlatform implements BoardPlatform {
         return items;
     }
 
-    private RawItem toItem(String boardId, JsonNode job) {
+    private RawItem toItem(String boardId, String label, JsonNode job) {
         String id = job.path("id").asText(null);
         String title = job.path("title").asText(null);
         if (id == null || title == null) {
@@ -80,9 +70,9 @@ public class GreenhousePlatform implements BoardPlatform {
         String updatedAt = job.path("updated_at").asText("");
         String location = job.path("location").path("name").asText(null);
         String applyUrl = job.path("absolute_url").asText(null);
-        String company = companyOf(job, boardId);
-        // content is HTML-escaped in Greenhouse's payload; the HTML parser at index time unescapes
-        // and strips it, so the entity keeps the source form rather than a lossy pre-flattened one.
+        String company = companyOf(job, label, boardId);
+        // content is HTML-escaped; the HTML parser unescapes it at index time, so the entity keeps the source
+        // form.
         String content = job.path("content").asText("");
         String descriptionText = AtsNormalization.plainText(content);
 
@@ -100,14 +90,6 @@ public class GreenhousePlatform implements BoardPlatform {
         putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         Instant postedAt = AtsNormalization.instantOrNull(job.path("first_published").asText(null));
         putIfPresent(metadata, "postedAt", postedAt);
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            // Always recorded with the range: compMin/compMax are plain numbers in the index, so a
-            // corpus mixing INR and USD makes a bare numeric filter mean two things at once.
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);
@@ -120,25 +102,28 @@ public class GreenhousePlatform implements BoardPlatform {
                 "text/html",
                 title,
                 applyUrl,
-                // NOT updated_at. It moves in bulk — 178 of GitLab's 227 postings share it to the
-                // second — so trusting it re-embedded three quarters of a board for a change that
-                // never touched the text. The stamp covers what is actually indexed instead; see
-                // AtsNormalization.changeStamp.
-                "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
+                // Not updated_at: it moves in bulk (178 of GitLab's 227 postings share it), so the stamp
+                // covers what is indexed instead.
+                AtsNormalization.withCompany(
+                        "gh:" + id + ";v:" + AtsNormalization.changeStamp(title, location, content),
+                        company, companyOf(job, null, boardId)),
                 AtsNormalization.instantOrNull(updatedAt),
                 raw,
                 content,
                 null,
                 metadata,
-                // Greenhouse states no close date, so entity-level expiry is always absent here and
-                // the knowledge-level retention window governs.
+                // No close date is published, so the retention window governs.
                 null,
                 false);
     }
 
-    private static String companyOf(JsonNode job, String boardId) {
+    /**
+     * The board's own company_name first: a real name, it outranks even the label, which only replaces the
+     * token.
+     */
+    private static String companyOf(JsonNode job, String label, String boardId) {
         String name = job.path("company_name").asText(null);
-        return name == null || name.isBlank() ? boardId : name;
+        return name == null || name.isBlank() ? AtsNormalization.company(label, boardId) : name;
     }
 
     private static void putIfPresent(Map<String, Object> metadata, String key, Object value) {

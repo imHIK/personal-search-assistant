@@ -86,9 +86,6 @@ class DefaultConnectionServiceTest {
 
     @Test
     void createTranslatesAConnectorsOwnExceptionIntoTheBadRequestShape() {
-        // A connector raises its own transport type (GoogleApiException, AtsApiException, ...). The
-        // resource only maps IllegalArgumentException, so anything else used to escape as a bare 500
-        // with no body and the console had nothing to show the user.
         connector.failVerifyConnectionWith(new IllegalStateException("token refresh failed: invalid_grant"));
 
         IllegalArgumentException thrown =
@@ -114,8 +111,7 @@ class DefaultConnectionServiceTest {
     @Test
     void createRejectsConnectorThatNeedsNoConnection() {
         connector.withRequiresConnection(false);
-        // Connection kinds are read from the connectors once, at construction — a connector does not change
-        // whether it needs credentials at runtime — so the service is rebuilt over the changed stub.
+        // Connection kinds are read at construction, so the service is rebuilt over the changed stub.
         service = new DefaultConnectionService(connections, knowledge, channels,
                 new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
         assertThrows(IllegalArgumentException.class, () -> create("pointless", false));
@@ -132,7 +128,7 @@ class DefaultConnectionServiceTest {
 
     @Test
     void deletingTheDefaultPromotesAnotherConnection() {
-        Connection first = create("work", false);   // default
+        Connection first = create("work", false);   // the first of a type is the default
         Connection second = create("personal", false);
         service.delete(first.id());
         assertEquals(second.id(), connections.findDefault("SLACK").orElseThrow().id(),
@@ -157,7 +153,13 @@ class DefaultConnectionServiceTest {
         assertEquals("Work Slack", connections.findById(c.id()).orElseThrow().name());
     }
 
-    // ---- rate limits -------------------------------------------------------------------------
+    @Test
+    void updateReverifiesWhenConfigChanges() {
+        Connection c = create("work", false);
+        int before = connector.verifyConnectionCalls;
+        service.update(c.id(), new ConnectionEdit(null, null, Map.of("model", "other"), null));
+        assertEquals(before + 1, connector.verifyConnectionCalls, "changed config re-verifies");
+    }
 
     @Test
     void anAccountsRateLimitRoundTrips() {
@@ -183,10 +185,6 @@ class DefaultConnectionServiceTest {
         assertEquals(before, connector.verifyConnectionCalls, "an unchanged auth blob is not re-verified");
     }
 
-    /**
-     * Null already means "leave unchanged" on a PATCH, so removal has to be said explicitly. Without
-     * this an account's limit could be set but never taken off again.
-     */
     @Test
     void anEmptyRuleListClearsALimitWhileNullLeavesItAlone() {
         Connection c = service.create(new NewConnection("work", "SLACK", Map.of("token", "t"),
@@ -207,8 +205,6 @@ class DefaultConnectionServiceTest {
                 () -> service.update("conn_missing", new ConnectionEdit("x", null, null, null)));
     }
 
-    // ---- test() -------------------------------------------------------------------------------
-
     @Test
     void testMarksAWorkingConnectionActive() {
         Connection created = create("Work", true);
@@ -222,8 +218,6 @@ class DefaultConnectionServiceTest {
 
     @Test
     void testRecordsBadCredentialsRatherThanThrowing() {
-        // A failed check is a result to display, not an error — and the scheduled sweep has to carry
-        // on to the next connection.
         Connection created = create("Work", true);
         connector.failVerifyConnectionWith(new IllegalStateException("invalid_grant"));
 
@@ -237,7 +231,6 @@ class DefaultConnectionServiceTest {
 
     @Test
     void testLeavesADisabledConnectionDisabled() {
-        // DISABLED is an operator decision; a passing credential check must not silently re-enable it.
         Connection created = create("Work", true);
         connections.save(created.withStatus(ConnectionStatus.DISABLED, null));
 

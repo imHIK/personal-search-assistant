@@ -25,7 +25,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Scriptable {@link SourceConnector} for ingestion tests: queue pages per direction. */
 public class StubConnector implements SourceConnector {
 
     private final SourceType type;
@@ -36,21 +35,18 @@ public class StubConnector implements SourceConnector {
     private boolean dynamicIterables;
     private SyncSchedule defaultSchedule = SyncSchedule.NONE;
     private Optional<Duration> defaultRetention = Optional.empty();
-    private Set<String> membershipKeys; // null = signature hashes the whole inputs map (default)
+    private Set<String> membershipKeys; // null = signature hashes the whole inputs map
     private boolean requiresConnection;
     private RuntimeException verifyConnectionFailure;
     private ReindexMode reindexMode = ReindexMode.REINDEX_ONLY;
     private final Map<String, Optional<RawItem>> fetchOneResults = new LinkedHashMap<>();
 
-    /** Test observability: how many times discover()/verify()/verifyConnection() ran, and the last iterable grabbed. */
     public int discoverCalls;
     public int verifyCalls;
     public int verifyConnectionCalls;
     public String lastGrabIterableId;
     public Map<String, Object> lastGrabAttributes;
-    /** How many times materialize() ran — i.e. how many items the runner decided were worth fetching. */
     public int materializeCalls;
-    /** External ids passed to fetchOne(), in order — the single-entity re-fetch path. */
     public final List<String> fetchOneCalls = new ArrayList<>();
 
     public StubConnector(SourceType type, List<SourceIterable> iterables) {
@@ -63,13 +59,12 @@ public class StubConnector implements SourceConnector {
         return this;
     }
 
-    /** Declare this connector's content staged (FETCH_AND_REINDEX) rather than durable. */
     public StubConnector withReindexMode(ReindexMode mode) {
         this.reindexMode = mode;
         return this;
     }
 
-    /** What fetchOne() returns for an external id; an absent entry means "gone at the source". */
+    /** An id with no entry is gone at the source. */
     public StubConnector withFetchOne(String externalId, RawItem item) {
         fetchOneResults.put(externalId, Optional.ofNullable(item));
         return this;
@@ -80,19 +75,16 @@ public class StubConnector implements SourceConnector {
         return this;
     }
 
-    /** Make {@link #discover} throw, to exercise activation/reconcile failure handling. */
     public StubConnector failDiscoveryWith(RuntimeException failure) {
         this.discoverFailure = failure;
         return this;
     }
 
-    /** Simulate a new iterable appearing at the source (for reconcile tests). */
     public StubConnector addIterable(SourceIterable iterable) {
         iterables.add(iterable);
         return this;
     }
 
-    /** Simulate an iterable being deleted at the source (for reconcile-prune tests). */
     public StubConnector removeIterable(String iterableId) {
         iterables.removeIf(it -> it.iterableId().equals(iterableId));
         return this;
@@ -103,28 +95,21 @@ public class StubConnector implements SourceConnector {
         return this;
     }
 
-    /** Make this stub behave like a credentialed connector (needs a Connection). */
     public StubConnector withRequiresConnection(boolean requires) {
         this.requiresConnection = requires;
         return this;
     }
 
-    /** Make {@link #verifyConnection} throw, to exercise create/verify failure handling. */
     public StubConnector failVerifyConnectionWith(RuntimeException failure) {
         this.verifyConnectionFailure = failure;
         return this;
     }
 
-    /** Set the connector-level default schedule reported by {@link #defaultSchedule()}. */
     public StubConnector withDefaultSchedule(SyncSchedule schedule) {
         this.defaultSchedule = schedule == null ? SyncSchedule.NONE : schedule;
         return this;
     }
 
-    /**
-     * Restrict {@link #membershipSignature} to only these input keys, so tests can make a
-     * membership-affecting change (touch a listed key) vs. a cosmetic one (touch any other key).
-     */
     public StubConnector withMembershipKeys(String... keys) {
         this.membershipKeys = new LinkedHashSet<>(Arrays.asList(keys));
         return this;
@@ -150,7 +135,6 @@ public class StubConnector implements SourceConnector {
         return dynamicIterables;
     }
 
-    /** Set the connector-level default retention reported by {@link #defaultRetention()}. */
     public StubConnector withDefaultRetention(Duration retention) {
         this.defaultRetention = Optional.ofNullable(retention);
         return this;
@@ -224,8 +208,7 @@ public class StubConnector implements SourceConnector {
             failure = null;
             throw toThrow;
         }
-        // The framework no longer passes a direction; recover it from the seed window's shape
-        // (lower-bounded => forward, upper-bounded => backward) to pick the scripted queue.
+        // Direction isn't passed: a lower-bounded seed window is forward, an upper-bounded one backward.
         CursorDirection direction = ctx.seedWindow().hasLo()
                 ? CursorDirection.FORWARD : CursorDirection.BACKWARD;
         Deque<GrabResult> queue = pages.get(direction);

@@ -5,7 +5,6 @@ import io.personalassistant.publishing.Publisher;
 import io.personalassistant.publishing.PublisherRegistry;
 import java.util.Set;
 
-/** A {@link PublisherRegistry} holding exactly one publisher. */
 public class SinglePublisherRegistry implements PublisherRegistry {
 
     private final Publisher publisher;

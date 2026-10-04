@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Personal Search Assistant",
-    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.\n\n**App API** — Knowledge, Connections, Search, Indexing and Health cover every endpoint the app exposes (`api.resource.*` plus the SmallRye Health probes under `/q`).\n\n**Outbound APIs the app calls** — the remaining folders are not the app; they are the third-party and infrastructure APIs it talks to, mirrored request-for-request so you can test each leg in isolation when something upstream breaks:\n- *Google Auth* + *Connector Responses (raw Google API)* — Drive/Gmail ingestion. Run *Google Auth > Refresh access token* first to populate `googleAccessToken`.\n- *Embedding Provider (raw)* — the hosted embedding call the indexing stage makes (`app.embedding.provider=openai-embed`).\n- *LLM Provider (raw)* — the chat-completion call behind `answer: true` (`app.llm.provider=openai-compat`).\n- *OpenSearch (chunk index)* — the queries `OpenSearchSearchIndex` issues against the `chunks` alias.\n\nProvider base URLs, models and index names are collection variables defaulting to the values in `application.properties`; the api-key variables are blank on purpose — fill them from your `GEMINI_API_KEY` / `GROQ_API_KEY` and do not commit them.",
+    "description": "REST API for the Personal Search Assistant (Java 21 + Quarkus). Set the `baseUrl` collection variable to your running instance.\n\n**App API** — Knowledge, Connections, Search, Indexing and Health cover every endpoint the app exposes (`api.resource.*` plus the SmallRye Health probes under `/q`).\n\n**Outbound APIs the app calls** — the remaining folders are not the app; they are the third-party and infrastructure APIs it talks to, mirrored request-for-request so you can test each leg in isolation when something upstream breaks:\n- *Google Auth* + *Connector Responses (raw Google API)* — Drive/Gmail ingestion. Run *Google Auth > Refresh access token* first to populate `googleAccessToken`.\n- *Embedding Provider (raw)* — the hosted embedding call the indexing stage makes (`app.embedding.provider=openai-embed`).\n- *LLM Provider (raw)* — the chat-completion call behind `answer: true` (`app.llm.provider=openai-compat`).\n- *OpenSearch (chunk index)* — the queries `OpenSearchSearchIndex` issues against the `chunks` alias.\n\nProvider base URLs, models and index names are collection variables; the embedding ones default to `application.properties`, and the llm* ones should match the LLM connection you are debugging. The api-key variables are blank on purpose — fill them from your `GEMINI_API_KEY` or the connection's key and do not commit them.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -11,6 +11,7 @@
     { "key": "entityStatus", "value": "INDEXED" },
     { "key": "digestId", "value": "dig_123" },
     { "key": "connectionId", "value": "con_123" },
+    { "key": "taskId", "value": "task_123" },
     { "key": "googleClientId", "value": "" },
     { "key": "googleClientSecret", "value": "" },
     { "key": "googleRefreshToken", "value": "" },
@@ -81,12 +82,14 @@
               "path": ["api", "knowledge", ":id", "entities"],
               "query": [
                 { "key": "status", "value": "{{entityStatus}}", "disabled": true },
+                { "key": "q", "value": "", "disabled": true },
+                { "key": "iterableId", "value": "", "disabled": true },
                 { "key": "limit", "value": "50" },
                 { "key": "offset", "value": "0" }
               ],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "Pages this knowledge's ingested entities, newest-first (updatedAt descending, id as tiebreak). Enable the optional ?status= query param to filter by EntityStatus (INGESTED, INDEXING, INDEXED, FAILED, DELETED); omit it for all. `limit` defaults to 50 and is clamped to 1..200; `offset` defaults to 0. The response is `{ items, total, limit, offset }` where `total` counts every match, not the page. Rows are projections — the raw source payload and the extracted body are never sent. An unknown status name or a negative offset is a 400; an unknown id is a 404."
+            "description": "Pages this knowledge's ingested entities, newest-first (updatedAt descending, id as tiebreak).\n\n?status= takes a COMMA-SEPARATED list of EntityStatus names (INGESTED, INDEXING, INDEXED, FAILED, DELETED) — e.g. status=INGESTED,INDEXING for everything still in flight. Omit it for every status EXCEPT DELETED: a tombstoned entity is on its way out and is not offered as a row unless you name DELETED explicitly.\n\n?q= is a case-insensitive substring matched against the item's title or its externalId (the console shows the id when an item has no title, so both are searched). It is an unindexed regex, but bounded to this one knowledge.\n\n?iterableId= narrows to one group (a company, folder or label) — take the id from List knowledge cursors. REPEAT the param for several (iterableId=a&iterableId=b); it is not comma-separated, because a local folder's id is a path and paths may contain commas. Every row also carries its iterableId.\n\n`limit` defaults to 50 and is clamped to 1..200; `offset` defaults to 0. The response is `{ items, total, limit, offset }` where `total` counts every match of the SAME filter, not the page. Rows are projections — the raw source payload and the extracted body are never sent. An unknown status name or a negative offset is a 400; an unknown id is a 404."
           }
         },
         {
@@ -137,7 +140,40 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             },
-            "description": "Partial edit with patch semantics: a field that is absent (or JSON null) is left unchanged; only fields present with a value change.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nNote: because an omitted field and an explicit null both arrive as null, cron/interval here mean \"unchanged\" — they cannot be cleared back to inherit via this endpoint.\n\nretentionPeriod is a config-class edit: it changes only what a later retention sweep removes, never what is ingested. Like cron/interval it cannot be cleared back to inherit here."
+            "description": "Partial edit with patch semantics, in THREE states: a field that is ABSENT is left unchanged, a field present as JSON null is CLEARED back to inherit-the-default, and anything else is set. The body is read as a tree (api.dto.PatchBody) precisely so absent and null can be told apart.\n\nThat is how the console moves a source off a custom schedule: cron: null clears it, so the preset interval starts winning again. The same holds for interval, every chunking override and retentionPeriod.\n\nname, auth, inputs and type have no empty state and reject an explicit null with a 400; clearing a map means sending {} instead.\n\nAttempting to change the immutable type is a 400; editing a DELETED knowledge is a 409; an unknown id is a 404.\n\nretentionPeriod is a config-class edit: it changes only what a later retention sweep removes, never what is ingested."
+          }
+        },
+        {
+          "name": "Set enrichment task (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enrichTaskId\": \"{{taskId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/knowledge/{{knowledgeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "knowledge",
+                "{{knowledgeId}}"
+              ]
+            },
+            "description": "Points the knowledge at a METADATA task (create one under Tasks). 400 if the task does not exist, is not a METADATA task, or one of its fields is already indexed with a different type. A direct config update like chunking: existing entities are enriched only on 'Reindex a whole knowledge'. Send null to stop enriching; stored values clear on each entity's next pass."
           }
         },
         {
@@ -165,7 +201,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"India job boards\",\n  \"type\": \"JOB_BOARDS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": {\n    \"companies\": [\n      \"paytm\",\n      \"meesho\",\n      \"databricks\",\n      \"sarvam\",\n      \"lever:cred\"\n    ],\n    \"locations\": [\n      \"India\",\n      \"Bengaluru\",\n      \"Bangalore\",\n      \"Hyderabad\",\n      \"Pune\",\n      \"Mumbai\",\n      \"Gurugram\",\n      \"Noida\",\n      \"Chennai\",\n      \"Delhi\"\n    ]\n  },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"chunkingStrategy\": null,\n  \"chunkingMaxSize\": null,\n  \"chunkingOverlap\": null,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": \"14d\"\n}",
+              "raw": "{\n  \"name\": \"India job boards\",\n  \"type\": \"JOB_BOARDS\",\n  \"connectionId\": null,\n  \"auth\": {},\n  \"inputs\": {\n    \"companies\": [\n      \"paytm\",\n      \"meesho\",\n      \"databricks\",\n      \"sarvam\",\n      \"lever:cred\",\n      \"hcbt.fa.em2.oraclecloud.com/CX\"\n    ],\n    \"companyLabels\": {\n      \"lever:cred\": \"CRED\",\n      \"hcbt.fa.em2.oraclecloud.com/CX\": \"Kotak Mahindra Bank\"\n    },\n    \"locations\": [\n      \"India\",\n      \"Bengaluru\",\n      \"Bangalore\",\n      \"Hyderabad\",\n      \"Pune\",\n      \"Mumbai\",\n      \"Gurugram\",\n      \"Noida\",\n      \"Chennai\",\n      \"Delhi\"\n    ]\n  },\n  \"cron\": null,\n  \"interval\": null,\n  \"scheduleEnabled\": true,\n  \"backfillEnabled\": false,\n  \"chunkingStrategy\": null,\n  \"chunkingMaxSize\": null,\n  \"chunkingOverlap\": null,\n  \"chunkingSeparators\": null,\n  \"retentionPeriod\": \"14d\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -173,7 +209,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "knowledge"]
             },
-            "description": "ONE knowledge for every company job board. inputs.companies takes company handles as they appear in the careers URL; Greenhouse, Lever, Ashby and SmartRecruiters are all probed and the platform that hosts each company is resolved once at discovery and recorded on its iterable, so grab never re-probes.\n\nPrefix an entry with a platform to pin it (lever:cred) — useful for a company mid-migration with boards on two platforms, where probe order would otherwise decide silently.\n\ninputs.locations keeps only postings whose location matches one of the terms; omit it to keep every country. LIST THE CITIES, not just \"India\" — 27 of Stripe's 36 Indian roles are filed as plain \"Bengaluru\" with no country, so the country alone keeps 3 of 36. A posting with NO location always survives (unstated is not the same as irrelevant). This is a cost control more than a correctness one: Databricks is 857 postings for 92 Indian ones, and everything kept gets parsed, chunked and embedded.\n\nbackfillEnabled is false because this connector is FORWARD-ONLY: a job board has no history worth walking.\n\nretentionPeriod is what removes closed postings — boards send no tombstone, a role just stops appearing. Leave it null to inherit the connector default of 14 days.\n\nA company that resolves to no platform is skipped and logged; activation only fails if NONE of them resolve.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR."
+            "description": "ONE knowledge for every company job board. inputs.companies takes company handles as they appear in the careers URL; Greenhouse, Lever, Ashby and SmartRecruiters are all probed and the platform that hosts each company is resolved once at discovery and recorded on its iterable, so grab never re-probes.\n\nPrefix an entry with a platform to pin it (lever:cred) — useful for a company mid-migration with boards on two platforms, where probe order would otherwise decide silently.\n\ninputs.companyLabels (optional) maps a companies entry, exactly as written, to the name its postings are filed under as metadata.company. Without one the company is whatever the platform can say — for Oracle HCM that is the site number (CX), for Workday the tenant (ghr), for Lever/Ashby the board token. The console fills it from its catalog; set it by hand for anything else. Relabelling changes the checksum, so the next sync re-ingests that board's postings.\n\ninputs.locations keeps only postings whose location matches one of the terms; omit it to keep every country. LIST THE CITIES, not just \"India\" — 27 of Stripe's 36 Indian roles are filed as plain \"Bengaluru\" with no country, so the country alone keeps 3 of 36. A posting with NO location always survives (unstated is not the same as irrelevant). This is a cost control more than a correctness one: Databricks is 857 postings for 92 Indian ones, and everything kept gets parsed, chunked and embedded.\n\nbackfillEnabled is false because this connector is FORWARD-ONLY: a job board has no history worth walking.\n\nretentionPeriod is what removes closed postings — boards send no tombstone, a role just stops appearing. Leave it null to inherit the connector default of 14 days.\n\nA company that resolves to no platform is skipped and logged; activation only fails if NONE of them resolve.\n\nCheck the response body for status: a failed activation returns HTTP 200 with status ERROR."
           }
         },
         {
@@ -373,6 +409,56 @@
           }
         },
         {
+          "name": "Create LLM connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gemini lite\",\n  \"type\": \"LLM\",\n  \"auth\": {\n    \"apiKey\": \"{{llmApiKey}}\"\n  },\n  \"config\": {\n    \"baseUrl\": \"{{llmBaseUrl}}\",\n    \"model\": \"{{llmModel}}\",\n    \"profile\": \"lite\",\n    \"temperature\": 0.0,\n    \"maxTokens\": 4096\n  },\n  \"rateLimit\": {\n    \"rules\": [\n      {\n        \"permits\": 15,\n        \"windowSeconds\": 60\n      },\n      {\n        \"permits\": 1000,\n        \"windowSeconds\": 86400\n      }\n    ]\n  },\n  \"makeDefault\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/connections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections"
+              ]
+            },
+            "description": "An OpenAI-compatible chat endpoint. This is the only way the app reaches an LLM: there is no app.llm.* fallback, so with no LLM connection answers, digest tasks and enrichment fail. Verification lists {baseUrl}/models and checks the model is offered (400 with the reason otherwise).\n\nconfig.profile is the task profile it serves (lite, answer, …); leave it out and the connection only serves as the type default, which every profile no connection claims falls to. Two connections may not serve one profile. temperature / maxTokens are optional; left out, they are not sent and the vendor default applies.\n\nrateLimit is this account's own window (connection:<id>), so two vendors never share a counter. Set llmBaseUrl / llmModel / llmApiKey first. Resolution order is in docs/providers.md."
+          }
+        },
+        {
+          "name": "List LLM profiles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/llm-profiles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "llm-profiles"
+              ]
+            },
+            "description": "Every profile an LLM connection serves, plus the profiles the bundled tasks ask for (answer, lite). A profile no connection serves runs on the default LLM connection."
+          }
+        },
+        {
           "name": "Test connection",
           "request": {
             "method": "POST",
@@ -417,6 +503,222 @@
       ]
     },
     {
+      "name": "Tasks",
+      "item": [
+        {
+          "name": "List tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks"
+              ]
+            },
+            "description": "Bundled and user tasks. usableInDigest is false for METADATA tasks; usedBy names the digests' search use and the knowledges enriching with a task."
+          }
+        },
+        {
+          "name": "Create metadata task",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Posting facts\",\n  \"mode\": \"SIMPLE\",\n  \"output\": \"METADATA\",\n  \"instruction\": \"Extract the facts a job seeker filters on.\",\n  \"fields\": [\n    {\n      \"name\": \"yoe\",\n      \"type\": \"NUMBER\",\n      \"description\": \"minimum years of experience required\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"skills\",\n      \"type\": \"LIST\",\n      \"description\": \"required technologies\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"visa\",\n      \"type\": \"BOOLEAN\",\n      \"description\": \"visa sponsorship offered\",\n      \"optional\": true\n    },\n    {\n      \"name\": \"level\",\n      \"type\": \"TEXT\",\n      \"optional\": true,\n      \"values\": [\n        \"Junior\",\n        \"Mid\",\n        \"Senior\",\n        \"Staff\"\n      ]\n    }\n  ],\n  \"llmProfile\": \"lite\",\n  \"contextChars\": 24000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks"
+              ]
+            },
+            "description": "A METADATA task runs on each entity of a knowledge that names it (enrichTaskId) while the entity is indexed; the reply becomes entities.enriched and reaches chunks as metadata.<field>. BOOLEAN and LIST are METADATA-only types; values is an optional closed set for TEXT/LIST. Mark a field optional when an item may not state it - a required field with no usable value fails the enrichment. Copy the returned id into the taskId variable."
+          }
+        },
+        {
+          "name": "Update task (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"instruction\": \"Extract the facts a job seeker filters on. Ignore benefits.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Absent = unchanged, null = clear. A task a knowledge enriches with must stay METADATA (409), and its fields are re-mapped in OpenSearch (400 on a type clash). Editing it bumps updatedAt, so the next re-index re-enriches."
+          }
+        },
+        {
+          "name": "Delete task",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "409 while a digest or a knowledge still uses it."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Entities",
+      "item": [
+        {
+          "name": "Query entities (job postings)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entityTypes\": [\n    \"JOB_POSTING\"\n  ],\n  \"knowledgeIds\": [],\n  \"q\": null,\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.company\": [\n      \"Stripe\",\n      \"Cisco\"\n    ],\n    \"metadata.postedAt\": {\n      \"gte\": \"2026-09-24\"\n    },\n    \"enriched.yoe\": {\n      \"lte\": 5\n    },\n    \"custom.hidden\": {\n      \"ne\": true\n    }\n  },\n  \"sort\": {\n    \"path\": \"createdAt\",\n    \"descending\": true\n  },\n  \"limit\": 25,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "query"
+              ]
+            },
+            "description": "Entities across knowledges from Mongo (not search): DELETED excluded, newest first seen by default. A filter value that is a scalar is equality, an array any-of, an object operators (eq ne in nin gte gt lte lt contains exists); ISO dates compare as dates. Paths are limited to metadata.*, enriched.*, custom.*, createdAt and updatedAt (anything else is a 400). Empty knowledgeIds means every knowledge. This is what the /jobs page calls."
+          }
+        },
+        {
+          "name": "Entity facets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/facets?entityTypes=JOB_POSTING&knowledgeIds=&fields=metadata.company,metadata.team,enriched.skills&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "facets"
+              ],
+              "query": [
+                {
+                  "key": "entityTypes",
+                  "value": "JOB_POSTING"
+                },
+                {
+                  "key": "knowledgeIds",
+                  "value": ""
+                },
+                {
+                  "key": "fields",
+                  "value": "metadata.company,metadata.team,enriched.skills"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Distinct values with counts per path, most common first; list-valued fields (enriched skills) count per element. Counted over entityTypes + knowledgeIds only. All params comma-separated."
+          }
+        },
+        {
+          "name": "Mark entity (custom PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPLIED_COLD\",\n  \"statusAt\": \"2026-10-01T09:00:00Z\",\n  \"hidden\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entities/{{entityId}}/custom",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entities",
+                "{{entityId}}",
+                "custom"
+              ]
+            },
+            "description": "Merges keys into entities.custom: a value sets the key, null removes it, other keys are untouched. Values must be text, numbers or booleans. The /jobs page writes custom.status (INTERESTED, REACHED_OUT, APPLIED or APPLIED_COLD) with custom.statusAt (timestamp), and custom.hidden (true). User-owned: re-ingest and re-index never touch it. 404 on an unknown id."
+          }
+        }
+      ]
+    },
+    {
       "name": "Search",
       "item": [
         {
@@ -434,7 +736,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Only query is required — a blank or absent query is a 400, and an unknown mode is a 400 that names the valid ones. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10 and is clamped to app.search.max-top-k (100); it is multiplied by app.search.candidate-multiplier before becoming the OpenSearch size and knn k.\n\nSet answer true to include a generated answer, which cites hits as [n] (1-based into hits). The answer is grounded in each hit's FULL chunk text within app.agent.context-chars; a source that had to be cut is marked \"[…truncated]\" in the prompt, so the model says what it could not see instead of reporting the missing part as absent from the source.\n\nIf the LLM is unavailable this returns 200 with the hits intact and answerError set — it no longer 500s and discards the results.\n\nEach hit carries chunkId (<entityId>_<ordinal>, pinning the matched passage), knowledgeId (which source the hit came from) and ordinal (position within the entity) alongside entityId, title, snippet, uri, score and metadata. snippet is a display excerpt only, app.search.snippet-chars long and taken from the matching region when highlighting found one; the full chunk text grounds the answer but is not put on the wire.\n\nOptional: maxChunksPerEntity caps how many chunks one entity may contribute (1 = one result per document), overriding app.search.max-chunks-per-entity for this request; collapseDuplicates groups near-identical hits and keeps one of each. Both default off. See the \"Search job postings\" example for range filters."
+            "description": "Only query is required — a blank or absent query is a 400, and an unknown mode is a 400 that names the valid ones. knowledgeIds empty/omitted searches all. mode is LEXICAL, SEMANTIC or HYBRID (default HYBRID). topK defaults to 10 and is clamped to app.search.max-top-k (100). It counts results, and results are one per entity: retrieval fetches topK × app.search.candidate-multiplier chunks per leg (held between app.search.min-candidates and app.search.max-candidates) and groups them by entity. A result dated in the recency field set (config/field-sets.json; postedAt) gets a small freshness boost — at most 10%, halving every app.search.recency.half-life-days — so it breaks near-ties only.\n\nSet answer true to include a generated answer, which cites hits as [n] (1-based into hits). The answer is grounded in each hit's FULL text — its best chunk and every further match, in document order — within app.agent.context-chars; a source that had to be cut is marked \"[…truncated]\" in the prompt, so the model says what it could not see instead of reporting the missing part as absent from the source.\n\nIf the LLM is unavailable this returns 200 with the hits intact and answerError set — it no longer 500s and discards the results.\n\nLikewise, if the query cannot be embedded (usually a spent embedding quota — indexing and search share one, see app.ratelimit.embedding.background.rules) the search runs keyword-only and returns 200 with vectorError set. The hits are real, just without the semantic leg.\n\nEach hit is one entity and carries chunkId (<entityId>_<ordinal>, pinning its best-matching passage), knowledgeId (which source the hit came from) and ordinal (position within the entity) alongside entityId, title, snippet, uri, score and metadata. moreMatches lists the entity's other matching chunks, best first, each with chunkId, ordinal, snippet and score. ranking is a diagnostic breakdown of how the result reached its score: lexicalRank and vectorRank (where each leg placed its best chunk; null when that leg did not return it), retrievalScore, groupedScore (after the further-matches bonus) and recencyFactor. snippet is a display excerpt only, app.search.snippet-chars long and taken from the matching region when highlighting found one; the full chunk text grounds the answer but is not put on the wire.\n\nOptional: maxChunksPerEntity sets how many matching chunks one result carries, its best included (default app.search.max-chunks-per-entity = 3; 1 leaves moreMatches empty). collapseDuplicates groups near-identical results — matching text only counts under agreeing titles — and keeps one of each; off unless asked for (the console asks by default). See the \"Search job postings\" example for range filters."
           }
         },
         {
@@ -444,7 +746,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"query\": \"backend engineer distributed systems\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.seniority\": \"SENIOR\",\n    \"metadata.postedAt\": { \"gte\": \"2026-08-18T00:00:00Z\" },\n    \"metadata.compMin\": { \"gte\": 150000 }\n  },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
+              "raw": "{\n  \"query\": \"backend engineer distributed systems\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.seniority\": \"SENIOR\",\n    \"metadata.postedAt\": { \"gte\": \"2026-08-18T00:00:00Z\" }\n  },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -452,25 +754,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "search"]
             },
-            "description": "Filters resolve the map key verbatim as an OpenSearch field path, so any normalised posting facet works without server changes: metadata.company, metadata.location, metadata.remote, metadata.seniority, metadata.board, metadata.dedupeKey, metadata.compMin/compMax, metadata.compCurrency, metadata.postedAt.\n\nCAUTION on comp: pair it with metadata.compCurrency or the filter is meaningless — compMin is a plain number, so 150000 reads as USD on one posting and INR on the next. And expect it to be absent: of 208 India-located postings sampled across these boards, 0 stated pay at all (US postings do, because several states require it). A comp filter excludes nearly every Indian role rather than narrowing it.\n\nThe VALUE decides the clause. A scalar is an exact term; a map carrying gte/gt/lte/lt is a range — which is the only way to say \"posted in the last week\" or \"pays at least X\". JSON types are preserved, so metadata.remote must be true and not \"true\": a string term against a boolean field matches nothing.\n\nmaxChunksPerEntity 1 returns one hit per posting instead of one per chunk of its description. collapseDuplicates groups the same role reached by different routes — identical text, then an equal metadata.dedupeKey, then high token overlap — and keeps the member with the highest metadata.sourceRank, so a direct board listing wins over an aggregator's. Both are off unless asked for.\n\nSet knowledgeIds to a job-board knowledge to search postings alone."
-          }
-        },
-        {
-          "name": "Search by a document (find things like this)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\"{{knowledgeId}}\"],\n  \"filters\": { \"metadata.remote\": true },\n  \"topK\": 10,\n  \"mode\": \"HYBRID\",\n  \"answer\": false,\n  \"maxChunksPerEntity\": 1,\n  \"collapseDuplicates\": true\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/search",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "search"]
-            },
-            "description": "Searches BY an already-ingested document instead of by typed text — \"find everything like this\". Set sourceEntityId to the entity id of, say, an indexed CV (find it via Knowledge > List knowledge entities).\n\nThe document is NOT used as the query. It is decomposed by the document-facets task into a few short queries written in the register of the corpus being searched, each is retrieved normally, and the rankings are fused — so a posting matching three facets outranks one that matches a single facet very well.\n\nquery stops being the search text here and becomes a statement of intent that steers the decomposition; it may be blank. Blank query AND no sourceEntityId is a 400.\n\nFacets are cached by the source document's checksum, so editing and re-indexing it derives them again with nothing to invalidate. If the LLM is unavailable this falls back to the document's opening text as a single query rather than failing. A document over app.search.document-query.max-chars is a 400; an unknown sourceEntityId is a 404."
+            "description": "Filters resolve the map key verbatim as an OpenSearch field path, so any normalised posting facet works without server changes: metadata.company, metadata.location, metadata.remote, metadata.seniority, metadata.board, metadata.dedupeKey, metadata.postedAt.\n\nThe VALUE decides the clause. A scalar is an exact term; a map carrying gte/gt/lte/lt is a range — which is the only way to say \"posted in the last week\". JSON types are preserved, so metadata.remote must be true and not \"true\": a string term against a boolean field matches nothing.\n\nResults are one per posting on every search; maxChunksPerEntity 1 additionally drops each posting's further matching passages. collapseDuplicates groups the same role reached by different routes — identical text under an agreeing title, then an equal metadata.dedupeKey, then high token overlap — and keeps the member with the highest metadata.sourceRank, so a direct board listing wins over an aggregator's. It is off unless asked for.\n\nSet knowledgeIds to a job-board knowledge to search postings alone."
           }
         }
       ]
@@ -498,7 +782,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"roles I could do next\",\n  \"sourceEntityId\": \"{{entityId}}\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
+              "raw": "{\n  \"name\": \"New roles for me\",\n  \"query\": \"backend engineer java\",\n  \"knowledgeIds\": [\n    \"{{knowledgeId}}\"\n  ],\n  \"filters\": {\n    \"metadata.remote\": true\n  },\n  \"window\": \"1d\",\n  \"cron\": null,\n  \"interval\": \"1d\",\n  \"taskId\": \"job-fit\",\n  \"useLlm\": true,\n  \"topK\": 10,\n  \"collapseDuplicates\": true,\n  \"maxChunksPerEntity\": 1,\n  \"onlyNew\": true,\n  \"enabled\": true,\n  \"channelIds\": [\n    \"{{channelId}}\"\n  ]\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -506,7 +790,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "digests"]
             },
-            "description": "A digest needs EITHER query OR sourceEntityId; neither is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use. cron is UTC, 5-field or Quartz 6-field; an unparseable one is a 400.\n\ntaskId names a task in config/prompts.json to run over the results — job-fit scores postings, or leave it null for results only.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
+            "description": "A digest needs a query; a blank one is a 400. Everything else has a default.\n\nwindow is how far back a run looks, applied as a range filter on the chunk's indexedAt. interval (or cron) is how often it runs, resolved by the same ScheduleResolver the ingestion schedulers use. cron is UTC, 5-field or Quartz 6-field; an unparseable one is a 400.\n\ntaskId names a task to run over the results — a bundled one from config/prompts.json (job-fit scores postings) or one of your own from the Tasks API — or leave it null for results only. useLlm false skips that task without forgetting it; a task failure keeps the run's items and sets taskError on the run.\n\nonlyNew drops anything an earlier run already reported, keyed on the ENTITY (a chunk id changes when a document is re-chunked). That is what makes this a digest rather than a repeated search.\n\nSet the digestId collection variable from the response to use the requests below.\n\nchannelIds lists publishing channels (Publishing folder) each run is sent to when it finds something new or fails; quiet runs send nothing, and Run digest now sends too. An unknown id is a 400. Omit it or send [] to send nowhere."
           }
         },
         {
@@ -539,7 +823,7 @@
               "path": ["api", "digests", ":id"],
               "variable": [{ "key": "id", "value": "{{digestId}}" }]
             },
-            "description": "The only editable field. A paused digest is never scheduled but can still be run by hand — that is the difference between pausing and deleting.\n\nFuller editing is delete-and-recreate."
+            "description": "PATCH edits any field: an absent key is unchanged, null clears it (booleans and topK go back to their default). {\"enabled\": false} pauses — a paused digest is never scheduled but can still be run by hand, which is the difference between pausing and deleting. {\"useLlm\": false} skips the digest's task without forgetting taskId; {\"useLlm\": true} turns it back on."
           }
         },
         {
@@ -1484,7 +1768,7 @@
     },
     {
       "name": "LLM Provider (raw)",
-      "description": "The chat-completion API the search agent calls directly when a search is run with answer=true (OpenAiCompatibleLlmProvider, app.llm.provider=openai-compat). Defaults match application.properties: Groq with llama-3.3-70b-versatile. Set llmApiKey to your GROQ_API_KEY. If this folder fails, POST /api/search with answer=true 500s and loses its hits — the known async trap the console works around by retrying without the flag.",
+      "description": "The chat-completion API an LLM connection points at (OpenAiCompatibleLlmProvider, app.llm.provider=openai-compat). Set llmBaseUrl, llmModel and llmApiKey to the same values as the connection you are debugging. If a call here fails, the app reports it as answerError on a search with answer=true (hits intact), taskError on a digest run, or enrichment.error on an entity.",
       "item": [
         {
           "name": "Chat completion",
@@ -1504,7 +1788,7 @@
               "host": ["{{llmBaseUrl}}"],
               "path": ["chat", "completions"]
             },
-            "description": "Mirrors OpenAiCompatibleLlmProvider.complete — the system prompt plus the numbered-hit user message DefaultSearchAgent builds, at app.llm.temperature (0.2). The provider reads choices[0].message.content and throws on an empty choices array, so this is the request to run when answers come back blank or the endpoint 500s."
+            "description": "Mirrors OpenAiCompatibleLlmProvider.complete — the system prompt plus the numbered-hit user message DefaultSearchAgent builds, with the temperature the LLM connection sets (sent only when it sets one). The provider reads choices[0].message.content and throws on an empty choices array, so this is the request to run when answers come back blank or the endpoint 500s."
           }
         },
         {
@@ -1519,7 +1803,7 @@
               "host": ["{{llmBaseUrl}}"],
               "path": ["models"]
             },
-            "description": "Not called by the app — a cheap way to verify llmApiKey and llmBaseUrl and to confirm the exact model id to put in app.llm.model before a chat completion. Available on Groq, OpenAI and Ollama; a provider that lacks it is not a problem for the app."
+            "description": "The same call an LLM connection makes when it is created, edited or health-checked: a cheap way to verify llmApiKey and llmBaseUrl and to find the exact model id to put on the connection. Available on Groq, OpenAI and Ollama; a provider that lacks it is not a problem for the app."
           }
         }
       ]

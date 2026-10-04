@@ -8,14 +8,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The three states a PATCH body can express, for sources.
- *
- * <p>The one that matters here is {@code cron: null}. It is how the console moves a source off a
- * custom schedule and back onto a preset interval, and read as "unchanged" the stored cron survived
- * and went on winning over the interval the user had just picked — a source could be put onto a custom
- * schedule and never taken off it again, with a 200 every time.
- */
 class KnowledgePatchDtoTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -85,8 +77,6 @@ class KnowledgePatchDtoTest {
 
     @Test
     void fieldsWithNoEmptyStateRejectAnExplicitNull() {
-        // A source with no name is a blank row; one with no inputs has nothing to walk. Writing either
-        // is worse than refusing the edit.
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"name\": null}"));
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"inputs\": null}"));
         Assertions.assertThrows(IllegalArgumentException.class, () -> patch("{\"auth\": null}"));

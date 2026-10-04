@@ -25,17 +25,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
-/**
- * Channel lifecycle. Creation and edits are validated by the channel's own publisher, so a destination
- * that could never receive anything is refused when it is entered rather than when a digest first
- * tries to use it.
- */
 @ApplicationScoped
 public class DefaultChannelService implements ChannelService {
 
     private static final Logger LOG = Logger.getLogger(DefaultChannelService.class.getName());
 
-    /** What a test send says. Fixed rather than configurable: its only job is to arrive. */
     static final PublishMessage SAMPLE = new PublishMessage(
             "Test message from Personal Search Assistant",
             "If you can read this, the channel works and queued messages will be delivered here.",
@@ -63,7 +57,7 @@ public class DefaultChannelService implements ChannelService {
     @Override
     public Channel create(NewChannel request) {
         requireName(request.name());
-        Publisher publisher = publishers.get(request.type()); // no bean → IllegalArgumentException
+        Publisher publisher = publishers.get(request.type());
         Map<String, Object> target = request.target() == null ? Map.of() : request.target();
         publisher.validateTarget(target);
         String connectionId = blankToNull(request.connectionId());
@@ -126,24 +120,20 @@ public class DefaultChannelService implements ChannelService {
     @Override
     public void delete(String id) {
         require(id);
-        // Refused rather than dropped from the digests: removing it silently would turn a digest's
-        // emails off without anyone deciding to.
+        // Refused rather than dropped from the digests, which would turn their emails off silently.
         List<Digest> sending = digests.findByChannelId(id);
         if (!sending.isEmpty()) {
             throw new IllegalStateException("Channel " + id + " is used by " + sending.size() + " digest(s) ("
                     + sending.stream().map(Digest::name).collect(Collectors.joining(", "))
                     + "); remove it from them first");
         }
-        // Deliveries first: a channel row that outlives its deliveries is harmless, the reverse leaves
-        // PENDING rows nothing will ever claim.
+        // Deliveries first: a channel that outlives its deliveries is harmless; the reverse leaves PENDING
+        // rows nothing will ever claim.
         deliveries.deleteByChannel(id);
         channels.delete(id);
     }
 
-    /**
-     * An explicitly named account must exist and be of the type the publisher sends through. A null id
-     * is not checked: it means "the default", which may legitimately be connected later.
-     */
+    /** A null id means the default account, which may legitimately be connected later. */
     private void checkConnection(Publisher publisher, String connectionId) {
         if (connectionId == null) {
             return;

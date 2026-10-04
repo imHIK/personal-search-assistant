@@ -11,18 +11,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 
-/**
- * A scriptable {@link OAuthProvider} with no vendor behind it. Its whole purpose is to prove the flow
- * and the token service are genuinely provider-neutral: if a test can drive them with a provider that
- * is not Google, nothing Google-specific has leaked out of {@code GoogleOAuthProvider}.
- */
 public class StubOAuthProvider implements OAuthProvider {
 
     public final List<AuthorizeRequest> authorizeCalls = new ArrayList<>();
     public final List<String> exchangedCodes = new ArrayList<>();
     public final List<String> refreshedWith = new ArrayList<>();
 
-    /** What the next exchange/refresh does. Replace to script a failure. */
     public Supplier<OAuthTokens> onExchange = () -> new OAuthTokens("access-1", "refresh-1", far());
     public Supplier<OAuthTokens> onRefresh = () -> new OAuthTokens("access-2", null, far());
 
@@ -72,7 +66,7 @@ public class StubOAuthProvider implements OAuthProvider {
         return onRefresh.get();
     }
 
-    /** An expiry comfortably beyond the token service's 60-second refresh skew. */
+    /** Beyond the token service's 60-second refresh skew. */
     public static long far() {
         return java.time.Instant.now().getEpochSecond() + 3600;
     }

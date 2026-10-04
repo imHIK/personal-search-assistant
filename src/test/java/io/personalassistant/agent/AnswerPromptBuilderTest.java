@@ -19,15 +19,6 @@ import java.util.Locale;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * The prompt is where a retrieval win is either passed to the model or thrown away.
- *
- * <p>Regression cover for the failure that motivated this class: the agent used to build its context
- * from each hit's 280-char display snippet, so a query over a table answered from roughly a quarter of
- * every chunk — the visible symptom was a list cut off mid-item, followed by the model stating that the
- * remaining rows were absent from the sources. Grounding must therefore use the full chunk text, and any
- * cut that a budget does force has to be marked so the model reports it rather than reasoning past it.
- */
 class AnswerPromptBuilderTest {
 
     private static SearchHit hit(String title, String text) {
@@ -35,16 +26,11 @@ class AnswerPromptBuilderTest {
                 "file:///holidays.xlsx", 1.0, Map.of());
     }
 
-    /**
-     * A builder over the real bundled {@code config/prompts.json}, not a stub. These tests are the
-     * regression check that the prompt text survived being externalised, so they must read the shipped
-     * file — a fixture would assert only that the fixture is intact.
-     */
+    /** Reads the shipped prompts.json on purpose: a fixture would only prove the fixture is intact. */
     private static AnswerPromptBuilder builder() {
         return new AnswerPromptBuilder(PromptCatalog.bundled(), FieldSets.bundled());
     }
 
-    /** Budgets are per-task now, so a test states them by building the spec it wants. */
     private static TaskSpec task(int contextChars, int maxSources) {
         return new TaskSpec("answer", "answer", "answer", contextChars, maxSources);
     }
@@ -88,10 +74,6 @@ class AnswerPromptBuilderTest {
         assertFalse(prompt.contains("[4] Doc 4"), "sources that don't fit are dropped, not stubbed");
     }
 
-    /**
-     * Citation numbers are positional in the hit list and the console resolves {@code [n]} back to the
-     * n-th result card, so a source dropped for budget reasons must not renumber the ones after it.
-     */
     @Test
     void numbersSourcesByRankPosition() {
         String prompt = builder().user(task(24_000, 3), query(),
@@ -108,10 +90,6 @@ class AnswerPromptBuilderTest {
         assertTrue(prompt.length() > 100_000, "0 means unlimited, not empty");
     }
 
-    /**
-     * "give me all the holidays <em>this year</em>" cannot be answered without knowing the date. Before
-     * this the model resolved it by guessing from whatever year the sources happened to mention.
-     */
     @Test
     void systemPromptStatesTodaysDate() {
         AnswerPromptBuilder builder = builder();
@@ -120,10 +98,6 @@ class AnswerPromptBuilderTest {
         assertTrue(builder.system(task(24_000, 10)).contains("2026-08-10"), builder.system(task(24_000, 10)));
     }
 
-    /**
-     * The instruction that targets the observed failure directly: the model listed the rows it could
-     * see, stopped, and then said the rest were absent from the sources.
-     */
     @Test
     void systemPromptDemandsCompleteListsAndDistinguishesCutFromAbsent() {
         String system = builder().system(task(24_000, 10));
@@ -144,7 +118,6 @@ class AnswerPromptBuilderTest {
         assertFalse(system.isBlank());
     }
 
-    /** Source text is untrusted input; the prompt has to say the fenced regions are data. */
     @Test
     void systemPromptTellsTheModelFencedTextIsNotInstructions() {
         String system = builder().system(task(24_000, 10));
@@ -162,7 +135,6 @@ class AnswerPromptBuilderTest {
                 "source text must sit inside a fence: " + prompt);
     }
 
-    /** A locator earns its place in the header; ids and scores do not. */
     @Test
     void includesAStructuralLocatorInTheHeaderWhenChunkingProvidedOne() {
         SearchHit located = new SearchHit("c", "e", "k", 2, "Holidays 2026", "rows…", "snip", "u", 1.0,
@@ -197,12 +169,6 @@ class AnswerPromptBuilderTest {
                 "no hits means an empty sources block; DefaultSearchAgent short-circuits before this");
     }
 
-    /**
-     * The author of a task's prompt should not have to know which half of it the framework supplies a
-     * given value to. Both messages render from one map, so a placeholder written into the "other" half
-     * resolves rather than throwing — which, for a task a digest runs on a schedule, used to mean a run
-     * failing hours after the prompt was saved.
-     */
     @Test
     void rendersEveryValueIntoBothHalvesOfThePrompt() {
         AnswerPromptBuilder builder = builder();

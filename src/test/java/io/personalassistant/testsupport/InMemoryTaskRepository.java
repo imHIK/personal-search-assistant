@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** In-memory {@link TaskRepository} for tests, matching the other {@code InMemory*} fakes. */
 public class InMemoryTaskRepository implements TaskRepository {
 
     private final Map<String, Task> tasks = new LinkedHashMap<>();

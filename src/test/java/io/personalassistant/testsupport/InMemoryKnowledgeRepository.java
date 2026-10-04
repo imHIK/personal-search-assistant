@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** Simple in-memory {@link KnowledgeRepository} for unit tests (no Mongo). */
 public class InMemoryKnowledgeRepository implements KnowledgeRepository {
 
     public final Map<String, Knowledge> store = new LinkedHashMap<>();

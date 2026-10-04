@@ -16,20 +16,9 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Ages entities out, in two passes: entities whose source-declared {@code expiresAt} has passed, and
- * entities older than their knowledge's resolved retention window.
- *
- * <p>It only ever <strong>tombstones</strong> ({@code markDeleted}). Chunk removal is left to the
- * ordinary deletion path — {@code IndexingJob.processDeletions} claims the tombstone under a lease and
- * calls {@code deleteByEntity}. That indirection is the point: a native Mongo TTL index would drop the
- * document without ever telling OpenSearch, permanently orphaning its chunks, and would bypass lease
- * fencing entirely.
- *
- * <p><strong>Retention is opt-in.</strong> A knowledge that resolves to no window is skipped, and that
- * is the shipped default for every document source — so this job is inert until something positively
- * asks for a window. Deliberately <em>not</em> gated on connector health: if a feed has not been walked
- * in a week, its contents are stale whether or not the walk succeeded, and holding data back because
- * ingestion is broken would keep exactly the material the window exists to remove.
+ * Only tombstones: chunk removal goes through the ordinary leased deletion path. A Mongo TTL index would drop
+ * documents without telling OpenSearch and bypass lease fencing. Not gated on connector health: a feed that
+ * has not been walked is stale either way.
  */
 @ApplicationScoped
 public class RetentionSweeper {
@@ -41,7 +30,7 @@ public class RetentionSweeper {
     private final RetentionResolver retention;
 
     @ConfigProperty(name = "app.retention.batch", defaultValue = "200")
-    int batch; // cap per pass per tick, so one huge knowledge can't stall the scheduler thread
+    int batch; // per pass per tick, so one huge knowledge cannot stall the scheduler thread
 
     @Inject
     public RetentionSweeper(EntityRepository entities, KnowledgeRepository knowledges,
@@ -59,18 +48,16 @@ public class RetentionSweeper {
             sweepExplicitExpiry(now);
             sweepRetentionWindows(now);
         } catch (RuntimeException e) {
-            // A sweep failure must not kill the scheduled job; the next tick retries from scratch
-            // (the queries are stateless, so a partial sweep simply resumes).
+            // The queries are stateless, so the next tick resumes a partial sweep.
             LOG.log(Level.WARNING, "Retention sweep failed; will retry on the next tick", e);
         }
     }
 
-    /** Source-declared expiry. Applies to every knowledge, including those with no retention window. */
+    /** Applies to every knowledge, including those with no retention window. */
     private void sweepExplicitExpiry(Instant now) {
         tombstone(entities.findExpired(batch, now), "expiresAt elapsed");
     }
 
-    /** The knowledge-level window, for entities that carry no expiry of their own. */
     private void sweepRetentionWindows(Instant now) {
         for (Knowledge kn : knowledges.findAll()) {
             if (kn.status() == KnowledgeStatus.DELETED) {
@@ -78,7 +65,7 @@ public class RetentionSweeper {
             }
             Instant cutoff = retention.cutoffFor(kn, now);
             if (cutoff == null) {
-                continue; // no window at any tier: this knowledge never expires
+                continue; // no window at any tier: never expires
             }
             tombstone(entities.findCreatedBefore(kn.id(), cutoff, batch),
                     "older than retention window " + retention.resolve(kn));
@@ -96,7 +83,6 @@ public class RetentionSweeper {
         LOG.info("Retention: tombstoned " + expired.size() + " entities (" + reason + ")");
     }
 
-    /** Visible for tests that drive a sweep directly rather than through the scheduler. */
     void sweep(Instant now) {
         sweepExplicitExpiry(now);
         sweepRetentionWindows(now);

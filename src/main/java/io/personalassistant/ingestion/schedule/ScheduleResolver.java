@@ -22,25 +22,9 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Resolves <em>which</em> forward-sync schedule governs a knowledge, and computes the next time it
- * is due, following the three-tier precedence:
- *
- * <ol>
- *   <li><b>Custom</b> — the user's own {@link Knowledge.ScheduleSettings} on the knowledge.</li>
- *   <li><b>Connector default</b> — {@link io.personalassistant.ingestion.connector.SourceConnector#defaultSchedule()}
- *       (e.g. {@code LOCAL_FS} = 1 day); used when the user set no custom schedule.</li>
- *   <li><b>Global default</b> — {@code app.scheduler.default-interval} / {@code default-cron};
- *       the final fallback when neither of the above is present.</li>
- * </ol>
- *
- * <p>At each tier a schedule may be expressed as an <em>interval</em> or a <em>cron</em>; when both
- * are present at the winning tier, cron is preferred (it is the more specific instruction). Cron
- * "next fire" is computed with cron-utils, always in UTC. Two dialects are accepted, told apart by
- * field count: a 5-field Unix cron ({@code "0 2 * * *"}), which is what people type and what the
- * console asks for, and a 6/7-field Quartz cron ({@code "0 0 2 * * ?"}), which is what the app used
- * first. Each is parsed by its own cron-utils definition rather than rewritten into the other, because
- * the two number weekdays differently (Unix Sunday is 0, Quartz Sunday is 1) and Quartz insists on a
- * {@code ?} in one day field — a string rewrite gets both wrong in ways that still parse.
+ * Custom, then the connector default, then the global default; cron wins over interval within a tier. Cron
+ * runs in UTC, in two dialects told apart by field count, 5-field Unix and 6/7-field Quartz, each parsed by
+ * its own definition since they number weekdays differently.
  */
 @ApplicationScoped
 public class ScheduleResolver {
@@ -57,7 +41,7 @@ public class ScheduleResolver {
     @ConfigProperty(name = "app.scheduler.default-interval", defaultValue = "1d")
     String defaultInterval;
 
-    /** Optional: blank/unset means "no global cron", so interval wins. See {@link ConfigText}. */
+    /** Blank means no global cron, so the interval wins. */
     @ConfigProperty(name = "app.scheduler.default-cron")
     Optional<String> defaultCron;
 
@@ -66,14 +50,12 @@ public class ScheduleResolver {
         this.connectors = connectors;
     }
 
-    /** Test-friendly constructor that sets the global-default config explicitly (CDI uses the other). */
     public ScheduleResolver(ConnectorRegistry connectors, String defaultInterval, String defaultCron) {
         this.connectors = connectors;
         this.defaultInterval = defaultInterval;
         this.defaultCron = Optional.ofNullable(defaultCron);
     }
 
-    /** The effective schedule for a knowledge, applying custom &rarr; connector &rarr; global. */
     public SyncSchedule resolve(Knowledge knowledge) {
         SyncSchedule custom = knowledge.config() != null && knowledge.config().scheduleSettings() != null
                 ? knowledge.config().scheduleSettings().customSchedule()
@@ -88,7 +70,6 @@ public class ScheduleResolver {
         return globalDefault();
     }
 
-    /** The global-default tier, read from config. Cron wins over interval if both are configured. */
     public SyncSchedule globalDefault() {
         String cron = ConfigText.orNull(defaultCron);
         if (cron != null) {
@@ -97,20 +78,13 @@ public class ScheduleResolver {
         return SyncSchedule.ofInterval(defaultIntervalOrDay());
     }
 
-    /** Convenience: resolve the schedule and compute the next due time for a knowledge from {@code from}. */
     public Instant nextDueAt(Knowledge knowledge, Instant from) {
         return nextDueAt(resolve(knowledge), from);
     }
 
     /**
-     * The next instant at or after {@code from} that the given schedule fires. For a cron this is the
-     * next matching wall-clock time (UTC); for an interval it is simply {@code from + interval}. An
-     * empty schedule defensively falls back to the global default so a due time is always produced.
-     *
-     * <p>An unparseable cron falls back to the global <em>interval</em> (never the global cron, which
-     * could be the broken one) instead of throwing. Writes are validated through
-     * {@link #requireValidCron}, but a cron stored before that check existed still reaches here, and
-     * throwing would leave the record due forever — retried, and failing, on every scheduler tick.
+     * An empty schedule falls back to the global default. An unparseable cron falls back to the global
+     * interval rather than throwing, which would leave the record due forever.
      */
     public Instant nextDueAt(SyncSchedule schedule, Instant from) {
         if (schedule == null || !schedule.isPresent()) {
@@ -129,16 +103,14 @@ public class ScheduleResolver {
             return ExecutionTime.forCron(cron)
                     .nextExecution(base)
                     .map(ZonedDateTime::toInstant)
-                    // A cron with no future match (rare; e.g. impossible date) shouldn't wedge the
-                    // scheduler — re-check a day later.
+                    // A cron with no future match must not wedge the scheduler: re-check a day later.
                     .orElse(from.plus(Duration.ofDays(1)));
         }
         return from.plus(schedule.interval());
     }
 
     /**
-     * Reject a cron the scheduler could not run, so a bad expression is a {@code 400} at save time rather
-     * than a warning in the log on every tick. {@code null} or blank passes — it means "no cron".
+     * Null or blank passes.
      *
      * @throws IllegalArgumentException naming the expression and both accepted forms
      */
@@ -154,7 +126,7 @@ public class ScheduleResolver {
         }
     }
 
-    /** Pick the dialect by field count: 5 is Unix, anything else is handed to Quartz (6 or 7). */
+    /** 5 fields is Unix; anything else goes to Quartz. */
     private static Cron parse(String expression) {
         String trimmed = expression.trim();
         CronParser parser = trimmed.split("\\s+").length == 5 ? UNIX : QUARTZ;

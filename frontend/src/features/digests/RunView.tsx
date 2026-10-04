@@ -10,24 +10,11 @@ import { cn, displayName } from '@/lib/utils'
 
 export interface RunOutcome {
   text: string
-  /** Why the run came out that way, for the cases where the headline alone leaves people stuck. */
   hint?: string
   failed: boolean
-  /** True when the look-back window, not the query, is what emptied the run. */
   windowed?: boolean
 }
 
-/**
- * How a run turned out, in one line.
- *
- * Four of these used to render identically as "no results", which made a digest that was working
- * perfectly indistinguishable from one whose query had stopped matching anything. The run's
- * `candidates`, `suppressed` and `outsideWindow` counters exist for exactly this sentence.
- *
- * Takes the digest because the wording depends on it: a digest with `onlyNew` off is not reporting
- * *new* anything, and calling its results new — which every non-job-search digest used to be told —
- * is just untrue.
- */
 export function runOutcome(run: DigestRun, digest?: Pick<Digest, 'onlyNew'>): RunOutcome {
   const onlyNew = digest?.onlyNew ?? true
   if (run.error) return { text: labels.digests.outcomeFailed, failed: true }
@@ -46,9 +33,6 @@ export function runOutcome(run: DigestRun, digest?: Pick<Digest, 'onlyNew'>): Ru
       failed: false,
     }
   }
-  // The window filters on when something was last indexed. A source that finished ingesting a week
-  // ago leaves a one-day window and never re-enters it, so every run afterwards is empty for a
-  // reason no amount of rewriting the query will fix.
   if (run.outsideWindow > 0) {
     return {
       text: labels.digests.outcomeOutsideWindow(run.outsideWindow),
@@ -65,17 +49,9 @@ export function runOutcome(run: DigestRun, digest?: Pick<Digest, 'onlyNew'>): Ru
 }
 
 /**
- * What the model numbered as source *n*, expressed as a rank into `run.items`.
- *
- * `DefaultDigestService` hands the agent the same hits it stores as `run.items`, in the same order,
- * so the two line up one-for-one — except under a task whose `sourceText` is `ENTITY`, where
- * `SourceTexts.resolve` collapses several chunks of one document into a single source before the
- * prompt numbers them. There, source *n* is the *n*-th distinct entity, and the backend's own
- * annotation join maps it back exactly this way.
- *
- * A built-in task reports no `sourceText` at all (`TaskDto` redacts a bundled entry's spec), so the
- * mode is simply unknown for those; the uncollapsed mapping is the right guess, since it is the
- * default mode and the two agree for every run whose items are one per document anyway.
+ * Source n is the n-th item, except under an `ENTITY` task: SourceTexts collapses one document's
+ * chunks first, so n is the n-th distinct entity (the backend joins annotations the same way).
+ * Built-in tasks report no sourceText; the uncollapsed mapping is the default.
  */
 function citationRanks(items: DigestRunItem[], sourceText: TaskSourceText | null): number[] {
   if (sourceText !== 'ENTITY') return items.map((_, index) => index + 1)
@@ -89,13 +65,6 @@ function citationRanks(items: DigestRunItem[], sourceText: TaskSourceText | null
   return ranks
 }
 
-/**
- * The failure, the task's summary, and the items — everything a run has to show.
- *
- * The summary cites its sources as `[n]` against the numbered results, exactly as the search answer
- * does, so a chip jumps to the result the sentence rests on rather than leaving the number to be
- * matched by eye. See `citationRanks` for what `n` actually names.
- */
 export function RunBody({
   run,
   outcome,
@@ -103,7 +72,6 @@ export function RunBody({
 }: {
   run: DigestRun
   outcome?: RunOutcome
-  /** The digest's task mode, which decides how the summary's `[n]` markers were numbered. */
   taskSourceText?: TaskSourceText | null
 }) {
   const { citedRank, jumpTo, register } = useCitationJump<HTMLLIElement>()
@@ -124,12 +92,20 @@ export function RunBody({
     )
   }
 
-  // Only shown when nothing was annotated: once the task's reply has been read onto the items, the
-  // same text twice — once as prose, once as badges — is noise rather than detail.
   const annotated = run.items.some((item) => Object.keys(item.annotations ?? {}).length > 0)
 
   return (
     <div className="space-y-3">
+      {run.taskError && (
+        <div className="flex gap-2">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[var(--tone-wait)]" aria-hidden />
+          <div className="min-w-0">
+            <p className="text-xs text-[var(--text-muted)]">{labels.digests.taskFailed}</p>
+            <p className="text-[11px] leading-relaxed text-[var(--text-subtle)]">{run.taskError}</p>
+          </div>
+        </div>
+      )}
+
       {run.taskOutput && !annotated && (
         <section className="rounded-lg border border-[var(--accent)]/25 bg-[var(--accent-subtle)]/40 p-3">
           <p className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--accent)]">
@@ -152,7 +128,6 @@ export function RunBody({
         </section>
       )}
 
-      {/* An empty run has nothing below this point, so the reason it is empty is the body. */}
       {run.items.length === 0 && !run.error && outcome?.hint && (
         <p className="text-[11px] leading-relaxed text-[var(--text-subtle)]">{outcome.hint}</p>
       )}
@@ -186,15 +161,9 @@ export function RunBody({
   )
 }
 
-/**
- * One result. Boxed rather than laid straight onto the panel: ten passages of running prose with no
- * rule between them read as one long quotation, which is what the list looked like whenever several
- * results came from the same document and the titles repeated.
- */
 const RunItem = forwardRef<HTMLLIElement, {
   item: DigestRunItem
   rank: number
-  /** Briefly set after a citation in the summary jumps here, so the arrival is visible. */
   highlighted?: boolean
 }>(function RunItem({ item, rank, highlighted }, ref) {
   const annotations = presentAnnotations(item.annotations)
@@ -204,8 +173,6 @@ const RunItem = forwardRef<HTMLLIElement, {
   return (
     <li
       ref={ref}
-      // Focusable but not in the tab order: a citation jump moves focus here so a screen reader and
-      // the keyboard both follow the scroll, without adding a stop to every result in the run.
       tabIndex={-1}
       className={cn(
         'flex scroll-mt-24 gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 outline-none transition-shadow duration-300',
@@ -256,7 +223,6 @@ const RunItem = forwardRef<HTMLLIElement, {
           </p>
         ))}
 
-        {/* Only worth the room when the task said nothing about this item. */}
         {notes.length === 0 && item.snippet && (
           <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--text-subtle)]">
             {item.snippet}

@@ -4,7 +4,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Handle parsing — the part a user has to get right, so every real-world shape is covered. */
 class OracleHcmSiteTest {
 
     @Test
@@ -21,14 +20,13 @@ class OracleHcmSiteTest {
                 "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs")
                 .orElseThrow();
 
-        // Note the missing region segment: the pod host is not a fixed number of labels.
+        // No region segment: the pod host has no fixed number of labels.
         Assertions.assertEquals("jpmc.fa.oraclecloud.com", site.host());
         Assertions.assertEquals("CX_1001", site.site());
     }
 
     @Test
     void parsesAUrlWithATrailingJobPath() {
-        // What a user actually copies is a job page, not the bare site.
         Assertions.assertEquals("hcbt.fa.em2.oraclecloud.com/CX", OracleHcmSite.parse(
                 "https://hcbt.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/12345")
                 .orElseThrow().toString());
@@ -36,16 +34,20 @@ class OracleHcmSiteTest {
 
     @Test
     void aBareCompanyNameIsNotASite() {
-        // This is what tells the connector to keep probing the other platforms.
         Assertions.assertEquals(Optional.empty(), OracleHcmSite.parse("paytm"));
         Assertions.assertEquals(Optional.empty(), OracleHcmSite.parse(""));
         Assertions.assertEquals(Optional.empty(), OracleHcmSite.parse(null));
     }
 
     @Test
+    void aVanityHostServingTheCandidateExperienceUiIsAccepted() {
+        Assertions.assertEquals("enterpriseplatform.dell.com/careers", OracleHcmSite.parse(
+                "https://enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/jobs/preview/294511")
+                .orElseThrow().toString());
+    }
+
+    @Test
     void aVanityDomainIsRejectedBecauseItDoesNotServeTheApi() {
-        // careers.americanexpress.com and jobs.akamai.com serve the UI but not the REST API, so
-        // accepting them would produce a site that resolves and then fails every fetch.
         Assertions.assertEquals(Optional.empty(),
                 OracleHcmSite.parse("https://jobs.akamai.com/en/sites/CX_1/jobs"));
     }

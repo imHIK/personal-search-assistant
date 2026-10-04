@@ -17,12 +17,6 @@ import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The ingestion loop's backstop: a cursor that is claimable while its knowledge is paused (e.g. it
- * was IN_PROGRESS at pause time and rested AVAILABLE when its lease ended) must be parked by the
- * job so it stops re-polluting the bounded claim batch. The permit service and runner are never
- * reached on the inactive path, so {@code null} is passed for both deliberately.
- */
 class IngestionJobBackstopTest {
 
     private InMemoryKnowledgeRepository knowledge;
@@ -33,8 +27,7 @@ class IngestionJobBackstopTest {
     void setUp() {
         knowledge = new InMemoryKnowledgeRepository();
         cursors = new InMemoryCursorRepository();
-        // Connector registry and resolver are only consulted on the ACTIVE path, which these
-        // tests never reach; nulls would NPE there, so a registry supporting nothing is passed.
+        // Only the ACTIVE path, which these tests never reach, uses the registry and resolver.
         job = new IngestionJob(cursors, knowledge, null, null,
                 new SingleConnectorRegistry(new StubConnector(SourceType.SLACK, java.util.List.of())),
                 kn -> {
@@ -67,7 +60,6 @@ class IngestionJobBackstopTest {
 
     @Test
     void leavesOrphanCursorAlone() {
-        // No knowledge row for "ghost" — deletion path owns cleanup; the job must not park it.
         cursors.insertIfAbsent(TestData.cursor("ghost", "chan", CursorDirection.FORWARD, SourceType.SLACK));
 
         job.tick();

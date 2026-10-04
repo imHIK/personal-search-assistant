@@ -1,22 +1,17 @@
 import { AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { accountFor, sectionOf } from '@/config/accounts'
 import { labels } from '@/config/labels'
 import { useConnections } from '@/hooks/queries'
 
-/**
- * The answer to "my data quietly stopped updating".
- *
- * A broken sign-in used to be visible only to someone who opened the Accounts page and looked — while
- * the ingestion job skipped every source bound to it, silently and indefinitely. This puts it in
- * front of the user wherever they are in the console, because the failure is invisible by nature:
- * search still works, it just quietly stops learning anything new.
- *
- * Renders nothing in every other case, including while the list is loading or unreachable — a
- * banner that flashes on every page load would train the user to ignore it.
- */
 export function ReconnectBanner() {
   const { data } = useConnections()
-  const broken = (data ?? []).filter((connection) => connection.status === 'ERROR')
+  // Its copy is about imports stopping, which is untrue of an LLM connection; that one's error shows on
+  // the Accounts page and in the answer or task that failed.
+  const broken = (data ?? []).filter(
+    (connection) =>
+      connection.status === 'ERROR' && sectionOf(accountFor(connection.type)) === 'accounts',
+  )
   if (broken.length === 0) return null
 
   const target = broken.length === 1 ? `/connections/${broken[0].id}` : '/connections'

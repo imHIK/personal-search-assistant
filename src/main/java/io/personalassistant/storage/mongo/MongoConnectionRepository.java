@@ -18,7 +18,6 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link ConnectionRepository} over the {@code connections} collection. */
 @ApplicationScoped
 public class MongoConnectionRepository implements ConnectionRepository {
 
@@ -82,8 +81,6 @@ public class MongoConnectionRepository implements ConnectionRepository {
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Connection c) {
         return new Document("_id", c.id())

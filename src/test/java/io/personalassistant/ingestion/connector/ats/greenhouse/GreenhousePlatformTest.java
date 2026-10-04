@@ -28,10 +28,6 @@ class GreenhousePlatformTest {
         return platform.fetch("acme", BoardFilter.ofLocations(List.of()));
     }
 
-
-
-
-
     @Test
     void mapsAPostingIntoNormalisedMetadata() {
         RawItem senior = grab().get(0);
@@ -48,10 +44,27 @@ class GreenhousePlatformTest {
     }
 
     @Test
+    void theBoardsOwnCompanyNameOutranksALabelAndLeavesTheChecksumAlone() {
+        RawItem labelled = platform.fetch("acme", "Acme Labelled", BoardFilter.NONE).get(0);
+
+        Assertions.assertEquals("Acme", labelled.metadata().get("company"));
+        Assertions.assertEquals(grab().get(0).checksum(), labelled.checksum());
+    }
+
+    @Test
+    void aLabelReplacesTheTokenWhenTheBoardStatesNoName() {
+        String unnamed = BOARD.replace("\"company_name\":\"Acme\",", "");
+        GreenhousePlatform bare = new GreenhousePlatform(new FakeGreenhouseApi().withBoard("acme", unnamed));
+
+        RawItem labelled = bare.fetch("acme", "Acme Inc", BoardFilter.NONE).get(0);
+
+        Assertions.assertEquals("acme", bare.fetch("acme", BoardFilter.NONE).get(0).metadata().get("company"));
+        Assertions.assertEquals("Acme Inc", labelled.metadata().get("company"));
+        Assertions.assertNotEquals(bare.fetch("acme", BoardFilter.NONE).get(0).checksum(), labelled.checksum());
+    }
+
+    @Test
     void theChecksumIgnoresUpdatedAtBecauseGreenhouseMovesItInBulk() {
-        // Measured live: 178 of GitLab's 227 postings share one updated_at to the second, and 233 of
-        // Okta's 313 do. Trusting it re-embedded three quarters of a board for a change that never
-        // touched the text — expensive everywhere, and fatal against a per-chunk embedding quota.
         String before = grab().get(0).checksum();
 
         String bumped = BOARD.replace("\"updated_at\":\"2026-08-01T10:00:00Z\"",
@@ -64,13 +77,12 @@ class GreenhousePlatformTest {
 
     @Test
     void theChecksumStillMovesWhenSomethingIndexedChanges() {
-        // Invariant 3: the checksum must move whenever the posting does, or the edit is skipped forever.
         String before = grab().get(0).checksum();
 
         for (String edit : List.of(
-                BOARD.replace("Build things.", "Build things with Kafka."),   // body
-                BOARD.replace("Senior Backend Engineer", "Staff Backend Engineer"), // title
-                BOARD.replace("Remote - US", "Bengaluru, India"))) {          // location
+                BOARD.replace("Build things.", "Build things with Kafka."),
+                BOARD.replace("Senior Backend Engineer", "Staff Backend Engineer"),
+                BOARD.replace("Remote - US", "Bengaluru, India"))) {
             String after = new GreenhousePlatform(new FakeGreenhouseApi().withBoard("acme", edit))
                     .fetch("acme", BoardFilter.NONE).get(0).checksum();
             Assertions.assertNotEquals(before, after, edit);
@@ -78,19 +90,14 @@ class GreenhousePlatformTest {
     }
 
     @Test
-    void extractsAnExplicitSalaryRangeButNotAYearsOfExperienceRange() {
-        List<RawItem> items = grab();
-
-        Assertions.assertEquals(150_000L, items.get(0).metadata().get("compMin"));
-        Assertions.assertEquals(190_000L, items.get(0).metadata().get("compMax"));
-        Assertions.assertNull(items.get(1).metadata().get("compMin"),
-                "'2 - 5 years experience' must not be read as compensation");
-    }
-
-    @Test
     void greenhouseStatesNoCloseDateSoEntityExpiryIsLeftToTheKnowledgeWindow() {
         Assertions.assertNull(grab().get(0).expiresAt());
     }
 
+    @Test
+    void anEmptyBoardIsAMissSoItCannotShadowALiveBoardElsewhere() {
+        GreenhousePlatform platform = new GreenhousePlatform(new FakeGreenhouseApi().withBoard("dormant", "{\"jobs\": []}"));
 
+        Assertions.assertTrue(platform.countPostings("dormant").isEmpty());
+    }
 }

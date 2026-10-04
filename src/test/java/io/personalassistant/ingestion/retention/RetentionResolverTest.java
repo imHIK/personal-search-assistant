@@ -12,7 +12,6 @@ import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Three-tier retention resolution, and the never-expire default that keeps document corpora safe. */
 class RetentionResolverTest {
 
     private static final SourceType TYPE = SourceType.LOCAL_FS;
@@ -70,7 +69,6 @@ class RetentionResolverTest {
 
     @Test
     void unregisteredConnectorFallsThroughInsteadOfThrowing() {
-        // The sweeper walks every knowledge; one unknown connector type must not stop the rest.
         RetentionResolver resolver = resolver(connector(), "30d");
         Knowledge kn = TestData.knowledge("kn_1", SourceType.NOTION, Instant.now(), java.util.Map.of());
 

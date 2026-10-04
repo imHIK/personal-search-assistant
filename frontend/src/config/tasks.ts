@@ -1,26 +1,55 @@
 import type { TaskFieldType, TaskOutput, TaskSourceText } from '@/api/types'
 
-/**
- * Descriptors for the task editor. Like `connectors.ts`, the form renders from these — no component
- * branches on a mode or an output shape, and adding one is an entry here.
- */
-
-export const taskOutputs: { value: TaskOutput; label: string; hint: string }[] = [
+/** `fields`: the output is JSON shaped by the fields; `metadata`: it runs at indexing time, not in a digest. */
+export const taskOutputs: {
+  value: TaskOutput
+  label: string
+  hint: string
+  fields: boolean
+  metadata?: boolean
+}[] = [
   {
     value: 'SUMMARY',
     label: 'One summary',
     hint: 'A single piece of writing about everything the digest found.',
+    fields: false,
   },
   {
     value: 'PER_ITEM',
     label: 'Notes on each result',
     hint: 'A short note on every result, shown beside it. Choose this to get scores you can scan.',
+    fields: true,
+  },
+  {
+    value: 'METADATA',
+    label: 'Metadata',
+    hint: 'Extracts the fields from each item while it is indexed. Pick the task in a source’s settings.',
+    fields: true,
+    metadata: true,
   },
 ]
 
-export const taskFieldTypes: { value: TaskFieldType; label: string; hint: string }[] = [
+export function taskOutputFor(output: TaskOutput) {
+  return taskOutputs.find((o) => o.value === output) ?? taskOutputs[0]
+}
+
+/** `values`: takes a list of allowed values; `metadataOnly`: offered on METADATA tasks only. */
+export const taskFieldTypes: {
+  value: TaskFieldType
+  label: string
+  hint: string
+  values?: boolean
+  metadataOnly?: boolean
+}[] = [
   { value: 'NUMBER', label: 'Number', hint: 'Shown as a badge on the result. Use 0–10 for scores.' },
-  { value: 'TEXT', label: 'Text', hint: 'Shown as a line under the result. Keep it to a sentence.' },
+  {
+    value: 'TEXT',
+    label: 'Text',
+    hint: 'Shown as a line under the result. Keep it to a sentence.',
+    values: true,
+  },
+  { value: 'BOOLEAN', label: 'Boolean', hint: 'True or false.', metadataOnly: true },
+  { value: 'LIST', label: 'List', hint: 'Several short values.', values: true, metadataOnly: true },
 ]
 
 export const taskSourceTexts: { value: TaskSourceText; label: string; hint: string }[] = [
@@ -37,12 +66,8 @@ export const taskSourceTexts: { value: TaskSourceText; label: string; hint: stri
 ]
 
 /**
- * The values `AnswerPromptBuilder` substitutes into a RAW task's prompt.
- *
- * `slot` is **presentation only**. The backend renders both messages from one map, so every one of
- * these resolves in either message; the slot is just where the editor offers it, because offering
- * `{{sources}}` while someone writes the system message is noise. Typing one into the other message
- * is allowed and works — the editor does not fight it.
+ * `slot` is presentation only: the backend renders both messages from one map, so any of these
+ * resolves in either.
  */
 export const taskPlaceholders: {
   name: string
@@ -74,13 +99,8 @@ export const taskPlaceholders: {
   },
 ]
 
-/** Every placeholder name, for telling a typo from a value that merely sits in the other message. */
 export const taskPlaceholderNames = taskPlaceholders.map((p) => p.name)
 
-/**
- * Plain names for the configured LLM profiles. Unknown profiles fall through to their own name, so a
- * deployment that adds one still gets a working picker.
- */
 const profileLabels: Record<string, string> = {
   lite: 'Fast and cheap',
   answer: 'Slower and more thorough',
@@ -91,7 +111,6 @@ export function llmProfileLabel(profile: string): string {
   return profileLabels[profile] ?? profile
 }
 
-/** Sensible starting fields for a "score each result" task — the shape `job-fit` proved out. */
 export const suggestedScoringFields = [
   { name: 'fit', type: 'NUMBER' as TaskFieldType, description: '0-10, where 10 means act on it today', optional: false },
   { name: 'reason', type: 'TEXT' as TaskFieldType, description: 'One sentence naming what decided the score', optional: false },

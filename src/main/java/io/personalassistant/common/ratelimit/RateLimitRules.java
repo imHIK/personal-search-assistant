@@ -4,14 +4,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Parses and formats the compact {@code "10/1s,500/1m,10000/1d"} rule syntax.
- *
- * <p>Exists so a multi-window policy fits in one config property. The alternative — a property per rule
- * per area — multiplies keys without bound and cannot express "two windows for Gmail, three for Groq",
- * and {@code docs/configuration.md} keeps numeric knobs in {@code application.properties} rather than
- * promoting them to a JSON content file.
- */
 public final class RateLimitRules {
 
     private RateLimitRules() {
@@ -19,7 +11,6 @@ public final class RateLimitRules {
 
     /**
      * @param spec comma-separated {@code permits/window} pairs; blank or null means unlimited
-     * @return the parsed policy
      * @throws IllegalArgumentException if any entry is malformed
      */
     public static RateLimitPolicy parse(String spec) {
@@ -54,8 +45,8 @@ public final class RateLimitRules {
     }
 
     /**
-     * Accepts {@code 30s} / {@code 1m} / {@code 2h} / {@code 1d}. A bare number is rejected rather than
-     * assumed to be seconds: a silently misread window is a limit that looks configured and is not.
+     * A bare number is rejected rather than assumed to be seconds: a misread window looks configured and is
+     * not.
      */
     private static Duration parseWindow(String window, String entry) {
         if (window.length() < 2) {
@@ -82,7 +73,6 @@ public final class RateLimitRules {
         };
     }
 
-    /** Inverse of {@link #parseWindow}, choosing the largest unit that divides the duration exactly. */
     public static String format(Duration window) {
         long seconds = window.toSeconds();
         if (seconds % 86400 == 0) {

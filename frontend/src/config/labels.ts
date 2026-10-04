@@ -1,12 +1,3 @@
-/**
- * Every user-facing string in the app.
- *
- * Two reasons this file exists. First, the interface vocabulary is reviewable in one place rather
- * than scattered across components. Second, the domain vocabulary and the UI vocabulary are
- * deliberately different: the code, API and docs say Knowledge / Entity / Iterable / Cursor
- * (see CLAUDE.md — that is fixed), but none of those words mean anything to someone using the app.
- * The mapping lives here and nowhere else, so changing "Sources" back to "Knowledge" is one edit.
- */
 
 export const nouns = {
   /** Knowledge */
@@ -20,7 +11,6 @@ export const nouns = {
   accounts: 'Accounts',
 } as const
 
-/** Named here so the idle hint can quote the toggle by the exact name on the switch. */
 const answerToggle = 'Summarize results'
 
 export const labels = {
@@ -56,8 +46,9 @@ export const labels = {
     answerToggle,
     answerToggleHint: 'Reads the top results and writes a cited answer',
     answerHeading: 'Answer',
+    vectorUnavailable: 'Semantic search is unavailable, so these are keyword matches only.',
     answerUnavailable:
-      'The answer service is unavailable, so only results are shown. Check that an LLM provider and API key are configured.',
+      'The answer service is unavailable, so only results are shown. Check the LLM section under Accounts.',
     narrowBy: 'Narrow by',
     clearFilters: 'Clear',
     filterAny: 'Any',
@@ -69,13 +60,21 @@ export const labels = {
     empty: 'No results',
     emptyHint: 'Try different words, widen the scope, or check that indexing has finished.',
     idle: 'Search across everything you have connected.',
-    idleHint: `Results come from your own files, mail and documents. Turn off “${answerToggle}” to keep everything on this machine.`,
+    idleHint: 'Results come from your own files, mail and documents.',
     resultCount: (n: number, seconds: string) =>
       `${n} ${n === 1 ? 'result' : 'results'} in ${seconds}s`,
     openOriginal: 'Open',
     copyLink: 'Copy link',
     viewItem: `View ${nouns.item.toLowerCase()}`,
     citation: (n: number) => `Source ${n}`,
+    moreMatches: (n: number) => `${n} more ${n === 1 ? 'match' : 'matches'} in this ${nouns.item.toLowerCase()}`,
+    hideMatches: 'Hide other matches',
+    filters: 'Filters',
+    filtersActive: (n: number) => `Filters · ${n}`,
+    matchesPerResult: 'Matches per result',
+    matchesDefault: 'Default matches',
+    matchesOption: (n: number) =>
+      n === 0 ? 'All matches' : `${n} ${n === 1 ? 'match' : 'matches'} per result`,
   },
 
   sources: {
@@ -105,24 +104,26 @@ export const labels = {
   detail: {
     overview: 'Overview',
     items: nouns.items,
-    activity: 'Sync activity',
+    groups: 'Groups',
     settings: 'Settings',
-    searchable: 'Searchable',
+    indexed: 'Indexed',
     processing: 'Processing',
-    failed: "Couldn't process",
+    failed: 'Failed',
     progress: (indexed: number, total: number) =>
       `${indexed.toLocaleString()} of ${total.toLocaleString()} ready to search`,
   },
 
+  filters: {
+    clear: 'Clear',
+    all: (noun: string) => `All ${noun.toLowerCase()}`,
+  },
+
   items: {
-    all: 'All',
-    searchable: 'Searchable',
-    processing: 'Processing',
-    failed: "Couldn't process",
     empty: 'Nothing here yet',
     emptyHint: 'Items appear as they are imported. This can take a few minutes after connecting.',
     emptyFiltered: 'Nothing matches this filter',
     errorHint: 'Why this item could not be processed',
+    showOnlyGroup: (name: string) => `Show only items from ${name}`,
     refresh: 'Reprocess',
     refreshHint: 'Read this item again from what was already downloaded',
     remove: 'Remove',
@@ -137,16 +138,22 @@ export const labels = {
     next: 'Next',
   },
 
-  activity: {
-    empty: 'No sync activity yet',
-    emptyHint: 'Activity appears once the first check runs.',
-    older: 'Older items',
-    newer: 'New items',
+  groups: {
+    empty: 'No groups yet',
+    emptyHint: 'Groups appear once the first check runs.',
+    emptyFiltered: 'No groups match this filter',
     everything: 'Everything',
     imported: (n: number) => `${n.toLocaleString()} imported`,
-    lastChecked: (when: string) => `last checked ${when}`,
+    lastChecked: (when: string) => `checked ${when}`,
     neverChecked: 'not checked yet',
+    importingHistory: 'importing history',
+    viewItems: 'View items',
+    importingHistoryHint:
+      'Still working backwards through what was already there when you connected. This runs once.',
     legend: 'What these mean',
+    legendSynced: 'is the normal resting state: everything here is imported and we are waiting for the next check.',
+    legendSyncing: 'means we are reading from it right now. A warning beside it means the service is making us wait.',
+    legendFailed: 'means it stopped after repeated errors and needs you — nothing new comes in until it is retried.',
   },
 
   reconnectBanner: {
@@ -156,9 +163,49 @@ export const labels = {
     action: 'Fix it',
   },
 
+  jobs: {
+    title: 'Job postings',
+    count: (n: number) => `${n.toLocaleString()} posting${n === 1 ? '' : 's'}`,
+    filters: 'Filters',
+    clear: 'Clear',
+    any: 'Any',
+    min: 'Min',
+    max: 'Max',
+    source: 'Source',
+    status: 'Status',
+    noStatus: 'No status',
+    setStatus: 'Set status',
+    clearStatus: 'Clear status',
+    showHidden: 'Show hidden',
+    hide: 'Hide',
+    unhide: 'Unhide',
+    firstSeen: (when: string) => `Added ${when}`,
+    open: 'Open posting',
+    yoe: (years: string) => `${years}+ yrs`,
+    isNew: 'New',
+    newHint: 'Added since your last visit',
+    more: (n: number) => `+${n}`,
+    less: 'Less',
+    mySkills: 'My skills',
+    mySkillsHint: 'Comma-separated. Matching skills are highlighted on each posting. Saved in this browser only.',
+    mySkillsPlaceholder: 'e.g. Java, Kafka, Kubernetes',
+    skillMatch: 'One of your skills',
+    empty: 'No postings match',
+    emptyHint: 'Loosen a filter, or check that a job-board source has finished syncing.',
+    noSources: 'No job-board sources yet',
+    noSourcesHint: 'Add a Company job boards source in the main console, then come back.',
+    markFailed: "Couldn't save that",
+  },
+
   accounts: {
     title: nouns.accounts,
     subtitle: 'Sign-in details reused across sources.',
+    sections: { accounts: nouns.accounts, llm: 'LLM' },
+    sectionEmpty: {
+      accounts: `No ${nouns.accounts.toLowerCase()} yet`,
+      llm: 'No LLM connection — answers, digest tasks and enrichment are off until you add one.',
+    },
+    addLlm: 'Add LLM',
     add: `Add ${nouns.account.toLowerCase()}`,
     empty: `No ${nouns.accounts.toLowerCase()} yet`,
     emptyHint: 'Google sources need an account before they can be connected.',
@@ -188,6 +235,8 @@ export const labels = {
     connectSaveFirst: 'Give this account a name first, then connect.',
     connectOk: 'Account connected',
     connectFailed: "That didn't complete — the account was not connected.",
+    llmRateLimitWarning:
+      'Answers fail fast when the limit is reached; background tasks wait for the next window.',
     rateLimitTitle: 'Speed limit',
     rateLimitHint:
       'How fast this account may be called. Leave empty to use the server default. Most services ' +
@@ -240,6 +289,19 @@ export const labels = {
     scopeWarning:
       'Saving this re-checks the account and rescans the source. It can take a while, and the source pauses until it finishes.',
     chunking: 'Advanced processing',
+    retention: 'Retention',
+    retentionPeriod: 'Retention period',
+    retentionUnit: 'Unit',
+    retentionHint: (inherited?: string) =>
+      inherited
+        ? `Empty inherits the connector default (${inherited}).`
+        : 'Empty inherits the server default; unset means entities never expire.',
+    enrichment: 'Enrichment',
+    enrichTask: 'Metadata task',
+    enrichNone: 'None',
+    enrichHint:
+      'Runs on each item while it is indexed. Items already indexed pick it up when the source is re-indexed.',
+    enrichNoTasks: 'No metadata tasks yet — create one under Tasks with the Metadata output.',
     name: 'Name',
     connector: 'Connected via',
     connectorFixed: 'Cannot be changed after creation.',
@@ -317,13 +379,9 @@ export const labels = {
     namePlaceholder: 'New backend roles',
     queryLabel: 'Search for',
     queryPlaceholder: 'backend engineer distributed systems',
-    queryHint: 'Leave blank if you are searching by a document instead.',
     sourcesLabel: 'Look in',
     sourcesAllHint: 'Every source. Pick some to keep this digest to the right material.',
     sourcesNone: 'No sources connected yet.',
-    sourceEntity: 'Or search by a document',
-    sourceEntityPlaceholder: 'ent_…',
-    sourceEntityHint: 'The id of something already indexed — a CV, a brief. Find it under a source.',
     windowLabel: 'Look back',
     windowHint:
       'Counts from when something was last added to a source, not when it was written. Pick “No time limit” unless the source keeps changing.',
@@ -346,8 +404,6 @@ export const labels = {
     sentTo: 'Sent to',
     noResults: 'Nothing new',
     resultCount: (n: number) => `${n} new ${n === 1 ? 'result' : 'results'}`,
-    // A digest that is not filtering by newness has no "new" to speak of; calling its matches new
-    // is simply wrong, and was the copy every non-job-search digest got.
     resultCountPlain: (n: number) => `${n} ${n === 1 ? 'result' : 'results'}`,
     paused: 'Paused',
     pause: 'Pause',
@@ -356,12 +412,12 @@ export const labels = {
     removeConfirm: 'Delete this digest?',
     removeBody: 'Its history of past runs is deleted with it. This cannot be undone.',
     runFailed: 'This run failed',
+    taskFailed: 'The task could not run, so only results are shown.',
     createFailed: 'Could not create the digest',
     saveFailed: 'Could not save the digest',
     save: 'Save changes',
     saved: 'Saved',
 
-    // Detail page
     back: 'All digests',
     tabRuns: 'History',
     tabSettings: 'Settings',
@@ -373,7 +429,6 @@ export const labels = {
     dueNow: 'Due now',
     notScheduled: 'Not scheduled',
     searchesFor: 'Searches for',
-    searchesLike: 'Finds things like',
     looksIn: 'Looks in',
     looksInAll: 'Everything connected',
     lookBack: 'Looks back',
@@ -381,20 +436,15 @@ export const labels = {
     runsEvery: 'Runs',
     taskLabel: 'Then',
     taskNone: 'Just lists what is new',
-    // A digest naming a task that cannot be resolved must not be described as naming none — that
-    // reads as a working digest and hides the reason its runs carry no task output.
+    useLlmOff: 'LLM off',
     taskMissing: 'Task unavailable',
     showsOnlyNew: 'Shows only what is new',
     showsEverything: 'Shows every match, new or not',
 
-    // Run outcomes. These three all rendered as "no results" before the counters existed.
     outcomeFailed: 'Failed',
     outcomeNothingMatched: 'Nothing matched',
     outcomeAllSeen: (n: number) =>
       `Nothing new — ${n} ${n === 1 ? 'result' : 'results'}, all seen before`,
-    // The window counts from when something was last indexed, so a source that is ingested once and
-    // then left alone silently leaves a short window and never comes back. Reported as "nothing
-    // matched", that sends people to rewrite a query that was fine all along.
     outcomeOutsideWindow: (n: number) =>
       `Nothing in this window — ${n} older ${n === 1 ? 'match' : 'matches'}`,
     outcomeOutsideWindowHint:
@@ -415,18 +465,15 @@ export const labels = {
     resetHistoryDone: 'History reset — the next run starts fresh',
     historyResetAt: 'History was reset',
 
-    // Form additions
     taskField: 'What should I do with the results?',
     taskFieldHint: 'An instruction the assistant runs over everything the digest finds.',
     taskFieldNone: 'Nothing — just show me what is new',
     taskManage: 'Write your own',
+    useLlm: 'Use LLM',
     topK: 'How many results',
     onePerDocument: 'One result per document',
     onePerDocumentHint: 'Otherwise several passages from the same file can each take a slot',
     groupDuplicates: 'Group duplicates',
-    pickDocument: 'Choose a document',
-    changeDocument: 'Change',
-    clearDocument: 'Clear',
     filtersLabel: 'Narrow it down',
   },
 
@@ -504,7 +551,7 @@ export const labels = {
     updated: 'Task saved',
 
     name: 'Name',
-    namePlaceholder: 'Score roles against my CV',
+    namePlaceholder: 'Score roles',
     description: 'What it is for',
     descriptionPlaceholder: 'Shown when picking a task for a digest',
     instruction: 'Instruction',
@@ -519,6 +566,7 @@ export const labels = {
     fieldType: 'Type',
     fieldDescription: 'What to put here',
     fieldOptional: 'May be left out',
+    fieldValues: 'Allowed values, comma-separated (empty: any)',
     addField: 'Add a field',
     removeField: 'Remove',
     useSuggested: 'Use score, reason and concern',

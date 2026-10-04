@@ -6,19 +6,14 @@ import java.io.InputStream;
 import java.util.Set;
 import org.apache.tika.parser.ParseContext;
 
-/**
- * Dedicated spreadsheet extractor for Excel ({@code .xls}/{@code .xlsx}) and ODF spreadsheets. POI
- * (via Tika) emits each sheet's cells as text, row by row, with the sheet name as a heading — enough
- * for keyword/semantic recall over tabular data. (Plain {@code .csv}/{@code .tsv} stay on the
- * text parser, which already reads them verbatim.) Preferred over the generic fallback for Excel.
- */
+/** CSV and TSV stay on the text parser, which reads them verbatim. */
 @ApplicationScoped
 public class SpreadsheetContentParser implements ContentParser {
 
     private static final Set<String> TYPES = Set.of(
-            "application/vnd.ms-excel",                                                    // .xls
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",           // .xlsx
-            "application/vnd.oasis.opendocument.spreadsheet");                             // .ods
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.oasis.opendocument.spreadsheet");
 
     private final ParseContext context = TikaSupport.officeContext();
 

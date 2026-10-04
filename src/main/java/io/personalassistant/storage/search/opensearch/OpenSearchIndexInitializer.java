@@ -13,16 +13,9 @@ import org.opensearch.client.ResponseException;
 import org.opensearch.client.RestClient;
 
 /**
- * Ensures the versioned chunks index ({@code chunks_v3_768}) and its alias ({@code chunks}) exist at
- * startup, with the hybrid mapping (BM25 {@code text} + {@code knn_vector} embedding). The app
- * always talks to the alias, so a re-index into a new physical index + alias flip is a
- * zero-downtime operation. Creation is skipped if the physical index already exists.
- *
- * <p><strong>v2 → v3.</strong> The bump is the analysis change: {@code text}/{@code title} moved from the
- * {@code standard} analyzer to a stemming, stopword-filtering English analyzer and gained a {@code raw}
- * keyword sub-field. Analysis cannot be changed on a live index, so a new physical index is the only way
- * to adopt it — hence the version in the name. An existing {@code chunks_v2_768} keeps working exactly as
- * before; nothing here touches or deletes it.
+ * Creates the versioned physical index and its alias at startup; the app only talks to the alias. v3's change
+ * is analysis (an English analyzer and a raw sub-field), which cannot change on a live index, hence a new
+ * physical index. An existing v2 is left alone.
  */
 @Singleton
 public class OpenSearchIndexInitializer {
@@ -31,19 +24,9 @@ public class OpenSearchIndexInitializer {
     private static final String PHYSICAL_INDEX = "chunks_v3_768";
 
     /**
-     * Explicit types for the metadata facets that filters compare on. {@code metadata} stays a dynamic
-     * object — carrying arbitrary connector facets is the whole point of it — but the fields a range
-     * filter targets cannot be left to dynamic inference, because inference is decided by whichever
-     * document happens to be indexed first. A posting whose {@code compMin} is absent, or one board
-     * emitting it as a string, would type the field as {@code text} for the life of the index, and every
-     * later numeric comparison would silently be lexicographic or match nothing at all.
-     *
-     * <p>Adding sub-fields to an existing object mapping is an <em>additive</em> change, which OpenSearch
-     * accepts in place — no alias flip, no re-index, invariant 5 untouched (the embedding width does not
-     * move). {@link #ensureMetadataMapping()} applies it on every boot so an index created before these
-     * fields existed picks them up. Only fields not yet present are affected; a field that already has a
-     * conflicting dynamic type is reported rather than forced, since changing it really would need a new
-     * index.
+     * Explicit types for the metadata fields filters compare on: dynamic inference is settled by the first
+     * document indexed, and a string would make numeric comparisons lexicographic. Added on every boot, which
+     * OpenSearch accepts in place for new sub-fields.
      */
 
     // TODO: why do we need job hunt specific details here
@@ -56,11 +39,8 @@ public class OpenSearchIndexInitializer {
               "dedupeKey":   { "type": "keyword" },
               "applyUrl":    { "type": "keyword" },
               "team":        { "type": "keyword" },
-              "compCurrency":{ "type": "keyword" },
               "remote":      { "type": "boolean" },
               "sourceRank":  { "type": "integer" },
-              "compMin":     { "type": "long" },
-              "compMax":     { "type": "long" },
               "postedAt":    { "type": "date" }
             }""";
 
@@ -72,9 +52,9 @@ public class OpenSearchIndexInitializer {
     public OpenSearchIndexInitializer(RestClient client,
                                       @ConfigProperty(name = "opensearch.index.chunks",
                                               defaultValue = "chunks") String alias,
-                                      // No defaultValue on purpose: invariant 5 bakes this width into the
-                                      // knn_vector mapping, and a guessed default silently builds an index
-                                      // that no provider's vectors fit. Missing => loud startup failure.
+                                      // No defaultValue on purpose: this width is baked into the knn_vector
+                                      // mapping, and a guessed one builds an index nothing fits. A missing
+                                      // property must fail startup.
                                       @ConfigProperty(name = "app.embedding.dimension") int dimension) {
         this.client = client;
         this.alias = alias;
@@ -93,7 +73,7 @@ public class OpenSearchIndexInitializer {
             LOG.log(Level.WARNING, "Unexpected response checking index existence", notFound);
             return;
         } catch (IOException e) {
-            // OpenSearch may simply not be running in this environment; log and continue.
+            // OpenSearch may not be running here; log and continue.
             LOG.log(Level.WARNING, "Could not reach OpenSearch to ensure index; will retry on first use", e);
             return;
         }
@@ -101,13 +81,8 @@ public class OpenSearchIndexInitializer {
     }
 
     /**
-     * Add any missing typed {@code metadata} sub-fields to an index that already exists. Additive
-     * mapping updates are accepted in place, and this is idempotent — re-sending a property identical to
-     * the stored one is a no-op — so it is safe on every boot.
-     *
-     * <p>A failure here is logged, never fatal: the app still works with dynamically-typed metadata, it
-     * just cannot be trusted for range comparisons, and refusing to start would be a far worse outcome
-     * than a degraded filter.
+     * Idempotent. A failure is logged, never fatal: metadata stays dynamically typed and only range filters
+     * degrade.
      */
     private void ensureMetadataMapping() {
         Request request = new Request("PUT", "/" + PHYSICAL_INDEX + "/_mapping");
@@ -127,11 +102,8 @@ public class OpenSearchIndexInitializer {
     }
 
     private void createIndex() {
-        // Only claim the alias if nothing else holds it. Writing through an alias that resolves to two
-        // indices fails outright, and reading through one silently returns each chunk twice — so on a
-        // version bump the new index is created without the alias and the operator does the swap when the
-        // re-index is verified. That is the documented flow; doing it automatically would repoint live
-        // search at an empty index.
+        // Only claim the alias when nothing holds it: an alias over two indices fails writes and doubles
+        // reads. On a version bump the operator swaps it once the re-index is verified.
         boolean aliasFree = !aliasExists();
         Request request = new Request("PUT", "/" + PHYSICAL_INDEX);
         request.setJsonEntity(mappingJson(aliasFree));
@@ -152,7 +124,7 @@ public class OpenSearchIndexInitializer {
         }
     }
 
-    /** True if the alias already resolves to some index. Treated as "taken" on any error — fail safe. */
+    /** Treated as taken on any error: fail safe. */
     private boolean aliasExists() {
         try {
             client.performRequest(new Request("HEAD", "/_alias/" + alias));
@@ -166,24 +138,9 @@ public class OpenSearchIndexInitializer {
     }
 
     /**
-     * The index definition. Two analysis choices are load-bearing.
-     *
-     * <p><strong>An English analyzer, not {@code standard}.</strong> {@code standard} only tokenizes and
-     * lowercases, so "holidays" and "holiday" are different terms and every stopword in a
-     * natural-language query is a scoreable term. That is half of why a conversational query used to rank
-     * documents matching "give"/"all"/"this"/"year"; the other half is the query shape
-     * ({@code app.search.lexical.minimum-should-match}). Stemming plus {@code _english_} stopwords fixes
-     * the term side.
-     *
-     * <p><strong>A {@code raw} keyword sub-field.</strong> Neither {@code text} nor {@code title} had one,
-     * so exact-value matching, sorting and aggregating on a title were all impossible. Capped at
-     * {@code ignore_above} so a long chunk body does not blow up the doc-values.
-     *
-     * <p>Both are mapping changes, so they only take effect on a newly created physical index — an
-     * existing one keeps whatever analyzer it was built with (invariant: bump the index name and
-     * re-index).
+     * An English analyzer, since {@code standard} neither stems nor drops stopwords, and a raw keyword
+     * sub-field for exact matching. Both apply only to a newly created physical index.
      */
-    // Package-private so the mapping can be asserted without a client.
     String mappingJson(boolean withAlias) {
         return """
             {

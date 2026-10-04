@@ -1,12 +1,15 @@
 package io.personalassistant.ingestion.connector.ats.oraclehcm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.ingestion.connector.ats.BoardFilter;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Handle parsing, the per-posting cost control, and mapping. */
 class OracleHcmPlatformTest {
 
     private static final String SITE = "eofe.fa.us2.oraclecloud.com/BNY-Careers";
@@ -22,12 +25,58 @@ class OracleHcmPlatformTest {
         return new OracleHcmPlatform(api).fetch(SITE, BoardFilter.ofLocations(hints));
     }
 
-    // ---- cost control --------------------------------------------------------------------------
+    @Test
+    void aLocationTermIsResolvedToThePlaceItNamesAndQueriedById() {
+        FakeOracleHcmApi api = board().withPlaces();
+
+        List<RawItem> items = fetch(api, List.of("india"));
+
+        Assertions.assertEquals(List.of("1", "3"), items.stream().map(RawItem::externalId).toList());
+        Assertions.assertEquals(List.of("loc-India"), api.locationIds);
+        Assertions.assertTrue(api.keywords.isEmpty(), "keywords miss most postings, so none are sent");
+        Assertions.assertEquals(2, api.detailCalls.size(), "the Dublin role is never fetched");
+    }
 
     @Test
-    void theLocationTermsAreSentAsKeywordsSoOnlyMatchesCostADetailCall() {
-        // The listing carries no description, so every kept requisition costs a second request. Without
-        // the keyword prefilter, JPMorgan's 7,325 requisitions would be 7,326 requests per poll.
+    void onlyAnExactlyNamedPlaceCountsNotEveryTypeaheadPrefixMatch() {
+        FakeOracleHcmApi api = new FakeOracleHcmApi()
+                .withRequisition("1", "Backend Engineer", "Pune, Maharashtra, India", "<p>A.</p>")
+                .withRequisition("2", "Analyst", "Indianapolis, Indiana, United States", "<p>B.</p>")
+                .withPlaces();
+
+        List<RawItem> items = fetch(api, List.of("india"));
+
+        Assertions.assertEquals(List.of("loc-India"), api.locationIds);
+        Assertions.assertEquals(List.of("1"), items.stream().map(RawItem::externalId).toList());
+    }
+
+    @Test
+    void aTermThePodDoesNotKnowAsAPlaceIsSentAsAKeyword() {
+        FakeOracleHcmApi api = board().withPlaces();
+
+        fetch(api, List.of("bengaluru", "bangalore"));
+
+        Assertions.assertEquals(List.of("loc-Bengaluru, Karnataka, India"), api.locationIds);
+        Assertions.assertEquals(List.of("bangalore"), api.keywords);
+    }
+
+    @Test
+    void aThrottledPlaceLookupDefersRatherThanFallingBackToKeywords() {
+        RateLimitedException throttled =
+                new RateLimitedException(RateLimitKey.board("oraclehcm"), Instant.now().plusSeconds(60));
+        FakeOracleHcmApi api = new FakeOracleHcmApi() {
+            @Override
+            public JsonNode locationSuggestions(OracleHcmSite site, String term) {
+                throw throttled;
+            }
+        };
+
+        Assertions.assertSame(throttled,
+                Assertions.assertThrows(RateLimitedException.class, () -> fetch(api, List.of("india"))));
+    }
+
+    @Test
+    void withoutAPlaceLookupTheLocationTermsAreSentAsKeywords() {
         FakeOracleHcmApi api = board();
 
         List<RawItem> items = fetch(api, List.of("india"));
@@ -38,7 +87,6 @@ class OracleHcmPlatformTest {
 
     @Test
     void eachTermIsItsOwnQueryAndTheResultsAreUnioned() {
-        // Alternative spellings, not a conjunction — the same reason Workday sends one query per term.
         FakeOracleHcmApi api = new FakeOracleHcmApi()
                 .withRequisition("1", "Backend Engineer", "Bengaluru, India", "<p>A.</p>")
                 .withRequisition("2", "Data Engineer", "Bangalore, India", "<p>B.</p>");
@@ -68,7 +116,6 @@ class OracleHcmPlatformTest {
 
     @Test
     void aWithdrawnRequisitionSkipsItselfRatherThanFailingTheSite() {
-        // One posting pulled between the listing and the detail call must not cost the other two.
         FakeOracleHcmApi api = new FakeOracleHcmApi() {
             @Override
             public com.fasterxml.jackson.databind.JsonNode requisition(OracleHcmSite site, String id) {
@@ -96,15 +143,12 @@ class OracleHcmPlatformTest {
         Assertions.assertEquals(250, fetch(api, List.of()).size());
     }
 
-    // ---- mapping -------------------------------------------------------------------------------
-
     @Test
     void mapsARequisitionIntoNormalisedMetadata() {
         RawItem item = fetch(board(), List.of("pune")).get(0);
 
         Assertions.assertEquals("Backend Engineer", item.title());
         Assertions.assertEquals("oraclehcm", item.metadata().get("platform"));
-        // Oracle spells the country out, so nothing has to be appended for "India" to match.
         Assertions.assertEquals("Pune, Maharashtra, India", item.metadata().get("location"));
         Assertions.assertEquals("https://eofe.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/"
                 + "sites/BNY-Careers/job/1", item.metadata().get("uri"));
@@ -123,12 +167,32 @@ class OracleHcmPlatformTest {
         Assertions.assertNotEquals(before, after);
     }
 
-    // ---- resolution ----------------------------------------------------------------------------
+    @Test
+    void aLabelNamesTheCompanyInsteadOfTheSiteNumber() {
+        RawItem unlabelled = fetch(board(), List.of("pune")).get(0);
+        RawItem labelled = new OracleHcmPlatform(board())
+                .fetch(SITE, "BNY Mellon", BoardFilter.ofLocations(List.of("pune"))).get(0);
+
+        Assertions.assertEquals("BNY-Careers", unlabelled.metadata().get("company"));
+        Assertions.assertEquals("BNY Mellon", labelled.metadata().get("company"));
+        Assertions.assertEquals("bny-mellon|backend-engineer|pune-maharashtra-india",
+                labelled.metadata().get("dedupeKey"));
+    }
+
+    @Test
+    void aLabelChangesTheChecksumSoPostingsFiledUnderTheSiteNumberAreReIngested() {
+        String unlabelled = fetch(board(), List.of("pune")).get(0).checksum();
+        String labelled = new OracleHcmPlatform(board())
+                .fetch(SITE, "BNY Mellon", BoardFilter.ofLocations(List.of("pune"))).get(0).checksum();
+        String blankLabel = new OracleHcmPlatform(board())
+                .fetch(SITE, " ", BoardFilter.ofLocations(List.of("pune"))).get(0).checksum();
+
+        Assertions.assertNotEquals(unlabelled, labelled);
+        Assertions.assertEquals(unlabelled, blankLabel);
+    }
 
     @Test
     void aBareCompanyNameResolvesToFalseWithoutAnyRequest() {
-        // Resolution probes every platform for every company; a speculative request per name would
-        // make adding companies slow for no possible benefit.
         FakeOracleHcmApi api = board();
 
         Assertions.assertFalse(new OracleHcmPlatform(api).hasBoard("paytm"));
@@ -148,8 +212,6 @@ class OracleHcmPlatformTest {
 
     @Test
     void anEmptySiteReadsAsNoBoard() {
-        // Indistinguishable from a wrong site number, and reported the same way — the accepted
-        // ambiguity every platform here shares.
         Assertions.assertFalse(new OracleHcmPlatform(new FakeOracleHcmApi()).hasBoard(SITE));
     }
 

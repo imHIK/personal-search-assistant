@@ -1,10 +1,11 @@
 import { CalendarClock, Plug, Search, Send, Sparkles, Library, Wrench } from 'lucide-react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ReconnectBanner } from '@/components/ReconnectBanner'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useTechnicalDetailsToggle } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { labels } from '@/config/labels'
+import { lastSearchPath } from '@/features/search/lastSearch'
 import { useHealth } from '@/hooks/queries'
 import { cn } from '@/lib/utils'
 
@@ -16,6 +17,12 @@ const navItems = [
   { to: '/channels', label: labels.nav.channels, icon: Send, end: false },
   { to: '/connections', label: labels.nav.accounts, icon: Plug, end: false },
 ]
+
+function useNavItems() {
+  // Re-renders on navigation, so the Search link picks up the last search.
+  useLocation()
+  return navItems.map((item) => (item.to === '/' ? { ...item, to: lastSearchPath() } : item))
+}
 
 export function Layout() {
   return (
@@ -35,6 +42,7 @@ export function Layout() {
 }
 
 function Sidebar() {
+  const items = useNavItems()
   return (
     <aside className="hidden w-56 shrink-0 border-r border-[var(--border)] bg-[var(--bg-subtle)] sm:flex sm:flex-col">
       <div className="flex items-center gap-2.5 px-5 py-5">
@@ -45,9 +53,9 @@ function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-0.5 px-3" aria-label="Main">
-        {navItems.map(({ to, label, icon: Icon, end }) => (
+        {items.map(({ to, label, icon: Icon, end }) => (
           <NavLink
-            key={to}
+            key={label}
             to={to}
             end={end}
             className={({ isActive }) =>
@@ -92,13 +100,13 @@ function TopBar() {
   )
 }
 
-/** The sidebar is hidden below `sm`, so the nav collapses into the top bar there. */
 function MobileNav() {
+  const items = useNavItems()
   return (
     <nav className="flex items-center gap-1 sm:hidden" aria-label="Main">
-      {navItems.map(({ to, label, icon: Icon, end }) => (
+      {items.map(({ to, label, icon: Icon, end }) => (
         <NavLink
-          key={to}
+          key={label}
           to={to}
           end={end}
           className={({ isActive }) =>

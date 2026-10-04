@@ -13,88 +13,63 @@ import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Groups results that are the same material arriving by different routes, and keeps one member of each
- * group. A general corpus problem, not a job-board one: the same file lives in Drive and as a mail
- * attachment, a thread is forwarded, a document is copied between folders — and the unique
- * {@code (knowledgeId, externalId)} index cannot see any of that, because it is scoped to a single
- * knowledge by construction.
- *
- * <p>Three layers, cheapest first, each one a grouping rule rather than a deletion:
- *
- * <ol>
- *   <li><b>Exact</b> — identical normalised text. Catches literal copies across knowledges.</li>
- *   <li><b>Canonical key</b> — an equal {@code metadata.dedupeKey}. The framework only groups on the
- *       key; what it <em>means</em> is the source's business (the ATS normalisers build
- *       {@code company|title|location}).</li>
- *   <li><b>Near-duplicate</b> — high token-shingle overlap, for copies that differ by a header, a
- *       footer or light re-wording.</li>
- * </ol>
- *
- * <h2>Why shingles rather than embedding cosine</h2>
- * Cosine over the chunk vectors would answer a different question. Two genuinely distinct roles at the
- * same company, or two separate reports on one project, sit very close in embedding space — collapsing
- * them would hide a real result, which is a far worse failure than showing a duplicate. Shingle overlap
- * measures shared wording, which is what "the same document twice" actually looks like. It is also free
- * here: the hits already carry their text, whereas the vectors are deliberately excluded from
- * {@code _source} and would have to be fetched back.
- *
- * <h2>Non-destructive, and off by default</h2>
- * Nothing is deleted and no index is touched — this reorders a result list. It runs only when the caller
- * sets {@code collapseDuplicates}, so existing consumers see byte-identical behaviour.
+ * Groups results that are the same material by different routes and keeps one per group; nothing is deleted.
+ * Layers, cheapest first: identical normalised text, an equal {@code metadata.dedupeKey}, then high shingle
+ * overlap. The text layers also require alike titles, since identical text under unrelated titles is shared
+ * boilerplate. Shingles rather than embedding cosine: distinct roles at one company sit close in embedding
+ * space, and hiding a real result is worse than showing a duplicate.
  */
 @ApplicationScoped
 public class DuplicateCollapser {
 
+    /** Mirrors the config default, for the constructor that predates the title check. */
+    private static final double DEFAULT_TITLE_SIMILARITY = 0.5;
+
     /**
-     * Shingle width in tokens. Long enough that ordinary shared phrasing between two different documents
-     * does not register, short enough to survive light editing of a genuine copy.
+     * Long enough that shared phrasing between different documents does not register, short enough to survive
+     * light editing.
      */
     @ConfigProperty(name = "app.search.dedupe.shingle-size", defaultValue = "5")
     int shingleSize;
 
     /**
-     * Jaccard overlap at or above which two hits are treated as the same material. Set high on purpose:
-     * a false merge silently removes a result the user should have seen, and there is no way for them to
-     * discover it, whereas a missed merge is merely a visible duplicate.
-     *
-     * <p>Not higher, though, because overlap is sensitive to length. A boilerplate header costs a fixed
-     * number of shingles, so on a short chunk it moves the ratio a long way — an aggregator prefixing
-     * three words to a 30-token posting already lands near 0.89. The floor is set below that so a genuine
-     * copy with a banner still groups, while unrelated text (which shares almost no 5-token shingle at
-     * all, scoring near zero) stays nowhere close.
+     * High on purpose: a false merge silently hides a result, while a missed one is a visible duplicate. Not
+     * higher, because overlap is length-sensitive: a short posting behind a three-word banner already lands
+     * near 0.89.
      */
     @ConfigProperty(name = "app.search.dedupe.near-duplicate-threshold", defaultValue = "0.85")
     double nearDuplicateThreshold;
 
-    /**
-     * Cap on how many hits take part in the pairwise near-duplicate pass, which is O(n²) in the number of
-     * candidates. Everything beyond this still goes through the two exact layers.
-     */
+    /** The near-duplicate pass is O(n²); hits beyond this still go through the exact layers. */
     @ConfigProperty(name = "app.search.dedupe.max-comparisons", defaultValue = "100")
     int maxComparisons;
+
+    /**
+     * 0.5 still groups "Fwd: Q3 report" with "Q3 report" while keeping "Backend Engineer" and "Frontend
+     * Engineer" apart. A blank title does not block.
+     */
+    @ConfigProperty(name = "app.search.dedupe.title-similarity", defaultValue = "0.5")
+    double titleSimilarity;
 
     public DuplicateCollapser() {
     }
 
-    /**
-     * Test-friendly constructor that sets the tunables explicitly (CDI uses the no-arg one). The
-     * {@code @ConfigProperty} fields are package-private per house style, which callers in another
-     * package cannot reach.
-     */
     public DuplicateCollapser(int shingleSize, double nearDuplicateThreshold, int maxComparisons) {
+        this(shingleSize, nearDuplicateThreshold, maxComparisons, DEFAULT_TITLE_SIMILARITY);
+    }
+
+    public DuplicateCollapser(int shingleSize, double nearDuplicateThreshold, int maxComparisons,
+                              double titleSimilarity) {
         this.shingleSize = shingleSize;
         this.nearDuplicateThreshold = nearDuplicateThreshold;
         this.maxComparisons = maxComparisons;
+        this.titleSimilarity = titleSimilarity;
     }
 
     /**
-     * Collapse {@code hits}, preserving rank order.
-     *
-     * <p>A group is represented by its <em>best-ranked</em> member's position, so collapsing never
-     * promotes anything above something it did not already outrank. Which member is kept is a separate
-     * question, answered by {@code metadata.sourceRank}: a higher rank wins, so a posting found both on a
-     * company's own board and through an aggregator keeps the canonical listing with the real apply URL.
-     * With no rank stated anywhere, the best-ranked member is kept.
+     * A group sits at its best-ranked member's position, so nothing is promoted. The member kept is the one
+     * with the highest {@code metadata.sourceRank} (a company's own board over an aggregator), else the
+     * best-ranked.
      */
     public List<SearchHit> collapse(List<SearchHit> hits) {
         if (hits == null || hits.size() < 2) {
@@ -106,27 +81,30 @@ public class DuplicateCollapser {
         List<Set<String>> shingles = new ArrayList<>();
 
         for (SearchHit hit : hits) {
-            String normalised = normalise(hit.text());
+            String normalised = normalise(hit.groundingText());
+            Set<String> title = tokens(hit.title());
             String dedupeKey = stringMetadata(hit, "dedupeKey");
 
             Integer target = normalised.isEmpty() ? null : groupByExactText.get(normalised);
+            if (target != null && !titlesAgree(title, groups.get(target).title)) {
+                target = null;
+            }
             if (target == null && dedupeKey != null) {
                 target = groupByKey.get(dedupeKey);
             }
             Set<String> hitShingles = shingle(normalised);
             if (target == null) {
-                target = nearDuplicateOf(hitShingles, shingles, groups);
+                target = nearDuplicateOf(hitShingles, title, shingles, groups);
             }
 
             if (target == null) {
-                groups.add(new Group(hit));
+                groups.add(new Group(hit, title));
                 shingles.add(hitShingles);
                 target = groups.size() - 1;
             } else {
                 groups.get(target).consider(hit);
-                // A later member's shingles are deliberately not merged into the group's: comparing
-                // against a union would let a group drift, chaining A~B and B~C into one group even when
-                // A and C share nothing.
+                // A later member's shingles are not merged into the group's, which would chain A~B and B~C
+                // into one group.
             }
             if (!normalised.isEmpty()) {
                 groupByExactText.putIfAbsent(normalised, target);
@@ -138,28 +116,34 @@ public class DuplicateCollapser {
         return groups.stream().map(Group::kept).toList();
     }
 
-    /** The index of the first group whose representative is a near-duplicate, or null. */
-    private Integer nearDuplicateOf(Set<String> candidate, List<Set<String>> shingles, List<Group> groups) {
+    private Integer nearDuplicateOf(Set<String> candidate, Set<String> title, List<Set<String>> shingles,
+                                    List<Group> groups) {
         if (candidate.isEmpty()) {
             return null;
         }
         int compared = Math.min(shingles.size(), Math.max(maxComparisons, 0));
         for (int i = 0; i < compared; i++) {
-            if (jaccard(candidate, shingles.get(i)) >= nearDuplicateThreshold) {
+            if (titlesAgree(title, groups.get(i).title)
+                    && jaccard(candidate, shingles.get(i)) >= nearDuplicateThreshold) {
                 return i;
             }
         }
         return null;
     }
 
-    /** One cluster: where it sits in the ranking, and which member is worth showing. */
+    private boolean titlesAgree(Set<String> a, Set<String> b) {
+        return a.isEmpty() || b.isEmpty() || jaccard(a, b) >= titleSimilarity;
+    }
+
     private static final class Group {
         private final SearchHit best;   // earliest-ranked member; fixes the group's position
+        private final Set<String> title; // the best member's title tokens, which later members must agree with
         private SearchHit kept;
         private int keptRank;
 
-        Group(SearchHit first) {
+        Group(SearchHit first, Set<String> title) {
             this.best = first;
+            this.title = title;
             this.kept = first;
             this.keptRank = sourceRank(first);
         }
@@ -173,8 +157,8 @@ public class DuplicateCollapser {
         }
 
         /**
-         * The kept member, but scored with the group's best rank — otherwise preferring a
-         * lower-ranked member by {@code sourceRank} would also drag its position down the list.
+         * Scored with the group's best rank, or preferring a lower-ranked member would drag the group down
+         * the list.
          */
         SearchHit kept() {
             return kept == best ? best : kept.withScore(best.score());
@@ -195,12 +179,16 @@ public class DuplicateCollapser {
         return text.isEmpty() ? null : text;
     }
 
-    /** Lowercase and collapse everything non-alphanumeric, so formatting differences do not matter. */
     private static String normalise(String text) {
         if (text == null || text.isBlank()) {
             return "";
         }
         return text.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+    }
+
+    private static Set<String> tokens(String text) {
+        String normalised = normalise(text);
+        return normalised.isEmpty() ? Set.of() : Set.copyOf(List.of(normalised.split(" ")));
     }
 
     private Set<String> shingle(String normalised) {
@@ -210,8 +198,7 @@ public class DuplicateCollapser {
         String[] tokens = normalised.split(" ");
         int width = Math.max(shingleSize, 1);
         if (tokens.length < width) {
-            // Too short to shingle at the configured width; treat the whole thing as one shingle so two
-            // identical short chunks still match and two different ones still do not.
+            // Too short to shingle: the whole text is one shingle, so identical short texts still match.
             return Set.of(normalised);
         }
         Set<String> out = new LinkedHashSet<>();

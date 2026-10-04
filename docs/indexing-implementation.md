@@ -55,7 +55,7 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 | §2/§4 **Cursor** (first-class) | `domain.model.Cursor` + `enums.CursorStatus`, `enums.CursorDirection` |
 | §4 **Cursor position** (source-defined) | `domain.model.CursorPosition` — free-form, multi-field pagination state the connector owns |
 | §2 **Iterable** | `ingestion.connector.SourceIterable` |
-| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabContext`, `GrabResult`, and the `TokenWindowGrabber` / `TimeWindowGrabber` bases |
+| §2/§5 **Grabber** (extends connector) | `ingestion.connector.SourceConnector` (`supportedDirections` + `discover` + `grab`), `GrabContext`, `GrabResult`, and the `TokenWindowGrabber` base |
 | §2/§7 **PermitService** | `common.concurrency.PermitService` + `InMemoryPermitService`, `Permit`, `ScopeLimit` |
 | §3 Knowledge object + lifecycle | `app.DefaultKnowledgeService` (`add`: verify → anchor=now → discover → cursors → ACTIVE) |
 | §4 Cursor states (AVAILABLE / IN_PROGRESS / IDLE / SUSPENDED / EXHAUSTED / FAILED) | `enums.CursorStatus`; transitions in `ingestion.job.IngestionRunner` |
@@ -111,7 +111,8 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
   part is what fences out an indexer still running on the previous revision — see below.
 
 ### One indexing pass (`IndexingRunner.indexEntity`)
-- Extract text (Tika for files via `fileRef`, inline for text) → chunk → embed (batched).
+- Extract text (Tika for files via `fileRef`, inline for text) → **enrich** (below) → chunk → embed
+  (batched).
 - The embedded vectors are validated against the chunk list before anything is written: a provider
   that returns a short list, or a hole where two payload entries claimed the same index, fails the
   pass. A chunk indexed without a vector is accepted by OpenSearch and then invisible to semantic
@@ -124,8 +125,43 @@ its own concurrency budget. Mongo is the source of truth; OpenSearch is rebuilda
 - Failures: retry with backoff (`status=INGESTED`, `retry.nextAttemptAt`), or terminal `FAILED`.
 - Tombstones (`status=DELETED`): `deleteByEntity` + `markDeletionComplete`.
 
+### Enrichment (`IndexingRunner` → `EntityEnrichment`)
+
+When the knowledge names a METADATA task (`config.enrichment.taskId`, see [`tasks.md`](./tasks.md)),
+the pass runs it on the parsed text before chunking:
+
+- **Stored apart from `metadata`.** Values go to `entities.enriched`, with
+  `entities.enrichment {taskId, taskVersion, checksum, at, error}` recording what produced them.
+  `metadata` is ingestion's and `upsert` replaces it wholesale; enriched values inside it would vanish
+  on every re-ingest. Both fields are **indexer-owned** and written **inside the fenced `markIndexed`
+  or `markFailed`** (their `EnrichmentOutcome` argument: `KEEP` / `CLEAR` / `SET` / `ERROR`), so a
+  worker that lost its lease records no enrichment either. `upsert` never touches them.
+- **Kept when the pass fails after enriching.** A rate-limited embed or a rejected bulk write goes
+  through `markFailed` carrying the outcome, so the stamp is current on the retry and the LLM is not
+  called again. Otherwise every deferral would re-buy it: up to `max-deferrals + 1` calls for one
+  entity.
+- **Recomputed only when stale.** The LLM is called when the stored stamp's `taskId`, `taskVersion`
+  (the task's `updatedAt`) or `checksum` differs from now, or the last attempt errored. Re-indexing
+  unchanged items costs no calls; new content (a changed checksum) or an edited task re-enriches.
+- **Chunks carry them.** The entity handed to the chunker has `metadata ∪ enriched`, so every chunk's
+  `metadata.<field>` holds them and search filters reach them. On a clash a non-null connector value
+  wins.
+- **Typed in OpenSearch.** `SearchIndex.ensureMetadataFields` puts `NUMBER`→`double`,
+  `BOOLEAN`→`boolean`, `TEXT`/`LIST`→`keyword` before the first value lands (dynamic mapping would let
+  the first document decide). It runs when a knowledge is pointed at the task or a task in use is edited
+  — a type clash with an existing field is a **400** there — and again, memoised per task version, on
+  the first enrichment after a restart.
+- **Failure never fails the pass.** A rate limit past the wait cap throws `RateLimitedException` and
+  the whole pass defers, as for embeddings. Anything else (bad JSON, a required field missing, the task
+  gone) indexes the entity anyway with its previous values, if any, and records `enrichment.error`; the
+  next re-index retries it. The error shows on the entity listing (`enrichmentError`).
+- **Removing the task** (`enrichTaskId: null`) clears `enriched`/`enrichment` on each entity's next
+  pass (`CLEAR`). Like chunking, setting or changing the task is a direct config update: existing
+  entities pick it up only when re-indexed (`POST /api/index/knowledge/{id}/reindex`).
+
 ### Entity lease fencing and the dead-letter state
-- `markIndexed` / `markFailed` / `markDeletionComplete` all take the claiming worker's id and are
+- `markIndexed` (including the enrichment outcome it carries) / `markFailed` / `markDeletionComplete`
+  all take the claiming worker's id and are
   **compare-and-set on `(id, lease.owner, live lease)`**, exactly like the cursor writes. They return
   `false` when the lease was lost; the runner logs and stops, leaving the entity to its new owner. No
   compensation is attempted — chunk ids are `entityId_ordinal`, so the new owner's replace overwrites
@@ -183,7 +219,7 @@ fusion, fixed-size chunking, deterministic embeddings, `LocalFsConnector` paging
 |---|---|
 | `POST /api/knowledge` | Register a knowledge (validates, discovers, creates cursors, activates) |
 | `GET /api/knowledge` / `GET /api/knowledge/{id}` | List / fetch knowledge |
-| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status`, `limit` ≤ 200, `offset`); returns projections, not full entities |
+| `GET /api/knowledge/{id}/entities` | Page its entities newest-first (`status` — a comma-separated list of names, `q` — title/externalId substring, `iterableId` — repeatable, one group per value, `limit` ≤ 200, `offset`); returns projections (including `iterableId`, which the console names by joining with the cursors), not full entities. `DELETED` is excluded unless `status` names it |
 | `GET /api/knowledge/{id}/cursors` | Its cursors — per-iterable walk state, the real sync-progress view |
 | `PATCH /api/knowledge/{id}` | Edit a knowledge — see [`knowledge-edit-design.md`](./knowledge-edit-design.md) |
 | `POST /api/knowledge/{id}/pause` / `.../resume` | Pause or resume scheduling |
@@ -279,31 +315,34 @@ curl -X POST localhost:8080/api/search -H 'Content-Type: application/json' -d '{
 | `app.chunking.strategy` | `recursive` | Default chunking strategy when a knowledge hasn't set one (`recursive`/`character`/`fixed-size`/`token`/`table`). See [`parsing-and-chunking.md`](./parsing-and-chunking.md) |
 | `app.chunking.mime-aware` | `true` | Allow content type to pick the strategy when the knowledge has not chosen one explicitly (`ChunkingStrategy.prefers`). An explicit per-knowledge choice always wins. Off restores name-only selection |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size + overlap for the character-based strategies |
-| `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size + overlap for the `token` strategy |
+| `app.chunking.token.size` / `.overlap` | `512` / `64` | Token size + overlap for the `token` strategy |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used by the `token` strategy (lazy load, ~4-chars/token fallback) |
 | `app.embedding.provider` | `openai-embed` | Which `EmbeddingProvider` is active, matched against each provider's `providerId()`: `openai-embed` (hosted) / `onnx-bge` (local in-JVM ONNX) / `local-hashing` (offline dev baseline). See [`providers.md`](./providers.md) |
 | `app.embedding.dimension` | `768` | Vector width. **Baked into the `knn_vector` mapping** when `chunks_v3_768` is created — changing to a different-width model needs a new physical index + alias flip + full re-index. Deliberately has **no code default** at any injection point: a guessed width silently builds an index nothing fits, so an absent property fails startup instead |
 | `app.embedding.onnx.model` / `.model-path` | `bge-base-en-v1.5` / _(empty)_ | Local ONNX model id and the directory holding `model.onnx` + `tokenizer.json` + `config.json`. **Ships empty**, so `onnx-bge` throws until you export a model — see [`providers.md`](./providers.md) for the one-line export |
 | `app.embedding.onnx.pooling` / `.normalize` | `cls` / `true` | Pooling strategy and L2 normalization for the ONNX provider |
+| `app.embedding.onnx.include-token-types` | `true` | Feed `token_type_ids`; required by BERT-family exports, `false` for RoBERTa/MPNet |
 | `app.embedding.openai.base-url` / `.model` / `.api-key` | Gemini OpenAI-compatible endpoint / `models/gemini-embedding-001` / `${GEMINI_API_KEY:}` | Hosted embedding provider (`openai-embed`). Gemini needs the `models/` prefix; a bare id 404s |
 | `app.embedding.openai.dimensions` | `768` | Width requested via the OpenAI `dimensions` parameter; `0` omits it and takes the model's native width. `gemini-embedding-001` is natively 3072, so this is what keeps it inside the 768 knn mapping. A model that ignores the parameter fails loudly on the first batch |
-| `app.llm.provider` | `openai-compat` | `openai-compat` (hosted Groq/Gemini or local Ollama) or `none` (`StubLlmProvider`, disables `answer: true`) |
-| `app.llm.base-url` / `.model` / `.api-key` | Groq / `llama-3.3-70b-versatile` / `${GROQ_API_KEY:}` | Grounded-answer LLM. Point `base-url` at `http://localhost:11434/v1` for Ollama — no code change |
+| `app.llm.provider` | `openai-compat` | `openai-compat` (any OpenAI-compatible endpoint) or `none` (`StubLlmProvider`, turns every LLM call off). Endpoint, key, model and limits are `LLM` connections in the console, not properties — see [`providers.md`](./providers.md#llm-connections) |
+| `app.llm.timeout-seconds` | `60` | Per-request timeout for every LLM connection |
 | `app.search.snippet-chars` | `280` | Length of a hit's **display** excerpt. Display only: the agent is grounded in the full chunk text, not this. `0` returns chunks untruncated. Used to be a hardcoded constant applied *before* the text reached the agent — see [`opensearch-index.md`](./opensearch-index.md) |
 | `app.search.highlight-fragments` | `2` | Highlight fragments requested per field, so the excerpt is the region that matched rather than the head of the chunk. `0` disables highlighting. Lexical leg only — a knn query has no query terms to mark up |
-| `app.search.max-top-k` | `100` | Ceiling on `topK`, clamped in `DefaultSearchService`. `topK` is multiplied before it becomes the OpenSearch `size` and knn `k`, so this is what bounds a single request |
-| `app.search.candidate-multiplier` | `4` | Candidates fetched per leg per requested result. Over-fetch is what lets a chunk only one leg ranks well reach the fusion step |
+| `app.search.max-top-k` | `100` | Ceiling on `topK` — results, i.e. entities — clamped in `DefaultSearchService` |
+| `app.search.candidate-multiplier` / `.min-candidates` / `.max-candidates` | `10` / `100` / `500` | Chunk candidates fetched per leg per requested result, held between the floor and ceiling. Sized in chunks for `topK` *entities*: at 4, a topK of 10 fetched 40 chunks, about 6 job postings. `max-candidates` becomes the OpenSearch `size` and knn `k`, so it bounds a single request |
 | `app.search.lexical.fields` / `.type` / `.minimum-should-match` / `.phrase-boost` | `text,title^2` / `best_fields` / `2<70%` / `2.0` | BM25 query shape. A bare `multi_match` scores a document for matching **any** term, so a conversational query ranked documents containing "give"/"all"/"this"/"year" above the one document on topic and flooded the candidate set with them. Blank `minimum-should-match` sends nothing; `0` phrase-boost omits the phrase clause |
 | `app.search.rrf-k` | `60` | RRF rank-smoothing constant. Larger rewards agreement between the legs over either leg's exact ordering |
 | `app.search.rrf.lexical-weight` / `.vector-weight` | `1.0` / `1.0` | Per-leg weights on the fused score, for discounting a leg you trust less on your corpus |
-| `app.search.max-chunks-per-entity` | `0` (unlimited) | Cap on how many chunks one entity may contribute. **Off by default on purpose** — it buys source diversity but harms the case where the right answer *is* many chunks of one document |
+| `app.search.max-chunks-per-entity` | `3` | Matching chunks one result carries, its best included; `0` = every match in the pool. Results are always one per entity (`EntityGrouper`); the further matches show under the result and ground the answer, so an answer spanning many chunks of one document keeps them. Overridable per request; digests send `1` |
+| `app.search.grouping.extra-match-weight` | `0.1` | Share of each further match's score added to its entity's best chunk — breaks near-ties toward items matching in several passages without letting length outrank a clearly better match |
+| `app.search.dedupe.title-similarity` | `0.5` | Title token overlap required before matching text may collapse two results. Identical text under unrelated titles is shared boilerplate (a company's "About us"), not a copy |
+| `app.search.recency.weight` / `.half-life-days` | `0.1` / `14` | Freshness boost: a brand-new result's score grows by up to 10%, halving every half-life — breaks near-ties only. The date field is the `recency` field set in `config/field-sets.json` (`postedAt`); `0` weight turns it off |
 | _(moved)_ `embedContext` field set | `["title"]` | Context fields prefixed to a chunk's text **before embedding** now live in `config/field-sets.json`, scoped per connector — a Gmail chunk is best identified by sender, a Drive chunk by heading path, and a flat key can say only one thing. `title`/`uri` resolve against the chunk, anything else against its metadata. **Changing it requires a re-index** |
 | `app.embedding.openai.task-type-enabled` | `false` | Send `task_type` to distinguish a query embedding from a document one. **Must stay off for the shipped base-url**: it is a *native* Gemini parameter and the OpenAI-compatible endpoint rejects it with `400 … Unknown name "task_type"`, failing all indexing. The asymmetry is real but unreachable through the compat layer; the ONNX provider gets it via `app.embedding.onnx.query-instruction` |
 | `app.embedding.onnx.query-instruction` | BGE's published wording | Instruction prepended to a **query** only. Blank for a symmetric model — the wrong instruction is worse than none |
 | `app.agent.task` | `answer` | Which task in `config/prompts.json` answering runs. The task carries its own prompt, LLM profile and budgets, so a variant is a JSON entry plus this key — not a second code path. Budgets (`contextChars`, `maxSources`) live on the task, not here, because they are per-task: see [`configuration.md`](./configuration.md) |
 | `app.prompts.path` | _(empty)_ | Optional file replacing `config/prompts.json` wholesale (replace, not merge). The seam for user-supplied prompts |
 | `app.field-sets.path` | _(empty)_ | Optional file replacing `config/field-sets.json` wholesale |
-| `app.llm.profile.<name>.{base-url,model,temperature,max-tokens,api-key}` | see `application.properties` | Named per-role LLM overrides on top of `app.llm.*`, resolved **dynamically** — adding a profile is config only, no code. Unset (or blank) inherits the provider default. A profile that redirects `base-url` must supply its own `api-key`; it will not inherit one. Ships `answer` and `lite`. See [`providers.md`](./providers.md) |
 | `app.ingestion.google.client-id` / `.client-secret` | `${GOOGLE_OAUTH_CLIENT_ID:}` / `${GOOGLE_OAUTH_CLIENT_SECRET:}` | App-level OAuth fallback used to mint Gmail/Drive access tokens from a refresh token when the connection's auth blob carries no client of its own |
 | `app.ingestion.google-drive.max-file-bytes` / `.max-folders` | `26214400` / `500` | Drive download size cap (oversized files are silently skipped — see [`limitations.md`](./limitations.md) L4) and the discovery folder-walk bound |
 
@@ -341,9 +380,7 @@ can work the way its source does:
   and get their credentials from a reusable `Connection` rather than from the knowledge. See
   [`connectors.md`](./connectors.md).
 
-Rather than implement `grab` by hand, most sources extend a ready-made base: **`TokenWindowGrabber`**
-for token-paged APIs (Gmail, Drive) or **`TimeWindowGrabber`** for keyset APIs that resume by
-`(timestamp, id)` with no page token.
+Token-paged APIs (Gmail, Drive) extend **`TokenWindowGrabber`** rather than implement `grab` by hand.
 
 Implement those plus `type()` and `verify()`, annotate `@ApplicationScoped`, and add the enum
 constant to `SourceType`. Nothing else changes — the ingestion loop, cursors, permits, indexing and
@@ -365,5 +402,7 @@ seams already in place:
 - **Metrics endpoints** beyond the current counters/logging (e.g. Micrometer gauges for lag and
   queue depth, surfaced through the existing health/metrics infrastructure).
 - **Redis-backed `PermitService`** for multi-node deployments. The in-memory implementation is
-  single-node only.
+  single-node only. Redis already ships in `docker-compose.yml` for the rate-limit counters
+  ([L9](./limitations.md#l9--rate-limit-counters-are-per-process-and-lost-on-restart)), so this is a
+  new implementation rather than new infrastructure.
 - **A cross-encoder `Reranker`** in place of `NoopReranker`.

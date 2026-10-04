@@ -26,94 +26,53 @@ import java.util.Set;
 import java.util.logging.Logger;
 
 /**
- * Company job boards across every supported applicant-tracking platform.
- *
- * <p><strong>A company is an iterable.</strong> The user lists companies they want to watch and
- * nothing else; which ATS each one happens to use is worked out here. That matters because the
- * platform is not a property of the job hunt — Meesho and CRED are on Lever, Databricks on Greenhouse,
- * Tekion on Ashby, and requiring someone to know that before they can watch a company makes widening
- * the net needlessly expensive.
- *
- * <p>Resolution happens once, in {@link #discover}, and the answer is carried on the
- * {@link SourceIterable}'s attributes. The framework snapshots those onto the {@code Cursor}, so
- * {@link #grab} reads the platform straight back and never re-probes — which is exactly what the
- * attributes mechanism exists for (see the {@code Cursor} javadoc on avoiding a re-{@code discover}
- * per lease).
- *
- * <h2>Snapshot-shaped</h2>
- * Every supported platform returns the entire current board in one request — no {@code updated_after},
- * no continuation token, no meaningful pagination — so this implements {@link SourceConnector} directly
- * rather than extending a paging base, as {@code LocalFsConnector} does. The seed
- * {@link io.personalassistant.ingestion.connector.TimeWindow} is ignored and every grab returns one
- * page with {@code hasMore=false}.
- *
- * <p>That is not as wasteful as it sounds: change detection in {@code IngestionRunner.persistItem}
- * skips any posting whose checksum is unchanged and already {@code INDEXED}, so a poll costs one HTTP
- * call plus N cheap Mongo lookups and re-indexes only what moved.
- *
- * <h2>Forward-only, and disappearance</h2>
- * Backward cursors walk history below the anchor, and a job board has none worth walking — a posting
- * old enough to sit below the anchor is filled or withdrawn. A closed posting simply stops appearing
- * in the snapshot; boards send no tombstone, which is why this connector opts into a retention window.
- * See {@code docs/knowledge-lifecycle.md}.
+ * One connector across every ATS: a company is an iterable, and which platform hosts it is resolved once in
+ * discover and carried on the iterable's attributes. Each platform returns the whole board in one request, so
+ * grab ignores the seed window and returns one page; change detection skips unchanged postings. Forward-only:
+ * a closed posting just vanishes from the snapshot, which is why this connector opts into retention.
  */
 @ApplicationScoped
 public class JobBoardsConnector implements SourceConnector {
 
     private static final Logger LOG = Logger.getLogger(JobBoardsConnector.class.getName());
 
-    /** {@code inputs} key holding the companies to watch. */
     public static final String COMPANIES_INPUT = "companies";
 
     /**
-     * {@code inputs} key holding location match terms. Empty or absent keeps every posting.
-     *
-     * <p>The highest-leverage setting here. A board is global: Databricks carries 857 postings to
-     * surface 92 Indian ones, so without this roughly nine tenths of everything ingested is parsed,
-     * chunked and <strong>embedded</strong> for a country the user will never apply to — and embeddings
-     * are the scarcest resource in the pipeline.
+     * Display names keyed by the {@link #COMPANIES_INPUT} entry as written. A map beside the list because an
+     * entry is an iterable id: renaming must not change the iterable or reset its cursor. Left out of
+     * membershipSignature.
+     */
+    public static final String COMPANY_LABELS_INPUT = "companyLabels";
+
+    /**
+     * Empty keeps every posting. The highest-leverage setting: a global board carries mostly roles elsewhere,
+     * and everything kept is embedded.
      */
     public static final String LOCATIONS_INPUT = "locations";
 
-    /**
-     * {@code inputs} keys holding the role filter. Title is the strongest lever available, because it
-     * is the one useful field every platform puts in its <em>listing</em>: filtering on it removes both
-     * the embedding and, on the per-posting platforms, the detail request. Measured over 71 boards, the
-     * location terms alone take 355k chunks to 34k; adding these takes it to roughly 7k.
-     *
-     * <p>Exclude exists separately from include because it does as much work: on a real corpus,
-     * dropping {@code manager|director|sales|support} removed a quarter of what an engineering include
-     * list had kept.
-     */
+    /** Title is in every listing, so filtering on it also saves the per-posting detail call. */
     public static final String TITLE_INCLUDE_INPUT = "titleInclude";
     public static final String TITLE_EXCLUDE_INPUT = "titleExclude";
 
-    /** {@code inputs} key: keep only postings posted within this many days. Absent or 0 = no limit. */
+    /** Absent or 0 means no limit. */
     public static final String MAX_AGE_DAYS_INPUT = "maxAgeDays";
 
-    /**
-     * {@code inputs} key: when true a stated-remote posting satisfies {@link #LOCATIONS_INPUT} however
-     * it is filed. An OR with the place terms rather than a filter of its own — see {@link BoardFilter}.
-     */
+    /** True lets a stated-remote posting satisfy the location terms however it is filed. */
     public static final String INCLUDE_REMOTE_INPUT = "includeRemote";
 
-    /** Iterable attributes carrying the resolved platform and handle through to {@link #grab}. */
     public static final String PLATFORM_ATTRIBUTE = "platform";
     public static final String HANDLE_ATTRIBUTE = "handle";
 
-    /** Cursor field: when the last complete snapshot was taken. Observability only — grabs are stateless. */
+    /** Observability only: grabs are stateless. */
     private static final String POS_SNAPSHOT_AT = "snapshotAtMillis";
 
-    /**
-     * Poll cadence. Boards change on a human timescale (a recruiter publishing a role), so polling far
-     * more often than this only burns requests without surfacing anything sooner.
-     */
+    /** Boards change on a human timescale. */
     private static final Duration POLL_INTERVAL = Duration.ofHours(3);
 
     /**
-     * Retention window. Comfortably longer than the poll interval — an item is re-created by the next
-     * walk if it still exists at the source, so a short window would just churn re-embeddings — and
-     * short enough that a filled role does not linger in search for months.
+     * Longer than the poll interval, since a surviving posting is re-created by the next walk, and short
+     * enough that a filled role does not linger.
      */
     private static final Duration RETENTION = Duration.ofDays(14);
 
@@ -136,8 +95,7 @@ public class JobBoardsConnector implements SourceConnector {
 
     @Override
     public boolean hasDynamicIterables() {
-        // The company list is user-supplied, not discovered, so it only changes on an explicit edit —
-        // which the edit path already re-runs discover() for.
+        // The company list only changes on an edit, which re-runs discover.
         return false;
     }
 
@@ -152,22 +110,12 @@ public class JobBoardsConnector implements SourceConnector {
     }
 
     /**
-     * Covers {@code locations} only.
-     *
-     * <p>{@code companies} is deliberately excluded: each company is its own iterable, so adding or
-     * removing one is a discovery-set change handled by discover-reconcile, and including it would
-     * reset every surviving company's cursor on an unrelated edit.
-     *
-     * <p>{@code locations} is the opposite case — it moves the membership boundary <em>inside</em> each
-     * iterable, exactly like {@code GmailConnector}'s query. It must be in the signature: widening the
-     * filter has to re-walk the boards, or postings that now match are silently never picked up,
-     * because change detection alone never revisits a board it has already seen.
+     * Excludes companies, since each is its own iterable handled by discover-reconcile, and labels, which
+     * change filing, not membership. The filter terms move the boundary inside each board, so changing one
+     * must re-walk: change detection alone never revisits a board.
      */
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        // Every filter dimension is a within-iterable membership boundary: tightening one means the
-        // surviving postings of a board change, which is a §3.2 re-walk, not a §3.1 iterable add. Leave
-        // one out and editing it would quietly never re-walk, so the board keeps whatever it had.
         BoardFilter f = filter(inputs);
         return String.join(",", f.locations()) + "|" + String.join(",", f.titleInclude())
                 + "|" + String.join(",", f.titleExclude())
@@ -189,14 +137,12 @@ public class JobBoardsConnector implements SourceConnector {
             }
         }
         if (unresolved.size() == companies.size()) {
-            // Every single one failed: almost certainly a typo or an outage rather than a genuine
-            // "none of these use a supported platform", so refuse rather than activate a dead knowledge.
+            // Every one failed: a typo or an outage, so refuse rather than activate a dead knowledge.
             throw new IllegalArgumentException("No supported job board found for any of: "
                     + String.join(", ", unresolved) + ". Supported platforms: " + platformIds());
         }
         if (!unresolved.isEmpty()) {
-            // A partial miss is normal — plenty of companies are on none of these — so it is reported
-            // and the rest proceed.
+            // A partial miss is normal.
             LOG.warning("No supported job board for: " + String.join(", ", unresolved));
         }
     }
@@ -216,39 +162,29 @@ public class JobBoardsConnector implements SourceConnector {
     @Override
     public GrabResult grab(GrabContext context) {
         Resolved resolved = fromAttributes(context)
-                // Cursors created before resolution was stored, or a platform bean that has since gone
-                // away: re-resolve rather than fail the walk.
+                // A cursor from before resolution was stored, or a platform since removed: re-resolve.
                 .or(() -> resolve(context.iterableId()))
                 .orElseThrow(() -> new AtsApiException(
                         "No supported job board for '" + context.iterableId() + "'"));
 
-        // The platform gets the filter as a hint — the per-posting ones use it to avoid detail calls,
-        // and Workday/Oracle turn the location terms into a server-side query — but this pass is the
-        // authoritative one. Everything that survives is upserted, parsed, chunked and embedded, so
-        // this line is what actually bounds the cost of a knowledge.
+        // The platform got the filter as a hint; this pass is authoritative, and it is what bounds the cost
+        // of a knowledge.
         BoardFilter filter = filter(context.knowledge());
         List<RawItem> items = retainMatching(
-                resolved.platform().fetch(resolved.handle(), filter), filter);
+                resolved.platform().fetch(resolved.handle(),
+                        label(context.knowledge(), context.iterableId()), filter),
+                filter);
 
         CursorPosition position = context.cursor().toBuilder()
                 .put(POS_SNAPSHOT_AT, Instant.now().toEpochMilli())
                 .build();
-        // One snapshot is the whole board, so there is never a second page. The runner maps
-        // hasMore=false on a forward cursor to IDLE: nothing more to do until the schedule re-arms.
+        // One snapshot is the whole board: hasMore=false parks a forward cursor IDLE.
         return new GrabResult(items, position, false);
     }
 
     /**
-     * Report what each candidate company resolves to, without creating anything.
-     *
-     * <p>Exists because the watchlist is the whole product here: reach is a function of how many
-     * companies are named, and finding out whether a company is reachable used to mean creating a
-     * knowledge and seeing what happened. This answers it for fifty names at once.
-     *
-     * <p>The posting count comes free — every platform's existence check already carries one — and it
-     * is what tells you whether a company is worth adding. What is deliberately <em>not</em> reported is
-     * how many of those postings match a location filter: that would need the full board fetched, which
-     * on SmartRecruiters and Workday is one request per posting.
+     * Resolves candidate names without creating anything. Location matches are not counted: that would need
+     * the full board, one request per posting on some platforms.
      */
     public List<CompanyLookup> lookup(List<String> companies) {
         List<CompanyLookup> out = new ArrayList<>();
@@ -265,18 +201,9 @@ public class JobBoardsConnector implements SourceConnector {
         return List.copyOf(out);
     }
 
-    /**
-     * What one candidate company resolved to.
-     *
-     * @param platform the hosting platform, or null when no supported platform has a board for it —
-     *                 which is a normal answer, not an error
-     * @param postings how many postings that board holds, before any location filter
-     */
+    /** @param platform null when no supported platform has a board for it: an answer, not an error */
     public record CompanyLookup(String company, String platform, String handle, int postings) {}
 
-    // ---- resolution --------------------------------------------------------------------------
-
-    /** A company resolved to the platform that hosts it. */
     private record Resolved(BoardPlatform platform, String handle) {}
 
     private Optional<Resolved> fromAttributes(GrabContext context) {
@@ -289,13 +216,9 @@ public class JobBoardsConnector implements SourceConnector {
     }
 
     /**
-     * Which platform hosts {@code company}, probing each in turn.
-     *
-     * <p>An entry may pin a platform explicitly as {@code "platform:handle"} — useful when a company
-     * has boards on two platforms mid-migration, where the probe order would otherwise decide silently,
-     * and required for any platform whose handle cannot be guessed from a bare name.
+     * An entry may pin a platform as {@code platform:handle}, for a company on two platforms mid-migration or
+     * a handle that cannot be guessed from a name.
      */
-    // Package-private for tests.
     Optional<Resolved> resolve(String company) {
         int colon = company.indexOf(':');
         if (colon > 0) {
@@ -329,21 +252,10 @@ public class JobBoardsConnector implements SourceConnector {
         return String.join(", ", ids);
     }
 
-    // ---- inputs ------------------------------------------------------------------------------
-
     /**
-     * Apply {@code filter} to whatever the platform returned.
-     *
-     * <p><strong>A posting with no location survives</strong> a location term list, and one with no
-     * posted date survives an age limit. Boards leave those fields blank often enough that dropping on
-     * them would lose real roles on the strength of a missing value, and nothing distinguishes an
-     * irrelevant location from an unstated one. Same rule as {@code IngestionJob.connectionUnusable}:
-     * any doubt runs it. A title, by contrast, is always present, so the title terms are exact.
-     *
-     * <p>Note the country name alone is usually not enough for the location terms — most boards file a
-     * role as {@code "Bengaluru"} with no country, so a term list should name cities.
+     * A posting with no location or no posted date survives: boards leave them blank often. Name cities, not
+     * the country: boards usually file a role under the city alone.
      */
-    // Package-private for tests.
     static List<RawItem> retainMatching(List<RawItem> items, BoardFilter filter) {
         if (items == null || filter.isEmpty()) {
             return items;
@@ -357,12 +269,21 @@ public class JobBoardsConnector implements SourceConnector {
         return List.copyOf(kept);
     }
 
-    /** The configured companies, de-duplicated and order-preserving. Accepts a list or a single string. */
+    /** De-duplicated and order-preserving; accepts a list or a single string. */
     protected static List<String> companies(Knowledge knowledge) {
         return stringList(knowledge == null ? null : knowledge.inputs(), COMPANIES_INPUT, false);
     }
 
-    /** The configured location terms, lowercased for matching. Empty means "keep everything". */
+    static String label(Knowledge knowledge, String company) {
+        Object labels = knowledge == null || knowledge.inputs() == null
+                ? null : knowledge.inputs().get(COMPANY_LABELS_INPUT);
+        if (!(labels instanceof Map<?, ?> map) || company == null) {
+            return null;
+        }
+        Object label = map.get(company);
+        return label instanceof String s && !s.isBlank() ? s.trim() : null;
+    }
+
     protected static List<String> locations(Knowledge knowledge) {
         return locations(knowledge == null ? null : knowledge.inputs());
     }
@@ -371,8 +292,6 @@ public class JobBoardsConnector implements SourceConnector {
         return stringList(inputs, LOCATIONS_INPUT, true);
     }
 
-    /** The knowledge's filter, or {@link BoardFilter#NONE} when nothing is configured. */
-    // Package-private for tests.
     static BoardFilter filter(Knowledge knowledge) {
         return filter(knowledge == null ? null : knowledge.inputs());
     }
@@ -386,7 +305,7 @@ public class JobBoardsConnector implements SourceConnector {
                 bool(inputs, INCLUDE_REMOTE_INPUT));
     }
 
-    /** A positive whole number of days, however the console happened to encode it. */
+    /** A positive whole number, however the console encoded it. */
     private static Duration days(Map<String, Object> inputs, String key) {
         Object raw = inputs == null ? null : inputs.get(key);
         long value;

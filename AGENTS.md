@@ -113,7 +113,7 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
 
 - Logging is `java.util.logging.Logger`: `private static final Logger LOG = Logger.getLogger(X.class.getName())`.
   Not SLF4J, not JBoss `Log`.
-- Records for all DTOs and domain model, with `@param` Javadoc on components.
+- Records for all DTOs and domain model.
 - Constructor injection with `@Inject` on the constructor + `private final` fields — but `@ConfigProperty`
   fields are **package-private on purpose** so unit tests can set them directly (`runner.embedBatch = 64;`).
 - **A text config property that may legitimately be unset is `Optional<String>`, read through
@@ -124,7 +124,12 @@ Hexagonal: `api.resource` → `app` → `domain` (ports) → adapters (`storage`
   `app.scheduler.default-interval=1d`) stay plain `String` with a non-empty `defaultValue`.
 - Explicit single-type imports, no wildcards; static imports first, then one alphabetical block
   (Spotless enforces this). 4-space indent, ~110 col.
-- Javadoc explains *why* — rationale, trade-offs, invariants. Match that density.
+- **Comments are the exception.** Write one only when deleting it would lead a competent reader into a
+  mistake: a non-obvious invariant or ordering constraint, a workaround for an external quirk, a deliberate
+  choice that looks like a bug, a tool directive, or an interface contract the signature can't express
+  (idempotent, fenced, never throws). One or two lines. No class essays, no `@param`/`@return` that
+  restates the name, no history ("used to…"), no roadmap, no restating the code. Design rationale belongs
+  in `docs/*.md`.
 
 ## Testing
 
@@ -142,8 +147,10 @@ adding `@QuarkusTest` + rest-assured tests for resources; the untested-adapter g
 `app.embedding.provider=openai-embed` is the shipped default and reads `GEMINI_API_KEY`. The local
 alternative `onnx-bge` has an empty `app.embedding.onnx.model-path`, so selecting it throws until a
 model is exported. For local dev with neither set `app.embedding.provider=local-hashing`.
-Optional env vars: `GROQ_API_KEY` (answers), `GEMINI_API_KEY` (hosted embeddings),
+Optional env vars: `GEMINI_API_KEY` (hosted embeddings),
 `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` (Gmail/Drive token refresh). No `.env` file — bare env vars.
+The LLM has no env var or property: endpoint, key, model and limits are `LLM` connections added in the
+console (Accounts → LLM); with none, answers, digest tasks and enrichment fail.
 
 Credentials live on `Connection` (`connections` collection, one default per `SourceType`), not on `Knowledge`.
 

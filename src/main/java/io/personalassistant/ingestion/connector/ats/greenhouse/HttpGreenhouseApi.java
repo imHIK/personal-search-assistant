@@ -11,11 +11,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** HTTP adapter for {@link GreenhouseApi} against the public board endpoint (no auth). */
 @ApplicationScoped
 public class HttpGreenhouseApi implements GreenhouseApi {
 
-    /** These boards are public, so the platform — not an account — is the quota's owner. */
+    /** Public boards: the platform, not an account, owns the quota. */
     private static final String PLATFORM = "greenhouse";
 
     @ConfigProperty(name = "app.ingestion.greenhouse.base-url",
@@ -36,8 +35,7 @@ public class HttpGreenhouseApi implements GreenhouseApi {
 
     @Override
     public JsonNode listJobs(String boardToken) {
-        // content=true is what makes this one call sufficient: without it Greenhouse returns job
-        // stubs and the description needs a second request per posting.
+        // content=true: without it the description needs a request per posting.
         String url = baseUrl + "/" + encode(boardToken) + "/jobs?content=true";
         return http.getJson(url, timeoutSeconds, rateLimit());
     }

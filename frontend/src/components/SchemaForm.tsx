@@ -7,15 +7,6 @@ import type { FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { cn } from '@/lib/utils'
 
-/**
- * Renders a list of {@link FieldSpec} into controls, and reads/writes them as a flat blob.
- *
- * This is what keeps connector knowledge out of components: the wizard, the account form and the
- * settings form all render `<SchemaForm fields={descriptor.inputFields} …/>`, so adding Slack —
- * or adding a field to Gmail — never touches a component. Fields marked `technical` are hidden
- * unless the Technical details toggle is on.
- */
-
 export type FormValues = Record<string, unknown>
 
 interface SchemaFormProps {
@@ -119,9 +110,10 @@ function Control({
         <Input
           id={id}
           type="number"
-          inputMode="numeric"
+          inputMode={field.step === undefined ? 'numeric' : 'decimal'}
           min={field.min}
           max={field.max}
+          step={field.step}
           value={value === undefined || value === null ? '' : String(value)}
           placeholder={field.placeholder}
           disabled={disabled}
@@ -147,8 +139,6 @@ function Control({
       )
 
     case 'list':
-      // One entry per line reads far better than comma-separated for paths and label ids, both of
-      // which routinely contain commas and spaces.
       return (
         <Textarea
           id={id}
@@ -204,18 +194,6 @@ function Control({
   }
 }
 
-/**
- * A checkbox list of known values plus a free-text row for anything else.
- *
- * It replaces a bare textarea for values the user cannot be expected to invent — a job board handle
- * is "the name as it appears in their careers URL", which is unknowable without going and looking,
- * and a typo is indistinguishable from a company that genuinely has no board. The catalog covers the
- * common case; the add-your-own row keeps every value the textarea accepted, so nothing is lost and
- * the lookup checker above still feeds the same list.
- *
- * The catalog panel expands inline rather than floating: it lives inside a card that scrolls, and an
- * absolutely-positioned list of thirty rows would be clipped or would cover the fields under it.
- */
 function PicklistInput({
   id,
   field,
@@ -249,7 +227,6 @@ function PicklistInput({
     onChange(selected.filter((entry) => !dropped.has(entry.toLowerCase())))
   }
 
-  /** What one catalog row stands for — usually itself, sometimes a group of accepted spellings. */
   const entriesOf = (option: { value: string; values?: string[] }) => option.values ?? [option.value]
 
   const needle = filter.trim().toLowerCase()
@@ -260,7 +237,6 @@ function PicklistInput({
       )
     : options
 
-  // Bulk actions follow the filter, so "type remote, select all" picks just the remote rows.
   const matchingEntries = matching.flatMap(entriesOf)
   const allMatchingSelected = matchingEntries.every(has)
   const anyMatchingSelected = matchingEntries.some(has)
@@ -379,8 +355,6 @@ function PicklistInput({
           spellCheck={false}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            // Enter adds the entry instead of submitting the surrounding form — losing a
-            // half-typed list to an accidental submit is the worst outcome here.
             if (event.key !== 'Enter') return
             event.preventDefault()
             add(draft)
@@ -404,10 +378,6 @@ function PicklistInput({
   )
 }
 
-/**
- * Masked by default with a reveal toggle. The backend returns `auth`/`config` unredacted on every
- * read, so anything credential-shaped must never be rendered in the clear by accident.
- */
 function SecretInput({
   id,
   field,
@@ -450,7 +420,6 @@ function SecretInput({
   )
 }
 
-/** Free-form JSON escape hatch, for connector keys the descriptor doesn't name yet. */
 function JsonInput({
   id,
   value,

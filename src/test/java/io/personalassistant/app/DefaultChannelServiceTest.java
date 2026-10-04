@@ -25,10 +25,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * Channel lifecycle: publisher-validated creation and edits, the account a channel sends through, the
- * synchronous test send, cascade delete.
- */
 class DefaultChannelServiceTest {
 
     private static final String SEND_TYPE = "GMAIL_SEND";
@@ -211,8 +207,8 @@ class DefaultChannelServiceTest {
     void deleteIsRefusedWhileADigestSendsToIt() {
         Channel c = create();
         Instant now = Instant.now();
-        digests.save(new Digest("dig_1", "New roles", "roles", null, List.of(), Map.of(), null, SyncSchedule.NONE,
-                null, 10, false, 1, true, true, null, now, now, null, List.of(c.id())));
+        digests.save(new Digest("dig_1", "New roles", "roles", List.of(), Map.of(), null, SyncSchedule.NONE,
+                null, true, 10, false, 1, true, true, null, now, now, null, List.of(c.id())));
 
         IllegalStateException e = Assertions.assertThrows(IllegalStateException.class, () -> service.delete(c.id()));
 

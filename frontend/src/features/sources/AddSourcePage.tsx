@@ -20,15 +20,11 @@ import { useConnections, useCreateKnowledge } from '@/hooks/queries'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { cn } from '@/lib/utils'
 import { ChunkingFields } from './ChunkingFields'
+import { RetentionField } from './RetentionField'
 import { ScheduleField, scheduleToBody, type ScheduleValue } from './ScheduleField'
 
 const DEFAULT_SCHEDULE: ScheduleValue = { preset: '1h', cron: '' }
 
-/**
- * Add a source. Rendered entirely from the connector descriptors — there is no branch on
- * SourceType anywhere in this file, so a new connector appears here as soon as its descriptor
- * has `implemented: true`.
- */
 export function AddSourcePage() {
   const navigate = useNavigate()
   const create = useCreateKnowledge()
@@ -41,8 +37,8 @@ export function AddSourcePage() {
   const [schedule, setSchedule] = useState<ScheduleValue>(DEFAULT_SCHEDULE)
   const [backfill, setBackfill] = useState(true)
   const [chunking, setChunking] = useState<FormValues>({})
+  const [retention, setRetention] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  /** Set when the server answers 200 but parks the source in ERROR. */
   const [activationError, setActivationError] = useState<string | null>(null)
 
   const descriptor = type ? connectorFor(type) : null
@@ -53,7 +49,6 @@ export function AddSourcePage() {
     [connections, type],
   )
 
-  // Preselect the default account so the common case is zero clicks.
   useEffect(() => {
     if (!descriptor?.requiresConnection) return
     if (connectionId) return
@@ -67,20 +62,21 @@ export function AddSourcePage() {
     setInputErrors({})
   }, [descriptor])
 
-  // Dirty means "differs from what picking the type gave you", not "was touched" — so undoing an
-  // edit un-dirties the form. The account is excluded: it is preselected, not entered.
+  // Dirty means "differs from the type's defaults", not "was touched"; the preselected account does
+  // not count.
   const dirty = useMemo(
     () =>
       descriptor !== null &&
-      JSON.stringify({ name, inputs, schedule, backfill, chunking }) !==
+      JSON.stringify({ name, inputs, schedule, backfill, chunking, retention }) !==
         JSON.stringify({
           name: descriptor.label,
           inputs: initialValues(descriptor.inputFields),
           schedule: DEFAULT_SCHEDULE,
           backfill: true,
           chunking: {},
+          retention: '',
         }),
-    [descriptor, name, inputs, schedule, backfill, chunking],
+    [descriptor, name, inputs, schedule, backfill, chunking, retention],
   )
   const unsaved = useUnsavedChangesGuard(dirty)
 
@@ -161,20 +157,19 @@ export function AddSourcePage() {
       name: name.trim() || descriptor.label,
       type: descriptor.id,
       connectionId: descriptor.requiresConnection ? connectionId || null : null,
-      inputs: pruneEmpty(inputs),
+      inputs: pruneEmpty(descriptor.deriveInputs ? descriptor.deriveInputs(inputs) : inputs),
       backfillEnabled: backfill,
       ...scheduleToBody(schedule),
       chunkingStrategy: (chunking.chunkingStrategy as string) || null,
       chunkingMaxSize: (chunking.chunkingMaxSize as number | undefined) ?? null,
       chunkingOverlap: (chunking.chunkingOverlap as number | undefined) ?? null,
       chunkingSeparators: (chunking.chunkingSeparators as string[] | undefined) ?? null,
+      retentionPeriod: retention || null,
     }
 
     create.mutate(body, {
       onSuccess: (knowledge) => {
-        // The API answers 200 even when verify/discover failed — the failure shows up as
-        // status ERROR with a lastError. Treating 200 as success here would silently create a
-        // dead source, so stay on the form and surface the reason.
+        // 200 even when activation failed: the source comes back in ERROR with a lastError.
         if (knowledge.status === 'ERROR') {
           setActivationError(knowledge.lastError ?? 'The source could not be reached.')
           return
@@ -186,14 +181,13 @@ export function AddSourcePage() {
     })
   }
 
-  // Everything goes back to its default, not just the type — otherwise a schedule or account picked
-  // for the previous type leaks into the next one (and a stale connectionId skips the preselect).
   const changeType = () => {
     setType(null)
     setConnectionId('')
     setSchedule(DEFAULT_SCHEDULE)
     setBackfill(true)
     setChunking({})
+    setRetention('')
     setShowAdvanced(false)
     setActivationError(null)
   }
@@ -329,6 +323,11 @@ export function AddSourcePage() {
               <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                 {labels.wizard.advancedHint}
               </p>
+              <RetentionField
+                value={retention}
+                onChange={setRetention}
+                inherited={descriptor.defaultRetention}
+              />
               <ChunkingFields values={chunking} onChange={setChunking} />
             </CardBody>
           )}

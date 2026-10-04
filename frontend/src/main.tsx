@@ -13,12 +13,9 @@ initTheme()
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Every read is cheap and local, and the backend mutates state on its own schedule, so
-      // refetching on focus is genuinely useful here rather than noise.
       refetchOnWindowFocus: true,
       staleTime: 2000,
       retry: (failureCount, error) => {
-        // A 4xx is a real answer — retrying just delays the error the user needs to see.
         if (error instanceof Error && error.name === 'ApiError') return false
         return failureCount < 2
       },

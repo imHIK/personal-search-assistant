@@ -7,13 +7,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.util.List;
 
 /**
- * Character text splitting — split on a single separator (blank line by default), then merge the
- * fragments up to {@code maxSize} with overlap. Simpler and more predictable than the recursive
- * strategy: it never descends to finer separators, so it preserves whole paragraphs when they fit
- * and is a good fit for text with a consistent delimiter. A single fragment longer than
- * {@code maxSize} is hard-windowed by characters as a safety net so no chunk blows past the target.
- *
- * <p>The separator is {@code spec.separators().get(0)} when provided, else {@code "\n\n"}.
+ * Splits on one separator (the spec's first, else a blank line) and merges up to maxSize with overlap, never
+ * descending to finer separators.
  */
 @ApplicationScoped
 public class CharacterChunkingStrategy implements ChunkingStrategy {
@@ -36,8 +31,7 @@ public class CharacterChunkingStrategy implements ChunkingStrategy {
         List<String> fragments = TextSplitters.splitBySeparator(text, separator);
         List<String> merged = TextSplitters.mergeSplits(fragments, separator, spec.maxSize(), spec.overlap());
 
-        // Safety net: the single-separator merge can leave an over-long fragment (e.g. a paragraph
-        // bigger than maxSize with no inner blank line). Hard-window any such piece by characters.
+        // An over-long fragment with no inner separator is hard-windowed by characters.
         List<String> bounded = new java.util.ArrayList<>(merged.size());
         for (String piece : merged) {
             if (piece.length() <= spec.maxSize()) {

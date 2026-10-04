@@ -5,7 +5,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-/** "3 minutes ago" / "in 2 hours". Returns null for a null instant so callers can pick a fallback. */
 export function relativeTime(iso: string | null | undefined): string | null {
   if (!iso) return null
   const then = new Date(iso).getTime()
@@ -35,7 +34,6 @@ export function relativeTime(iso: string | null | undefined): string | null {
   return formatter.format(Math.round(value), 'year')
 }
 
-/** Absolute timestamp for tooltips and technical details. */
 export function absoluteTime(iso: string | null | undefined): string | null {
   if (!iso) return null
   const date = new Date(iso)
@@ -47,13 +45,11 @@ export function formatNumber(value: number): string {
   return value.toLocaleString()
 }
 
-/** Milliseconds → "0.3" for "12 results in 0.3s". */
 export function formatSeconds(ms: number): string {
   if (ms < 100) return (ms / 1000).toFixed(2)
   return (ms / 1000).toFixed(1)
 }
 
-/** Filename or last path segment, for items whose only identity is a path or URI. */
 export function basename(value: string | null | undefined): string | null {
   if (!value) return null
   const withoutQuery = value.split(/[?#]/)[0]
@@ -62,7 +58,6 @@ export function basename(value: string | null | undefined): string | null {
   return last ? decodeURIComponent(last) : null
 }
 
-/** Best available human name for an item, falling back through the identifiers we have. */
 export function displayName(item: {
   title?: string | null
   uri?: string | null
@@ -86,7 +81,6 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/** Split text on the query's words so matches can be marked without dangerouslySetInnerHTML. */
 export function highlightSegments(text: string, query: string): { text: string; match: boolean }[] {
   const terms = query
     .split(/\s+/)

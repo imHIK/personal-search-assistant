@@ -17,6 +17,7 @@ import {
   llmProfileLabel,
   suggestedScoringFields,
   taskFieldTypes,
+  taskOutputFor,
   taskOutputs,
   taskSourceTexts,
   TASK_DEFAULT_CONTEXT_CHARS,
@@ -25,20 +26,10 @@ import {
 } from '@/config/tasks'
 import { useLlmProfiles, useTask, useTaskActions } from '@/hooks/queries'
 
-/**
- * Create or edit a task.
- *
- * The default path asks for an instruction and the shape of the reply, and the app renders both into
- * a shipped wrapper that carries the rules a user should not have to remember — that retrieved text
- * is data rather than instructions, and that the model must not draw on its own knowledge. Writing
- * the prompt outright is available under technical details, with that responsibility handed back
- * explicitly.
- */
 export function TaskFormPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  // A duplicate arrives as unsaved state rather than a saved row, so abandoning it leaves nothing.
   const draft = (location.state as { draft?: Task } | null)?.draft
 
   const editing = Boolean(id)
@@ -97,6 +88,9 @@ function Editor({
     name.trim() !== '' &&
     (raw ? system.trim() !== '' && user.includes('{{sources}}') : instruction.trim() !== '')
 
+  const outputSpec = taskOutputFor(output)
+  const fieldTypes = taskFieldTypes.filter((t) => outputSpec.metadata || !t.metadataOnly)
+
   const setField = (index: number, patch: Partial<TaskField>) =>
     setFields((current) => current.map((f, i) => (i === index ? { ...f, ...patch } : f)))
 
@@ -110,7 +104,7 @@ function Editor({
       mode: raw ? 'RAW' : 'SIMPLE',
       instruction: raw ? null : instruction.trim(),
       output: raw ? null : output,
-      fields: raw || output !== 'PER_ITEM' ? [] : fields,
+      fields: raw || !outputSpec.fields ? [] : fields,
       system: raw ? system : null,
       user: raw ? user : null,
       llmProfile,
@@ -223,7 +217,7 @@ function Editor({
                         checked={output === option.value}
                         onChange={() => {
                           setOutput(option.value)
-                          if (option.value === 'PER_ITEM' && fields.length === 0) {
+                          if (option.fields && !option.metadata && fields.length === 0) {
                             setFields(suggestedScoringFields)
                           }
                         }}
@@ -240,7 +234,7 @@ function Editor({
                 </div>
               </Field>
 
-              {output === 'PER_ITEM' && (
+              {outputSpec.fields && (
                 <Field label={labels.tasks.fieldsLabel} hint={labels.tasks.fieldsHint}>
                   <div className="space-y-2">
                     {fields.map((field, index) => (
@@ -261,7 +255,7 @@ function Editor({
                           }
                           className="h-8 w-28 text-[12px]"
                         >
-                          {taskFieldTypes.map((option) => (
+                          {fieldTypes.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -273,6 +267,21 @@ function Editor({
                           placeholder={labels.tasks.fieldDescription}
                           className="h-8 min-w-40 flex-1 text-[12px]"
                         />
+                        {outputSpec.metadata &&
+                          taskFieldTypes.find((t) => t.value === field.type)?.values && (
+                            <Input
+                              value={(field.values ?? []).join(', ')}
+                              onChange={(event) =>
+                                setField(index, {
+                                  values: event.target.value
+                                    .split(',')
+                                    .map((v) => v.trimStart()),
+                                })
+                              }
+                              placeholder={labels.tasks.fieldValues}
+                              className="h-8 w-full text-[12px]"
+                            />
+                          )}
                         <label className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
                           <input
                             type="checkbox"
@@ -310,7 +319,7 @@ function Editor({
                         <Plus />
                         {labels.tasks.addField}
                       </Button>
-                      {fields.length === 0 && (
+                      {fields.length === 0 && !outputSpec.metadata && (
                         <Button
                           type="button"
                           variant="ghost"
@@ -327,22 +336,25 @@ function Editor({
             </>
           )}
 
-          <Field label={labels.tasks.judgeBy}>
-            <Select
-              value={sourceText}
-              onChange={(event) => setSourceText(event.target.value as TaskSourceText)}
-              className="h-9 w-full max-w-sm text-[13px]"
-            >
-              {taskSourceTexts.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-            <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
-              {taskSourceTexts.find((option) => option.value === sourceText)?.hint}
-            </span>
-          </Field>
+          {/* A metadata task always reads the whole item it enriches, so there is nothing to choose. */}
+          {!(outputSpec.metadata && !raw) && (
+            <Field label={labels.tasks.judgeBy}>
+              <Select
+                value={sourceText}
+                onChange={(event) => setSourceText(event.target.value as TaskSourceText)}
+                className="h-9 w-full max-w-sm text-[13px]"
+              >
+                {taskSourceTexts.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+              <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
+                {taskSourceTexts.find((option) => option.value === sourceText)?.hint}
+              </span>
+            </Field>
+          )}
 
           <Field label={labels.tasks.quality} hint={labels.tasks.qualityHint}>
             <Select
@@ -358,7 +370,7 @@ function Editor({
             </Select>
             <Technical>
               <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
-                app.llm.profile.{llmProfile}
+                llmProfile: {llmProfile}
               </span>
             </Technical>
           </Field>

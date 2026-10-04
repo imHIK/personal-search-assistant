@@ -13,30 +13,15 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Chunks tabular documents by row, repeating the table's header row at the top of every chunk.
- *
- * <p><strong>The header repetition is the point.</strong> A table split naively gives its first chunk the
- * column headers and every later chunk nothing but bare values. Those later chunks are then close to
- * unretrievable: a chunk holding {@code "17 Dussehra 20/10/2026 Tuesday"} shares no term with a query
- * about holidays and sits nowhere near it in embedding space, so it never reaches the top-k — and an
- * answer built from the chunks that did rank looks complete while missing half the table. Repeating
- * {@code "S.N NAME OF HOLIDAY DATE DAY"} into every chunk makes each one independently retrievable by
- * both the lexical and the vector leg, and independently interpretable by the model reading it.
- *
- * <p>It also never splits mid-row, so a date or a cell value can no longer be cut in half.
- *
- * <p>Falls back to recursive character splitting when the parser reported no table structure — which is
- * the common case for PDFs, where the format has no table semantics and a visual table arrives as a
- * sequence of paragraphs. This strategy helps formats that carry real table markup (spreadsheets, Word
- * tables, HTML); for the rest the win has to come from chunk sizing and from the embedded context
- * prefix, not from here.
+ * Chunks tables by row and repeats the header row atop every chunk, so each chunk is retrievable and readable
+ * on its own; never splits mid-row. Falls back to recursive splitting when the parser reported no table
+ * structure, as with most PDFs.
  */
 @ApplicationScoped
 public class TableAwareChunkingStrategy implements ChunkingStrategy {
 
     public static final String NAME = "table";
 
-    /** Content types whose parsers emit real table markup, so row-aware chunking has something to use. */
     private static final Set<String> PREFERRED_TYPES = Set.of(
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -45,11 +30,7 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
             "application/csv",
             "text/tab-separated-values");
 
-    /**
-     * Tabular rows are short and dense, so the prose default of 1000 characters holds very few of them and
-     * multiplies the number of chunks a table becomes. This raises the working size when the caller has
-     * not asked for something specific.
-     */
+    /** Rows are short and dense, so the prose default would fit very few of them per chunk. */
     static final int DEFAULT_TABLE_SIZE = 2000;
 
     @Override
@@ -68,7 +49,6 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
         return PREFERRED_TYPES.contains(base);
     }
 
-    /** With no structural blocks there is nothing table-aware to do; behave like the recursive default. */
     @Override
     public List<Chunk> chunk(Entity entity, SourceType sourceType, String text, ChunkingSpec spec) {
         return ChunkSupport.toChunks(entity, sourceType,
@@ -89,12 +69,7 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
                 pieces.stream().map(Piece::facets).toList());
     }
 
-    /**
-     * Pack blocks into chunks, keeping every row whole and re-emitting the current header (and the
-     * heading that locates it) whenever a new chunk starts. No overlap is applied: with the header
-     * repeated, the redundancy overlap exists to provide is already there, and duplicating rows would
-     * make the same row match twice.
-     */
+    /** No overlap: the repeated header already provides context, and a duplicated row would match twice. */
     private List<Piece> pack(List<ParsedContent.Block> blocks, int maxSize) {
         List<Piece> out = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -108,7 +83,7 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
                 case HEADING -> {
                     flush(out, current, heading, header, firstRow, lastRow);
                     heading = block.text();
-                    header = "";     // a new section means a new table, and a new header row
+                    header = "";     // a new section means a new table and a new header row
                     firstRow = 0;
                     lastRow = 0;
                 }
@@ -138,7 +113,6 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
                     }
                 }
                 default -> {
-                    // No other kinds exist today; a new one falls through as content-free.
                 }
             }
         }
@@ -146,7 +120,6 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
         return out;
     }
 
-    /** The repeated context every chunk of a table opens with. */
     private String prefix(String heading, String header) {
         StringBuilder out = new StringBuilder();
         if (!heading.isEmpty()) {
@@ -162,7 +135,7 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
                        int firstRow, int lastRow) {
         String body = current.toString();
         current.setLength(0);
-        // A chunk holding only the repeated prefix carries no data; emitting it would waste an ordinal.
+        // A chunk holding only the repeated prefix carries no data.
         if (body.isBlank() || body.equals(prefix(heading, header))) {
             return;
         }
@@ -180,6 +153,5 @@ public class TableAwareChunkingStrategy implements ChunkingStrategy {
         return facets;
     }
 
-    /** One packed chunk: its text plus the chunk-level facets describing where it came from. */
     private record Piece(String text, Map<String, Object> facets) {}
 }

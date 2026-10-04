@@ -6,11 +6,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/**
- * JAX-RS binding for the HTTP {@code PATCH} verb. The spec ships {@code @GET}/{@code @POST}/etc. but
- * not {@code @PATCH}, so we declare it ourselves via {@link HttpMethod} — the standard way to add a
- * verb. Used for partial edits (see {@code KnowledgeResource#update}).
- */
+/** JAX-RS has no {@code @PATCH}; this declares the verb via {@link HttpMethod}. */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 @HttpMethod("PATCH")

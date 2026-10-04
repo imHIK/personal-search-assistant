@@ -16,21 +16,11 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * The rate-limit wire contract, both directions.
- *
- * <p>Worth pinning because nothing else covers it: {@code ConnectionResource} returns the domain record
- * directly, so the response shape is whatever Jackson makes of it, and the request shape is whatever
- * Jackson can bind. The window is held as {@code windowSeconds} rather than a {@link java.time.Duration}
- * precisely so both sides read as plain numbers — a {@code Duration} would serialize as {@code "PT1M"}
- * and quietly diverge from what the console sends.
- */
 class ConnectionDtoJsonTest {
 
     /**
-     * Configured to match Quarkus's REST mapper rather than Jackson's bare defaults, or this tests the
-     * wrong thing: {@code findAndRegisterModules} is what lets the record's {@code Instant} fields
-     * serialize at all, and Quarkus ships with unknown properties ignored.
+     * Configured like Quarkus's REST mapper (modules registered, unknown properties ignored); Jackson's bare
+     * defaults would test the wrong thing.
      */
     private final ObjectMapper mapper = new ObjectMapper()
             .findAndRegisterModules()
@@ -60,7 +50,6 @@ class ConnectionDtoJsonTest {
         assertNull(dto.rateLimit(), "absent must stay null so the service reads it as 'unchanged'");
     }
 
-    /** The only way to remove a limit; if this bound as null it would silently mean "keep it". */
     @Test
     void anEmptyRuleListBindsAsAnEmptyPolicy() throws Exception {
         ConnectionEditDto dto =
@@ -71,12 +60,8 @@ class ConnectionDtoJsonTest {
     }
 
     /**
-     * The response also carries a derived {@code "unlimited"} field, because Jackson reads
-     * {@code isUnlimited()} as a getter. That is left alone deliberately: every other derived predicate
-     * on a domain record does the same ({@code Entity.Content.isFile()}, {@code CursorPosition.isStart()}),
-     * and suppressing this one would put the codebase's first Jackson annotation in {@code common} to fix
-     * cosmetics. It is additive and ignored on the way back in — which this asserts, since the console
-     * reads a connection and PATCHes it back.
+     * The derived "unlimited" field (from {@code isUnlimited()}) is left in on purpose. It must be ignored on
+     * the way back in, since the console PATCHes back what it read.
      */
     @Test
     void serializesTheStoredPolicyBackInTheSameShapeItAccepts() throws Exception {

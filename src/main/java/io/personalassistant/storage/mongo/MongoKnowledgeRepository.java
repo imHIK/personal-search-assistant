@@ -19,7 +19,6 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link KnowledgeRepository} over the {@code knowledge} collection. */
 @ApplicationScoped
 public class MongoKnowledgeRepository implements KnowledgeRepository {
 
@@ -90,7 +89,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public void updateNextSyncDueAt(String id, Instant nextDueAt) {
-        // Scheduler bookkeeping only — deliberately does NOT touch updatedAt.
+        // Scheduler bookkeeping: leaves updatedAt alone.
         collection().updateOne(eq("_id", id),
                 Updates.set("nextSyncDueAt", BsonSupport.date(nextDueAt)));
     }
@@ -99,8 +98,6 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
     public void delete(String id) {
         collection().deleteOne(eq("_id", id));
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Knowledge k) {
         Knowledge.ConnectorDetails cd = k.connectorDetails();
@@ -122,7 +119,8 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                                 .append("maxSize", cfg.chunking().maxSize())
                                 .append("overlap", cfg.chunking().overlap())
                                 .append("separators", cfg.chunking().separators()))
-                        .append("retention", new Document("period", cfg.retention().period())))
+                        .append("retention", new Document("period", cfg.retention().period()))
+                        .append("enrichment", new Document("taskId", cfg.enrichment().taskId())))
                 .append("anchor", BsonSupport.date(k.anchor()))
                 .append("nextSyncDueAt", BsonSupport.date(k.nextSyncDueAt()))
                 .append("status", BsonSupport.enumName(k.status()))
@@ -143,6 +141,7 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         Document back = BsonSupport.sub(cfg, "backfill");
         Document chunk = BsonSupport.sub(cfg, "chunking");
         Document retention = BsonSupport.sub(cfg, "retention");
+        Document enrichment = BsonSupport.sub(cfg, "enrichment");
         Document stats = BsonSupport.sub(d, "stats");
         return new Knowledge(
                 d.getString("_id"),
@@ -168,7 +167,9 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
                                         intOrNull(chunk.get("overlap")),
                                         stringList(chunk.get("separators"))),
                         retention == null ? Knowledge.Retention.inherit()
-                                : new Knowledge.Retention(retention.getString("period"))),
+                                : new Knowledge.Retention(retention.getString("period")),
+                        enrichment == null ? Knowledge.EnrichmentSettings.none()
+                                : new Knowledge.EnrichmentSettings(enrichment.getString("taskId"))),
                 BsonSupport.instant(d.get("anchor")),
                 BsonSupport.instant(d.get("nextSyncDueAt")),
                 BsonSupport.enumOf(KnowledgeStatus.class, d.get("status")),
@@ -186,12 +187,11 @@ public class MongoKnowledgeRepository implements KnowledgeRepository {
         return o instanceof Number n ? n.longValue() : 0L;
     }
 
-    /** Read a nullable stored int (chunking size/overlap), tolerating either int32 or int64 storage. */
+    /** Tolerates int32 or int64 storage. */
     private static Integer intOrNull(Object o) {
         return o instanceof Number n ? n.intValue() : null;
     }
 
-    /** Read a stored string array (chunking separators), or an empty list if absent. */
     @SuppressWarnings("unchecked")
     private static java.util.List<String> stringList(Object o) {
         if (o instanceof java.util.List<?> list) {

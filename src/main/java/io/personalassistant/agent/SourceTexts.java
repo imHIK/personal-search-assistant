@@ -10,17 +10,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Resolves the body of text each source entry in a prompt should carry.
- *
- * <p>Answering wants the retrieved chunk: the passage is what matched, and handing the model a whole
- * report to answer a question about one paragraph spends the context budget on noise. Judging an item
- * as a whole wants the opposite — scoring a job posting against a profile from one arbitrary slice of
- * its description is not a weaker answer, it is a meaningless one.
- *
- * <p>Kept out of {@code AnswerPromptBuilder} so that class stays a pure assembler: it takes text it is
- * given, which is what lets its budgeting and truncation logic be tested without a repository.
- */
 @ApplicationScoped
 public class SourceTexts {
 
@@ -32,13 +21,8 @@ public class SourceTexts {
     }
 
     /**
-     * The hits to render, and the text to render for each, keyed by chunk id.
-     *
-     * <p>In {@code ENTITY} mode the hits are collapsed to one per entity — several chunks of one
-     * document would otherwise repeat that document verbatim, burning the budget and inviting the model
-     * to treat one item as several. An entity whose text cannot be loaded (a file-backed entity keeps
-     * only a {@code fileRef}, and the bytes are not re-read here) falls back to its chunk text, which is
-     * a degraded source rather than a missing one.
+     * ENTITY mode collapses hits to one per entity. An entity with no inline text (file-backed) falls back to
+     * its chunk text.
      */
     public Resolved resolve(TaskSpec task, List<SearchHit> hits) {
         if (task.sourceText() != TaskSpec.SourceText.ENTITY) {
@@ -66,9 +50,6 @@ public class SourceTexts {
         return new Resolved(List.copyOf(collapsed), Map.copyOf(texts));
     }
 
-    /**
-     * @param hits          the hits to render, in order
-     * @param textByChunkId overriding text per chunk id; an absent entry means "use the hit's own text"
-     */
+    /** @param textByChunkId overriding text per chunk id; absent means the hit's own text */
     public record Resolved(List<SearchHit> hits, Map<String, String> textByChunkId) {}
 }

@@ -16,12 +16,7 @@ import java.util.Optional;
 import org.bson.Document;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * MongoDB adapter for {@link TaskRepository} over the {@code tasks} collection.
- *
- * <p>No index is declared in {@code MongoIndexInitializer}: every access is by {@code _id} or a full
- * list of what is a hand-written, human-sized collection, and both are already served.
- */
+/** No index: every access is by _id or a full list of a human-sized collection. */
 @ApplicationScoped
 public class MongoTaskRepository implements TaskRepository {
 
@@ -65,15 +60,14 @@ public class MongoTaskRepository implements TaskRepository {
         collection().deleteOne(eq("_id", id));
     }
 
-    // ---- mapping -----------------------------------------------------------------------------
-
     private Document toDoc(Task t) {
         List<Document> fields = new ArrayList<>();
         for (Task.Field field : t.fields()) {
             fields.add(new Document("name", field.name())
                     .append("type", BsonSupport.enumName(field.type()))
                     .append("description", field.description())
-                    .append("optional", field.optional()));
+                    .append("optional", field.optional())
+                    .append("values", field.values()));
         }
         return new Document("_id", t.id())
                 .append("name", t.name())
@@ -101,7 +95,9 @@ public class MongoTaskRepository implements TaskRepository {
                             f.getString("name"),
                             BsonSupport.enumOf(Task.FieldType.class, f.get("type")),
                             f.getString("description"),
-                            Boolean.TRUE.equals(f.getBoolean("optional"))));
+                            Boolean.TRUE.equals(f.getBoolean("optional")),
+                            f.get("values") instanceof List<?> values
+                                    ? values.stream().map(String::valueOf).toList() : List.of()));
                 }
             }
         }

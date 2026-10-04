@@ -21,6 +21,7 @@ import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryDiscoveryStatusRepository;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
@@ -51,11 +52,11 @@ class DefaultKnowledgeServiceTest {
         connector = new StubConnector(SourceType.SLACK,
                 List.of(new SourceIterable("chan_a", "A", Map.of())))
                 .withDynamicIterables(true);
-        // SLACK stub needs no connection, so a trivial resolver suffices here.
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors,
-                entities, registry, connections, index, discovery, new RefetchPolicy(registry));
+                entities, registry, connections, index, discovery, new RefetchPolicy(registry),
+                new InMemoryTaskRepository());
     }
 
     private Knowledge addKnowledge() {
@@ -66,7 +67,6 @@ class DefaultKnowledgeServiceTest {
     @Test
     void activationCreatesBackwardAndForwardCursorsPerIterable() {
         Knowledge kn = addKnowledge();
-        // one iterable × {backward, forward} = 2 cursors
         assertEquals(2, cursors.findByKnowledge(kn.id()).size());
     }
 
@@ -88,14 +88,12 @@ class DefaultKnowledgeServiceTest {
         Knowledge kn = addKnowledge();
         assertEquals(2, cursors.findByKnowledge(kn.id()).size());
 
-        // A new channel appears at the source after activation.
         connector.addIterable(new SourceIterable("chan_b", "B", Map.of()));
 
         int added = service.reconcileCursors(kn.id());
         assertEquals(2, added, "new iterable → one backward + one forward cursor");
         assertEquals(4, cursors.findByKnowledge(kn.id()).size());
 
-        // Idempotent: a second reconcile with no new iterables adds nothing.
         assertEquals(0, service.reconcileCursors(kn.id()));
         assertEquals(4, cursors.findByKnowledge(kn.id()).size());
     }
@@ -103,7 +101,6 @@ class DefaultKnowledgeServiceTest {
     @Test
     void createdCursorsSnapshotIterableAttributesForGrab() {
         Knowledge kn = addKnowledge();
-        // A channel with grab-relevant attributes appears; reconcile should snapshot them onto the cursors.
         connector.addIterable(new SourceIterable("chan_b", "B", Map.of("channelId", "C999", "isPrivate", true)));
         service.reconcileCursors(kn.id());
 
@@ -122,7 +119,6 @@ class DefaultKnowledgeServiceTest {
         assertEquals("Engineering", nameOf(kn.id(), "chan_b"),
                 "the cursor carries the label the console shows in place of the id");
 
-        // The channel is renamed at the source; reconcile is what catches up.
         connector.removeIterable("chan_b");
         connector.addIterable(new SourceIterable("chan_b", "Platform", Map.of()));
         service.reconcileCursors(kn.id());
@@ -138,14 +134,12 @@ class DefaultKnowledgeServiceTest {
 
     @Test
     void deletedIterableRetiresItsCursorsAndPurgesData() {
-        Knowledge kn = addKnowledge(); // chan_a + its cursors
+        Knowledge kn = addKnowledge();
         entities.upsert(TestData.entityInIterable("ent_a", kn.id(), "chan_a", "a1"));
-        // a sibling iterable whose data must survive the prune
         connector.addIterable(new SourceIterable("chan_keep", "K", Map.of()));
         service.reconcileCursors(kn.id());
         entities.upsert(TestData.entityInIterable("ent_k", kn.id(), "chan_keep", "k1"));
 
-        // chan_a is deleted at the source
         connector.removeIterable("chan_a");
         int created = service.reconcileCursors(kn.id());
 
@@ -165,11 +159,10 @@ class DefaultKnowledgeServiceTest {
     void reappearedIterableRevivesRetiredCursorsAndRefreshesAttributes() {
         Knowledge kn = addKnowledge();
         connector.removeIterable("chan_a");
-        service.reconcileCursors(kn.id()); // retires chan_a's cursors
+        service.reconcileCursors(kn.id());
         assertTrue(cursors.findByKnowledge(kn.id()).stream()
                 .allMatch(c -> c.status() == CursorStatus.RETIRED));
 
-        // chan_a comes back, now with grab-relevant attributes
         connector.addIterable(new SourceIterable("chan_a", "A", Map.of("channelId", "C-new")));
         service.reconcileCursors(kn.id());
 
@@ -221,7 +214,6 @@ class DefaultKnowledgeServiceTest {
     void activationRecordsDiscoveryStatusPerGrabberDirection() {
         Knowledge kn = addKnowledge();
 
-        // SLACK supports both directions and backfill is on by default → a forward + a backward grabber.
         assertEquals(2, discovery.findByKnowledge(kn.id()).size(), "one discovery record per grabber");
 
         DiscoveryStatus fwd = discovery.find(kn.id(), CursorDirection.FORWARD).orElseThrow();
@@ -254,10 +246,9 @@ class DefaultKnowledgeServiceTest {
 
     @Test
     void discoveryFailureIsRecordedPerDirectionWithoutClobberingLastGoodSnapshot() {
-        Knowledge kn = addKnowledge(); // one OK activation run on record per direction
+        Knowledge kn = addKnowledge();
 
         connector.failDiscoveryWith(new IllegalStateException("source unreachable"));
-        // discover throws; reconcile records the FAILED run (per direction) then rethrows
         assertThrows(IllegalStateException.class, () -> service.reconcileCursors(kn.id()));
 
         DiscoveryStatus fwd = discovery.find(kn.id(), CursorDirection.FORWARD).orElseThrow();
@@ -281,19 +272,19 @@ class DefaultKnowledgeServiceTest {
     @Test
     void statsAreComputedFromEntityCountsOnRead() {
         Knowledge kn = addKnowledge();
-        // Three entities ingested; one gets indexed, one fails — the rest stay INGESTED.
         entities.upsert(TestData.entityInIterable("ent_1", kn.id(), "chan_a", "x1"));
         entities.upsert(TestData.entityInIterable("ent_2", kn.id(), "chan_a", "x2"));
         entities.upsert(TestData.entityInIterable("ent_3", kn.id(), "chan_a", "x3"));
         entities.seedIndexed("ent_1", 4, "m", Instant.now());
         entities.seedFailed("ent_2", EntityStatus.FAILED, "boom", 1);
+        entities.upsert(TestData.entityInIterable("ent_4", kn.id(), "chan_a", "x4"));
+        entities.markDeleted("ent_4", Instant.now());
 
         Knowledge.Stats stats = service.get(kn.id()).orElseThrow().stats();
-        assertEquals(3, stats.entities(), "total reflects all entities");
+        assertEquals(3, stats.entities(), "total counts live entities; a tombstone is not still processing");
         assertEquals(1, stats.indexed());
         assertEquals(1, stats.failed());
 
-        // list() computes the same way.
         Knowledge listed = service.list().stream().filter(k -> k.id().equals(kn.id())).findFirst().orElseThrow();
         assertEquals(3, listed.stats().entities());
     }

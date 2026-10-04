@@ -7,36 +7,11 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * A first-class ingestion position: <em>position + lease + status</em>, not just a position.
- * Exactly one cursor exists per {@code (knowledgeId, iterableId, direction)}. Persisted in
- * the Mongo {@code cursors} collection.
+ * Exactly one per (knowledgeId, iterableId, direction). Snapshots its iterable's attributes at discovery, so
+ * a lease can grab without re-discovering.
  *
- * <p>The ingestion job leases a cursor (atomic find-and-modify to {@link CursorStatus#IN_PROGRESS}),
- * pages from {@link #position}, advances it after each page, and finally sets a resting status
- * ({@code AVAILABLE} / {@code IDLE} / {@code EXHAUSTED} / {@code FAILED}).
- *
- * <p>A cursor is <strong>self-contained</strong>: it snapshots the {@code attributes} of its
- * {@code SourceIterable} at creation time (when {@code discover} runs) so the ingestion runner can
- * rebuild the iterable and call {@code grab} without re-discovering. This matters for API-backed
- * sources (e.g. Slack) where {@code discover} enumerates every channel — paying that on every lease
- * would be quadratic. New iterables are still picked up by the periodic discovery/reconcile pass.
- *
- * @param id          stable id, e.g. {@code "cur_..."}
- * @param knowledgeId owning knowledge
- * @param iterableId  identifies the sub-stream (a channel, folder, label…)
- * @param iterableName human-friendly label for that sub-stream, snapshotted from {@code discover}
- *                    alongside the attributes so the console never has to render a raw id. Null on
- *                    cursors written before names were stored; the reconcile pass refreshes it, so a
- *                    renamed folder or label catches up on the next discovery rather than going stale
- * @param attributes  connector-specific iterable attributes snapshotted from {@code discover} (the
- *                    {@code grab} inputs, e.g. a folder path); empty for legacy cursors
- * @param direction   backward (backfill) or forward (incremental)
- * @param position    source-defined pagination state (page token, offset, timestamp+id, ...)
- * @param status      operational state
- * @param lease       current holder + expiry, or null when free
- * @param retry       retry bookkeeping, including any rate-limit hold
- * @param stats       last-run bookkeeping
- * @param scope       hints used by the PermitService for scoped throttling
+ * @param iterableName null on cursors written before names were stored; the reconcile pass refreshes it
+ * @param position source-defined pagination state
  */
 public record Cursor(
         String id,
@@ -56,7 +31,6 @@ public record Cursor(
         attributes = attributes == null ? Map.of() : attributes;
     }
 
-    /** Lease held by a worker while the cursor is {@code IN_PROGRESS}. */
     public record Lease(String owner, Instant expiresAt) {
         public boolean isLiveAt(Instant now) {
             return expiresAt != null && expiresAt.isAfter(now);
@@ -64,17 +38,9 @@ public record Cursor(
     }
 
     /**
-     * Retry bookkeeping for transient ingestion failures. {@code count} is <em>consecutive</em>
-     * failures — a successful run resets it to zero — so the retry limit means "n failures in a row",
-     * not "n failures ever". {@code lastError} captures a compact summary of the most recent failure
-     * (the full stack trace goes to the log) so a stuck or {@code FAILED} cursor can be debugged
-     * straight from the stored record.
-     *
-     * <p>{@code nextAttemptAt} is the instant a {@link CursorStatus#RATE_LIMITED} cursor becomes
-     * claimable again — the reopening the limiter computed, persisted so the hold survives a restart
-     * and so the claim query, not a background sweeper, is what lets the cursor back in. It is null
-     * for every other status; a null on a {@code RATE_LIMITED} row would strand it, which is why
-     * dead-lettering to {@code FAILED} clears it rather than leaving a stale instant behind.
+     * {@code count} is consecutive failures; success resets it. {@code nextAttemptAt} is when a RATE_LIMITED
+     * cursor becomes claimable and is null for any other status, which is why dead-lettering to FAILED clears
+     * it.
      */
     public record Retry(int count, String lastError, Instant nextAttemptAt) {
         public static Retry zero() {
@@ -86,17 +52,14 @@ public record Cursor(
         }
     }
 
-    /** Last-run statistics. */
     public record Stats(Instant lastRunAt, long fetched) {
         public static Stats zero() {
             return new Stats(null, 0);
         }
     }
 
-    /** Scoping hints consumed by the PermitService (e.g. {@code connector:SLACK}). */
     public record Scope(SourceType connectorType) {}
 
-    /** True when this cursor currently holds a lease that has not yet expired. */
     public boolean hasLiveLease(Instant now) {
         return lease != null && lease.isLiveAt(now);
     }

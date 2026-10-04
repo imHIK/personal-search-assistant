@@ -6,7 +6,6 @@ import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Scriptable {@link AshbyApi} for connector tests — no network. */
 public class FakeAshbyApi implements AshbyApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

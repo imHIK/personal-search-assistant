@@ -9,23 +9,11 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * A PATCH request body, read as a tree so that <em>which keys were sent</em> survives.
- *
- * <p><b>Why not bind to a record of fields.</b> Jackson gives an absent key and an explicit
- * {@code null} the same null reference, so a bound patch cannot tell "leave this alone" from "clear
- * this". Every console control whose job is to turn something <em>off</em> sends the second and got the
- * first: a digest's look-back window or task could be set but never unset, and a source moved onto a
- * custom cron could never be moved back to a preset interval, because the {@code cron: null} that
- * should have released it was read as "unchanged". All of it answered 200. ({@code Optional} components
- * do not help — Jackson fills a missing key with {@link java.util.Optional#empty()}, collapsing the
- * same two states in the other direction, so patching one field would clear every other.)
- *
- * <p>Reading the tree costs the compile-time shape of a DTO. In exchange a wrong-typed value becomes a
- * 400 instead of an edit that silently does nothing — which is the failure this class exists to end.
+ * A PATCH body read as a tree, so an absent key and an explicit null stay distinct. Bound to a record,
+ * Jackson gives both the same null, and Optional components collapse them the other way.
  */
 record PatchBody(JsonNode node) {
 
-    /** True when the request carried a JSON object at all. */
     boolean isObject() {
         return node != null && node.isObject();
     }
@@ -39,10 +27,7 @@ record PatchBody(JsonNode node) {
         });
     }
 
-    /**
-     * A string that has no meaningful empty state, so an explicit null is a mistake worth reporting
-     * rather than a value worth writing. A knowledge with no name renders as a blank row forever.
-     */
+    /** A string with no empty state: an explicit null is a 400, not a value. */
     Patched<String> requiredText(String key) {
         Patched<String> patched = text(key);
         if (patched.present() && patched.value() == null) {
@@ -94,10 +79,7 @@ record PatchBody(JsonNode node) {
         });
     }
 
-    /**
-     * A map that has no meaningful null state — clearing one means sending {@code {}}, which is a
-     * different and expressible thing.
-     */
+    /** A map with no null state; clearing one means sending {@code {}}. */
     Patched<Map<String, Object>> requiredMap(String key) {
         Patched<Map<String, Object>> patched = map(key);
         if (patched.present() && patched.value() == null) {
@@ -106,15 +88,10 @@ record PatchBody(JsonNode node) {
         return patched;
     }
 
-    /**
-     * The raw node, for a shape only the caller knows how to read — an array of objects, say. Comes
-     * back with the same three states as everything else.
-     */
     Patched<JsonNode> node(String key) {
         return read(key, value -> value);
     }
 
-    /** The three states, in one place: the key is missing, the key is null, or it carries a value. */
     private <T> Patched<T> read(String key, Function<JsonNode, T> parse) {
         JsonNode value = node == null ? null : node.get(key);
         if (value == null) {
@@ -127,8 +104,7 @@ record PatchBody(JsonNode node) {
     }
 
     /**
-     * Null entries are dropped rather than stored. {@code Map.copyOf} rejects a null value outright,
-     * and a filter or input whose value is null says nothing a missing key does not already say.
+     * Null entries are dropped: {@code Map.copyOf} rejects them, and they say nothing a missing key doesn't.
      */
     private static Map<String, Object> object(JsonNode value) {
         Map<String, Object> out = new LinkedHashMap<>();
@@ -140,7 +116,6 @@ record PatchBody(JsonNode node) {
         return Map.copyOf(out);
     }
 
-    /** A free-form value as the storage layer and the search API can both carry it. */
     private static Object plain(JsonNode value) {
         if (value.isNumber()) {
             return value.isIntegralNumber() ? (Object) value.asLong() : (Object) value.asDouble();

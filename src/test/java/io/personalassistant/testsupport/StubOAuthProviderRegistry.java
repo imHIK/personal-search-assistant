@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-/** Hand-wired {@link OAuthProviderRegistry} for unit tests (no CDI). */
 public class StubOAuthProviderRegistry implements OAuthProviderRegistry {
 
     private final Map<String, OAuthProvider> byId = new LinkedHashMap<>();

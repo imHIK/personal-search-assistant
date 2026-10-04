@@ -69,21 +69,18 @@ class IngestionRunnerTest {
                 Map.of("title", ext), null, false);
     }
 
-    /** A file-backed item: content is a path, which is the shape that can go stale under us. */
     private static RawItem fileItem(String ext) {
         return RawItem.file(ext, "text/plain", ext, "uri:" + ext, "sha256:" + ext, Instant.now(),
                 "/scratch/" + ext + ".txt", Map.of("k", "v"), Map.of("title", ext));
     }
 
     private Cursor seedCursor(CursorDirection direction) {
-        // Cursors created by reconcile carry the iterable's attributes, so the runner needn't discover.
         return seedCursor(direction, Map.of("path", "/tmp", "recursive", false));
     }
 
     private Cursor seedCursor(CursorDirection direction, Map<String, Object> attributes) {
         Cursor cursor = TestData.cursor("kn_1", "root", attributes, direction, SourceType.LOCAL_FS);
         cursors.insertIfAbsent(cursor);
-        // Lease it to the worker first, mirroring what IngestionJob does before runLease.
         return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
     }
 
@@ -91,7 +88,6 @@ class IngestionRunnerTest {
         return new RateLimitedException(RateLimitKey.connection("conn_1"), retryAt);
     }
 
-    /** Re-arm (as the scheduler would) and re-claim, so a rested cursor can be run again. */
     private Cursor reclaim(Cursor cursor) {
         cursors.armForwardCursors("kn_1");
         return cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
@@ -129,7 +125,7 @@ class IngestionRunnerTest {
     void continuesAvailableWhenMorePagesRemain() {
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 3L)), true)); // hasMore, but only one page queued
-        runner.batchesPerLease = 1; // stop after one page
+        runner.batchesPerLease = 1;
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
 
         runner.runLease(kn, cursor, "w1", () -> {});
@@ -167,16 +163,8 @@ class IngestionRunnerTest {
         assertTrue(after.retry().lastError().contains("boom"), "lastError carries the exception message");
     }
 
-    /**
-     * B3 regression. An item re-ingested while the indexer is mid-run on its previous revision must
-     * fence that indexer out. Before the fix, upsert's whole-document replace wiped the lease and
-     * status, the indexer finished on the <em>old</em> text and — its write being unfenced — marked
-     * the entity INDEXED with needsReindex=false. The new content then sat in Mongo, believed
-     * indexed, and was permanently absent from search.
-     */
     @Test
     void reIngestFencesAnIndexerRunningOnThePreviousRevision() {
-        // Revision 1 lands and the indexer claims it.
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 1L)), false));
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
@@ -184,7 +172,6 @@ class IngestionRunnerTest {
         Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
         assertEquals(EntityStatus.INDEXING, claimed.status());
 
-        // Revision 2 of the same externalId arrives while idx1 is still working.
         RawItem revised = new RawItem("doc", EntityType.MESSAGE, "text/plain", "doc", "uri:doc",
                 "sha256:doc-v2", Instant.now(), Map.of("k", "v"), "the new body", null,
                 Map.of("title", "doc"), null, false);
@@ -197,7 +184,6 @@ class IngestionRunnerTest {
         assertEquals(EntityStatus.INGESTED, stored.status(), "and it is back in the indexing queue");
         assertNull(stored.lease(), "the in-flight indexer's lease is dropped");
 
-        // The stale indexer now cannot record anything — this is the actual fix.
         assertFalse(entities.markIndexed(claimed.id(), "idx1", 3, "m", Instant.now()),
                 "the fenced-out indexer must not mark stale content as indexed");
         assertEquals(EntityStatus.INGESTED, entities.findById(claimed.id()).orElseThrow().status());
@@ -205,13 +191,6 @@ class IngestionRunnerTest {
                 "the new revision is re-claimable, so it does reach the index");
     }
 
-    /**
-     * An unchanged item that is merely still queued must not be re-upserted. The write itself is cheap;
-     * what it costs is the indexing stage's state — upsert() owns the queue reset, so it would zero the
-     * retry counter and clear retry.nextAttemptAt, discarding the reopening instant a rate-limit
-     * deferral wrote and making the entity claimable again immediately. A poll every few minutes then
-     * re-parses and re-chunks it for nothing until the limit truly reopens.
-     */
     @Test
     void anUnchangedItemStillAwaitingIndexingIsNotRewritten() {
         connector.enqueue(CursorDirection.FORWARD,
@@ -219,13 +198,11 @@ class IngestionRunnerTest {
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
         runner.runLease(kn, cursor, "w1", () -> {});
 
-        // The indexer tried, hit a rate limit, and deferred to a reopening instant an hour out.
         Entity claimed = entities.claimForIndexing(1, "idx1", java.time.Duration.ofMinutes(5)).get(0);
         Instant reopensAt = Instant.now().plusSeconds(3600);
         assertTrue(entities.markFailed(claimed.id(), "idx1", EntityStatus.INGESTED, "throttled", 4,
                 reopensAt));
 
-        // The next poll re-sees the same item, byte for byte.
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});
@@ -237,7 +214,6 @@ class IngestionRunnerTest {
                 "the hold still keeps it out of the claim batch");
     }
 
-    /** A dead letter is the one status a re-seen item revives: the poll is a way back in. */
     @Test
     void anUnchangedItemThatDeadLetteredIsRewrittenSoItGetsAnotherChance() {
         connector.enqueue(CursorDirection.FORWARD,
@@ -256,13 +232,6 @@ class IngestionRunnerTest {
         assertEquals(0, stored.retry().count(), "with a fresh retry budget");
     }
 
-    /**
-     * Change detection has to gate the content fetch, not just the write. A connector whose checksum
-     * comes from a cheap listing (Drive's {@code version}) emits items carrying only that checksum and
-     * a reference, and pays for the bytes in materialize() — so an item the runner skips must cost no
-     * fetch at all. Before this the download happened inside grab(), which meant every re-listed
-     * boundary file was downloaded on every arm just to be discarded here.
-     */
     @Test
     void contentIsFetchedOnlyForItemsTheRunnerDecidesToPersist() {
         connector.enqueue(CursorDirection.FORWARD,
@@ -271,7 +240,6 @@ class IngestionRunnerTest {
         runner.runLease(kn, cursor, "w1", () -> {});
         assertEquals(1, connector.materializeCalls, "a new item is fetched");
 
-        // The boundary of a forward window is re-listed by design: same item, same checksum.
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});
@@ -284,7 +252,6 @@ class IngestionRunnerTest {
         assertEquals("body of doc", entities.store.values().iterator().next().content().text());
     }
 
-    /** The dead-letter fall-through is a re-fetch too — it is the only path that re-stages lost content. */
     @Test
     void aDeadLetteredItemIsFetchedAgainEvenThoughItsChecksumIsUnchanged() {
         connector.enqueue(CursorDirection.FORWARD,
@@ -301,12 +268,6 @@ class IngestionRunnerTest {
         assertEquals(2, connector.materializeCalls);
     }
 
-    /**
-     * L11. The other fall-through, and the one the source cannot signal: an entity whose staged copy
-     * is gone is still {@code INDEXED} and still carries the checksum the source reports, so nothing
-     * about the item says it needs anything. The flag is what makes the walk fetch it anyway, which
-     * is what lets a knowledge-wide re-index repair staged content instead of dead-lettering it.
-     */
     @Test
     void anItemFlaggedForRefetchIsFetchedAgainDespiteAnUnchangedChecksum() {
         connector.enqueue(CursorDirection.FORWARD,
@@ -315,7 +276,6 @@ class IngestionRunnerTest {
         runner.runLease(kn, cursor, "w1", () -> {});
         assertEquals(1, connector.materializeCalls);
 
-        // A second unchanged pass is still skipped — the flag, not the re-listing, is what matters.
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(fileItem("doc")), CursorPosition.of(Map.of("seq", 2L)), false));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});
@@ -331,13 +291,6 @@ class IngestionRunnerTest {
         assertFalse(stored.needsRefetch(), "and is cleared by the write that used it, not left to repeat");
     }
 
-    /**
-     * Being throttled is not a failure: the cursor rests in its own visible status carrying the
-     * instant the limiter says the window reopens, and stays out of the claim batch until then.
-     * Before this it rested AVAILABLE, so it was re-picked every poll tick — indistinguishable in
-     * the console from healthy work, and spending one deferral per tick rather than one per genuine
-     * reopening.
-     */
     @Test
     void rateLimitHoldsTheCursorOutOfTheClaimBatchUntilTheWindowReopens() {
         Instant reopensAt = Instant.now().plusSeconds(600);
@@ -365,11 +318,6 @@ class IngestionRunnerTest {
                 "no sweeper flips the status — the instant simply stops excluding it");
     }
 
-    /**
-     * The deferral budget is a backstop for a limit set to something unsatisfiable, and dead-lettering
-     * must drop the hold: FAILED is outside the claim filter, so a leftover instant would only be a
-     * stale value for retry-failed to trip over.
-     */
     @Test
     void deadLetteringAfterTheDeferralBudgetClearsTheHold() {
         runner.maxDeferrals = 1;
@@ -378,7 +326,6 @@ class IngestionRunnerTest {
         runner.runLease(kn, cursor, "w1", () -> {});
         assertEquals(CursorStatus.RATE_LIMITED, cursors.store.get(cursor.id()).status());
 
-        // The hold has elapsed, so the loop picks it straight back up — and hits the wall again.
         Cursor reclaimed = cursors.claim(cursor.id(), "w1", java.time.Duration.ofMinutes(5)).orElseThrow();
         connector.failNext(rateLimited(Instant.now().plusSeconds(600)));
         runner.runLease(kn, reclaimed, "w1", () -> {});
@@ -405,12 +352,6 @@ class IngestionRunnerTest {
         assertNull(after.retry().nextAttemptAt(), "release() zeroes the whole retry block, hold included");
     }
 
-    /**
-     * B5 regression: retry.count is <em>consecutive</em> failures, so a successful run must clear it.
-     * Before the fix the counter accumulated for the cursor's whole lifetime — a source that hiccups
-     * once a week was parked FAILED after retryLimit weeks of otherwise-successful syncs, and needed
-     * direct database surgery to revive.
-     */
     @Test
     void successfulRunResetsTheConsecutiveFailureStreak() {
         connector.failNext(new RuntimeException("transient"));
@@ -418,15 +359,12 @@ class IngestionRunnerTest {
         runner.runLease(kn, cursor, "w1", () -> {});
         assertEquals(1, cursors.store.get(cursor.id()).retry().count());
 
-        // A clean run a while later. The cursor rests IDLE when it catches up, so getting back to it
-        // goes through the scheduler's re-arm — the same path ForwardCursorScheduler drives.
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});
         assertEquals(0, cursors.store.get(cursor.id()).retry().count(), "a success ends the streak");
         assertNull(cursors.store.get(cursor.id()).retry().lastError(), "and clears the stale error");
 
-        // The next failure starts a new streak at 1, not 2 — this is what keeps retryLimit meaningful.
         connector.failNext(new RuntimeException("another transient"));
         runner.runLease(kn, reclaim(cursor), "w1", () -> {});
         Cursor after = cursors.store.get(cursor.id());

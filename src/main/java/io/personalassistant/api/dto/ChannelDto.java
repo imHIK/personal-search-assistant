@@ -8,17 +8,9 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Wire shape for a publishing channel, inbound (create) and outbound (read).
- *
- * @param type         {@code EMAIL}, …; a string rather than the enum so an unknown value is a 400 that
- *                     names the problem instead of a generic deserialisation failure
- * @param connectionId the account it sends through, or null for the default account of the type its
- *                     publisher uses ({@code GMAIL_SEND} for email)
- * @param target       publisher-defined destination; for {@code EMAIL}
- *                     {@code {to: [...], cc: [...], subjectPrefix: "..."}}
- * @param enabled      null on create means enabled
- * @param status       {@code ACTIVE} / {@code ERROR}; read-only — set by sends and by the test action
- * @param lastError    why the last send or test failed, with {@code ERROR}; read-only
+ * @param type a string, not the enum, so an unknown value is a 400 that names it
+ * @param connectionId null sends through the default account of the publisher's type
+ * @param enabled null on create means enabled
  */
 public record ChannelDto(
         String id,

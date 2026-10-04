@@ -1,52 +1,26 @@
 package io.personalassistant.domain.service;
 
-import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.SourceType;
 import java.util.List;
 import java.util.Map;
 
 /**
- * A partial edit to an existing {@link Knowledge}. Every value is a {@link Patched}: absent means "not
- * part of this edit — leave untouched", present means "set to this value", and present-with-null means
- * "clear it". That present-vs-absent distinction is what lets {@code KnowledgeService.update} diff
- * precisely and route by <em>what actually changed</em> (see {@code knowledge-edit-design.md}).
-
- * <p>The third state is not decoration. Moving a source off a custom cron and back onto a preset
- * interval means sending {@code cron: null}; read as "unchanged", the old cron stayed and went on
- * winning over the interval, so the console could put a source onto a custom schedule and never take
- * it off again.
- *
- * <p><b>Shape.</b> The patch mirrors {@link Knowledge}'s structure where that structure is real — the
- * cohesive, multi-field config groups {@link Knowledge.ScheduleSettings} and
- * {@link Knowledge.WebhookSettings} get their own {@link SchedulePatch} / {@link WebhookPatch}
- * sub-patches — but stays flat for single fields. Crucially the optionality lives on the <em>leaves</em>
- * inside each sub-patch (the sub-patch itself is always present), not on the group: that is what lets a
- * caller flip just {@code scheduleEnabled} without having to resend {@code cron}/{@code interval}. A
- * group-level {@code Patched<ScheduleSettings>} could not express that — it would force a
- * whole-group replace.
- *
- * <p>{@code type} is included only so an attempt to change it can be <em>rejected</em> — the connector
- * type is immutable — so it sits flat rather than grouped with the (freely editable) {@code auth}.
- *
- * <p>The {@link Builder} keeps flat setters ({@code cron}, {@code scheduleEnabled}, …) for ergonomic
- * call sites; it folds them into the sub-patches at {@link Builder#build()}.
+ * Absent means untouched, present sets the field, present-with-null clears it. Optionality lives on the
+ * leaves of each sub-patch, so a caller can flip scheduleEnabled without resending cron and interval.
+ * {@code type} is carried only so a change can be rejected.
  */
 public record KnowledgePatch(
-        // identity
         Patched<String> name,
-        // connector — type is immutable (carried only to reject a change); auth is freely editable
         Patched<SourceType> type,
         Patched<Map<String, Object>> auth,
-        // what to index
         Patched<Map<String, Object>> inputs,
-        // operational config — mirrors Knowledge.Config (schedule, webhook, backfill, chunking)
         SchedulePatch schedule,
         WebhookPatch webhook,
         Patched<Boolean> backfillEnabled,
         ChunkingPatch chunking,
-        Patched<String> retentionPeriod) {
+        Patched<String> retentionPeriod,
+        Patched<String> enrichTaskId) {
 
-    /** Normalize any {@code null} to its absent form so callers can pass either. */
     public KnowledgePatch {
         name = Patched.orAbsent(name);
         type = Patched.orAbsent(type);
@@ -57,9 +31,9 @@ public record KnowledgePatch(
         backfillEnabled = Patched.orAbsent(backfillEnabled);
         chunking = chunking == null ? ChunkingPatch.empty() : chunking;
         retentionPeriod = Patched.orAbsent(retentionPeriod);
+        enrichTaskId = Patched.orAbsent(enrichTaskId);
     }
 
-    /** Leaf-optional patch over {@link Knowledge.ScheduleSettings}. */
     public record SchedulePatch(Patched<String> cron, Patched<String> interval,
                                Patched<Boolean> enabled) {
         public SchedulePatch {
@@ -73,7 +47,6 @@ public record KnowledgePatch(
         }
     }
 
-    /** Leaf-optional patch over {@link Knowledge.WebhookSettings}. */
     public record WebhookPatch(Patched<Boolean> enabled, Patched<String> secret) {
         public WebhookPatch {
             enabled = Patched.orAbsent(enabled);
@@ -85,11 +58,7 @@ public record KnowledgePatch(
         }
     }
 
-    /**
-     * Leaf-optional patch over {@link Knowledge.ChunkingSettings}. A chunking change is a pure
-     * config-class edit — applied in place, taking effect on entities indexed afterwards, with no
-     * re-chunk of existing chunks (see {@code knowledge-edit-design.md}).
-     */
+    /** Applies to entities indexed afterwards; existing chunks are not re-chunked. */
     public record ChunkingPatch(Patched<String> strategy, Patched<Integer> maxSize,
                                 Patched<Integer> overlap, Patched<List<String>> separators) {
         public ChunkingPatch {
@@ -104,7 +73,6 @@ public record KnowledgePatch(
                     Patched.absent());
         }
 
-        /** True when this patch carries no chunking change (nothing to apply). */
         public boolean isEmpty() {
             return !strategy.present() && !maxSize.present() && !overlap.present()
                     && !separators.present();
@@ -116,13 +84,8 @@ public record KnowledgePatch(
     }
 
     /**
-     * Fluent builder with flat setters taking plain (nullable) values — a {@code null} argument leaves
-     * that field absent. Keeps call sites readable without reaching into the sub-patches.
-     *
-     * <p>It deliberately cannot express the "clear this field" state: a plain null already means
-     * "absent" here, and giving one argument two meanings is how the wire format went wrong in the
-     * first place. The one caller that needs clearing — {@code KnowledgePatchDto}, reading a request
-     * body where the difference is real — builds the record directly.
+     * A null argument leaves the field absent: the builder cannot express "clear". KnowledgePatchDto builds
+     * the record directly for that.
      */
     public static final class Builder {
         private Patched<String> name = Patched.absent();
@@ -140,6 +103,7 @@ public record KnowledgePatch(
         private Patched<Integer> chunkingOverlap = Patched.absent();
         private Patched<List<String>> chunkingSeparators = Patched.absent();
         private Patched<String> retentionPeriod = Patched.absent();
+        private Patched<String> enrichTaskId = Patched.absent();
 
         public Builder name(String v) {
             this.name = v == null ? Patched.absent() : Patched.of(v);
@@ -216,13 +180,18 @@ public record KnowledgePatch(
             return this;
         }
 
+        public Builder enrichTaskId(String v) {
+            this.enrichTaskId = v == null ? Patched.absent() : Patched.of(v);
+            return this;
+        }
+
         public KnowledgePatch build() {
             return new KnowledgePatch(name, type, auth, inputs,
                     new SchedulePatch(cron, interval, scheduleEnabled),
                     new WebhookPatch(webhookEnabled, webhookSecret),
                     backfillEnabled,
                     new ChunkingPatch(chunkingStrategy, chunkingMaxSize, chunkingOverlap, chunkingSeparators),
-                    retentionPeriod);
+                    retentionPeriod, enrichTaskId);
         }
     }
 }

@@ -1,35 +1,9 @@
-/**
- * Default role terms for the job-board title filter, offered as checkbox lists.
- *
- * Both lists were tuned against a real corpus — 5,124 India postings pulled from the 71 boards in
- * `companies.ts` — rather than picked for plausibility. Measured effect, in chunks that have to be
- * embedded:
- *
- * | filter                              | postings | chunks |
- * |-------------------------------------|----------|--------|
- * | location terms only                 |    5,124 | 33,832 |
- * | + any engineering word              |    2,478 | 16,835 |
- * | + the exclusions below              |    1,853 | 12,845 |
- * | + a narrow backend/platform include |    1,083 |  7,359 |
- *
- * Two things that corpus taught, both of which shape these lists:
- *
- *  - **The exclusions do as much work as the inclusions.** Dropping manager/director/sales/support
- *    alone took 2,478 postings to 1,853, because a board's non-engineering roles outnumber its
- *    out-of-region ones at most of these companies.
- *  - **Narrow include lists lose real roles.** A backend-flavoured list drops 1,025 clearly technical
- *    postings — `Computer Scientist` (Adobe's name for a backend engineer), `Software Development
- *    Engineer 4` (which does not contain "sde "), `Machine Learning Engineer`, and every one of
- *    Samsung's 57 silicon roles. The generic terms below are the safe default; narrow it by adding
- *    your own, knowing what it costs.
- */
 export interface TermOption {
   label: string
   value: string
   note?: string
 }
 
-/** Generic enough to keep oddly-named engineering roles. Ticking none keeps everything. */
 export const roleIncludeTerms: TermOption[] = [
   { label: 'Engineer', value: 'engineer', note: 'widest' },
   { label: 'Developer', value: 'developer' },
@@ -73,7 +47,7 @@ export const roleIncludeTerms: TermOption[] = [
   { label: 'Front end', value: 'front end' },
 ]
 
-/** Applied after the include list and beats it — see `BoardFilter`. */
+/** Beats the include list (see `BoardFilter`). */
 export const roleExcludeTerms: TermOption[] = [
   { label: 'Manager', value: 'manager', note: 'biggest single win' },
   { label: 'Director', value: 'director' },

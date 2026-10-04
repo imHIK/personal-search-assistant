@@ -19,11 +19,6 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The Google-specific half: the consent parameters that decide whether a reconnect actually yields a
- * refresh token, and the one judgement the generic layer cannot make — telling a permanently dead
- * grant apart from a bad minute at Google.
- */
 class GoogleOAuthProviderTest {
 
     private static final OAuthClient CLIENT = new OAuthClient("client-id", "client-secret");
@@ -36,8 +31,6 @@ class GoogleOAuthProviderTest {
 
         Assertions.assertTrue(url.startsWith("https://accounts.google.com/o/oauth2/v2/auth?"), url);
         Assertions.assertTrue(url.contains("access_type=offline"), url);
-        // Without prompt=consent a user reconnecting a broken account gets an access token and no
-        // refresh token, and is back where they started an hour later.
         Assertions.assertTrue(url.contains("prompt=consent"), url);
         Assertions.assertTrue(url.contains("include_granted_scopes=true"), url);
         Assertions.assertTrue(url.contains("response_type=code"), url);
@@ -54,7 +47,6 @@ class GoogleOAuthProviderTest {
                 provider.scopesFor("GMAIL"));
         Assertions.assertEquals(Set.of("https://www.googleapis.com/auth/drive.readonly"),
                 provider.scopesFor("GOOGLE_DRIVE"));
-        // Its own type, so the sending account never holds a read scope and the reading one never sends.
         Assertions.assertEquals(Set.of("https://www.googleapis.com/auth/gmail.send"),
                 provider.scopesFor(GoogleConnectionTypes.GMAIL_SEND));
         Assertions.assertTrue(provider.supports().contains(GoogleConnectionTypes.GMAIL_SEND));
@@ -107,7 +99,6 @@ class GoogleOAuthProviderTest {
             throw new OutboundHttpException(503, call.url(), "backend error", "HTTP 503");
         });
 
-        // The distinction is the whole point: this must not mark the connection ERROR.
         Assertions.assertThrows(OAuthTransportException.class,
                 () -> provider.refresh("fine", CLIENT, RateLimit.NONE));
     }
@@ -128,7 +119,6 @@ class GoogleOAuthProviderTest {
                         : Set.of("https://www.googleapis.com/auth/drive.readonly"));
     }
 
-    /** A provider whose only outside contact is the supplied function. No network, no CDI. */
     private static GoogleOAuthProvider provider(Function<HttpCall, JsonNode> onJson) {
         GoogleOAuthProvider provider = new GoogleOAuthProvider(new OutboundHttp(null) {
             @Override

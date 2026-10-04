@@ -18,21 +18,9 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Local, fully-offline semantic embeddings: runs a sentence-transformer (default
- * {@code bge-base-en-v1.5}, 768-dim) in-JVM through DJL on the ONNX Runtime engine. Private (no data
- * leaves the machine), unlimited, and CPU-friendly. Selected with {@code app.embedding.provider=onnx-bge}.
- *
- * <p>The model is <strong>loaded lazily</strong> on first use, not in the constructor, so the bean can
- * be instantiated (and its {@code providerId()} inspected by the selector) even when this provider is
- * not the active one and no model is present. DJL {@link Predictor}s are not thread-safe, so calls are
- * serialized on a single lazily-built predictor — adequate here since embedding is fast and CPU-bound;
- * a per-thread predictor pool is a later optimization.
- *
- * <p>Setup: point {@code app.embedding.onnx.model-path} at a directory containing the exported
- * {@code model.onnx}, {@code tokenizer.json} and {@code config.json}. BGE uses CLS pooling with L2
- * normalization (the defaults below); override via {@code app.embedding.onnx.pooling} /
- * {@code .normalize} for a different model. Keep {@code app.embedding.dimension} equal to the model's
- * output width and to the OpenSearch {@code knn_vector} mapping.
+ * Local sentence-transformer embeddings through DJL on ONNX Runtime. Loaded lazily, so the bean can exist for
+ * the selector without a model. Predictors are not thread-safe, so calls are serialized.
+ * {@code app.embedding.onnx.model-path} must hold model.onnx, tokenizer.json and config.json.
  */
 @ApplicationScoped
 @ProviderImpl
@@ -46,7 +34,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.dimension")
     int dimension;
 
-    /** Optional: blank means no model exported yet, and embedding throws. See {@link ConfigText}. */
+    /** Blank means no model exported yet, and embedding throws. */
     @ConfigProperty(name = "app.embedding.onnx.model-path")
     Optional<String> modelPath;
 
@@ -56,12 +44,11 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     @ConfigProperty(name = "app.embedding.onnx.normalize", defaultValue = "true")
     boolean normalize;
 
-    /**
-     * Instruction prepended to a <em>query</em> before embedding, never to a document. BGE models are
-     * trained with one and their own documentation recommends it for retrieval — the default value is
-     * BGE's published wording. Optional because it is model-specific: a symmetric model wants none, and
-     * the wrong instruction is worse than no instruction. See {@link ConfigText}.
-     */
+    /** BERT-family exports declare token_type_ids as a required input; RoBERTa/MPNet ones do not have it. */
+    @ConfigProperty(name = "app.embedding.onnx.include-token-types", defaultValue = "true")
+    boolean includeTokenTypes;
+
+    /** Prepended to queries only. Model-specific: the wrong instruction is worse than none. */
     @ConfigProperty(name = "app.embedding.onnx.query-instruction")
     Optional<String> queryInstruction;
 
@@ -90,9 +77,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
     }
 
     /**
-     * Prepends the configured query instruction, joining with a single space so the property does not
-     * have to carry meaningful trailing whitespace — spotless strips that, which would silently glue the
-     * instruction to the query and change what the model sees.
+     * Joined with a space because spotless strips trailing whitespace from the property, which would glue the
+     * instruction to the query.
      */
     @Override
     public Embedding embedQuery(String text) {
@@ -123,7 +109,6 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
         }
     }
 
-    /** Lazily loads the model + predictor on first use (double-checked under {@link #lock}). */
     private Predictor<String, float[]> predictor() throws Exception {
         Predictor<String, float[]> p = predictor;
         if (p != null) {
@@ -149,6 +134,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
                         .optEngine("OnnxRuntime")
                         .optArgument("pooling", pooling)
                         .optArgument("normalize", normalize)
+                        .optArgument("includeTokenTypes", includeTokenTypes)
                         .optTranslatorFactory(new TextEmbeddingTranslatorFactory())
                         .build();
                 model = criteria.loadModel();

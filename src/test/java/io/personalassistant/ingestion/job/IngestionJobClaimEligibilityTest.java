@@ -20,16 +20,6 @@ import java.util.Set;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The claim batch is bounded and ordered least-recently-run first, and a cursor the job skips is never
- * written — so a skipped cursor keeps its place at the head of the batch on every tick. Twenty of them
- * stop every source; 71 orphan cursors left by a delete that raced activation did exactly that for a
- * week. These tests seed more blockers than the batch holds, ahead of one runnable cursor.
- *
- * <p>The permit service and runner are {@code null} deliberately: reaching either NPEs, which is how a
- * test knows a cursor got past every skip check — the same device {@code IngestionJobConnectionHealthTest}
- * uses.
- */
 class IngestionJobClaimEligibilityTest {
 
     private static final SourceType TYPE = SourceType.SLACK;

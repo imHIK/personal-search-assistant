@@ -224,7 +224,6 @@ function SourceCard({
   )
 }
 
-/** Extracted so the confirm dialog can own a lifecycle hook bound to the pending source. */
 function RemoveDialog({
   knowledge,
   onClose,

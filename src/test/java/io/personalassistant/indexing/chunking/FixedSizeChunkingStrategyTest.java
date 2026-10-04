@@ -21,7 +21,7 @@ class FixedSizeChunkingStrategyTest {
     @Test
     void splitsWithOverlapAndStableIds() {
         var entity = TestData.ingestedText("ent_1", "kn_1", "doc.txt", "x");
-        String text = "abcdefghijklmnopqrstuvwxy"; // length 25, step = size-overlap = 6
+        String text = "abcdefghijklmnopqrstuvwxy";
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, text, spec(10, 4));
 
         assertEquals(4, chunks.size());

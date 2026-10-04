@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/** The outbox's front door: what it accepts, idempotent enqueueing, and the way back from dead-letter. */
 class DefaultPublishingServiceTest {
 
     private final InMemoryChannelRepository channels = new InMemoryChannelRepository();

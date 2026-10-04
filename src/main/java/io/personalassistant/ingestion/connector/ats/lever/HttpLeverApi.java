@@ -11,11 +11,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** HTTP adapter for {@link LeverApi} against the public postings endpoint (no auth). */
 @ApplicationScoped
 public class HttpLeverApi implements LeverApi {
 
-    /** These boards are public, so the platform — not an account — is the quota's owner. */
+    /** Public boards: the platform, not an account, owns the quota. */
     private static final String PLATFORM = "lever";
 
     @ConfigProperty(name = "app.ingestion.lever.base-url", defaultValue = "https://api.lever.co/v0/postings")
@@ -35,7 +34,7 @@ public class HttpLeverApi implements LeverApi {
 
     @Override
     public JsonNode listPostings(String site) {
-        // mode=json returns structured postings rather than rendered HTML pages.
+        // mode=json returns structured postings rather than rendered HTML.
         String url = baseUrl + "/" + encode(site) + "?mode=json";
         return http.getJson(url, timeoutSeconds, rateLimit());
     }

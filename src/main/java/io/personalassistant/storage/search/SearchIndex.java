@@ -1,54 +1,33 @@
 package io.personalassistant.storage.search;
 
 import io.personalassistant.domain.model.Chunk;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import java.util.List;
+import java.util.Map;
 
-/**
- * Port over the retrieval engine (OpenSearch today). Separates lexical and vector primitives
- * so a {@link io.personalassistant.retrieval.Retriever} can fuse them however it likes.
- * Swapping to Elasticsearch or a dedicated vector DB means one new adapter.
- *
- * <p>Chunks live <em>only</em> here (never in Mongo); the doc id is the {@link Chunk#id()} so
- * re-indexing the same chunk overwrites idempotently.
- */
+/** Chunks live only here; the document id is the chunk id, so re-indexing overwrites. */
 public interface SearchIndex {
 
-    /** Bulk index/update chunks (uses chunkId as doc id, so re-indexing overwrites). */
     void indexChunks(List<Chunk> chunks);
 
-    /** Lexical BM25 retrieval over chunk text. */
     List<SearchHit> lexicalSearch(SearchQuery query, int limit);
 
-    /** Semantic k-NN retrieval over the embedding vector. */
     List<SearchHit> vectorSearch(SearchQuery query, float[] vector, int limit);
-
-    /** Remove all chunks belonging to one entity (mirrors a Mongo delete/tombstone). */
-    /**
-     * An entity's chunk texts, in ordinal order — the parsed document, reassembled.
-     *
-     * <p>Exists because the entity itself may not carry its text: a file-backed entity keeps only a
-     * {@code fileRef}, and the parsed form lives solely in its chunks. Anything on the read path that
-     * needs the whole document (searching <em>by</em> a document, whole-entity prompt sources) would
-     * otherwise be unable to read the most ordinary case there is — a local file.
-     *
-     * <p>Re-parsing the file here instead would duplicate the indexing stage on the read path, and would
-     * fail outright for a source whose bytes are no longer local.
-     *
-     * @param limit maximum chunks to read; a long document is bounded rather than fetched whole
-     */
-    List<String> chunkTextsByEntity(String entityId, int limit);
 
     void deleteByEntity(String entityId);
 
-    /** Remove all chunks belonging to one knowledge (cascade on knowledge delete). */
     void deleteByKnowledge(String knowledgeId);
 
-    /**
-     * Remove all chunks belonging to one iterable within a knowledge (cascade when an iterable is
-     * deleted at the source). A single bulk delete-by-query; matches on both ids so iterable ids
-     * are only ever scoped to their knowledge.
-     */
+    /** Matches on both ids, since iterable ids are unique only within a knowledge. */
     void deleteByIterable(String knowledgeId, String iterableId);
+
+    /**
+     * Additive and idempotent: maps each {@code metadata.<field>} before the first document fixes its type
+     * dynamically.
+     *
+     * @throws IllegalArgumentException if a field is already mapped with a conflicting type
+     */
+    void ensureMetadataFields(Map<String, Task.FieldType> fields);
 }

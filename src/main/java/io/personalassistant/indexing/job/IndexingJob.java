@@ -14,12 +14,8 @@ import java.util.UUID;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Stage 2 driver. On each tick it acquires a global indexing permit, cleans up any tombstoned
- * entities, then indexes entities <strong>fairly across knowledges</strong>: it finds the distinct
- * knowledges with pending work and claims a small per-knowledge quota in round-robin order, up to a
- * global per-tick budget. This means one knowledge's huge backlog can't monopolize the loop and
- * starve the others — without spawning a job per knowledge. Claims are leased, so a crash mid-run is
- * reclaimed once the lease lapses.
+ * Fair across knowledges: claims a per-knowledge quota round-robin up to a global budget, so one backlog
+ * cannot starve the rest.
  */
 @ApplicationScoped
 public class IndexingJob {
@@ -29,7 +25,6 @@ public class IndexingJob {
     private final IndexingRunner runner;
     private final String worker = "indexer-" + UUID.randomUUID().toString().substring(0, 8);
 
-    /** Rotating offset so a different knowledge leads the round-robin each tick (fairness). */
     private int rotation;
 
     @ConfigProperty(name = "app.indexing.batch", defaultValue = "20")
@@ -44,8 +39,7 @@ public class IndexingJob {
     @ConfigProperty(name = "app.indexing.concurrency", defaultValue = "4")
     int concurrency;
 
-    // The permit is held for a whole tick (not renewed mid-tick), so it must exceed the worst-case
-    // time to process one tick's batch — comfortably above the per-entity lease.
+    // The permit is held for a whole tick, so its TTL must exceed the worst-case time for one tick's batch.
     @ConfigProperty(name = "app.indexing.permits.ttl-seconds", defaultValue = "1200")
     long permitTtlSeconds;
 
@@ -62,7 +56,7 @@ public class IndexingJob {
         Optional<Permit> permit = permits.tryAcquire("indexing:global", concurrency, worker,
                 Duration.ofSeconds(permitTtlSeconds));
         if (permit.isEmpty()) {
-            return; // another worker is already at the indexing concurrency ceiling
+            return; // another worker is at the indexing concurrency ceiling
         }
         try {
             processDeletions();
@@ -72,11 +66,6 @@ public class IndexingJob {
         }
     }
 
-    /**
-     * Round-robin over the knowledges that have pending work, claiming up to {@code perKnowledge}
-     * each until the global {@code batch} budget is spent. The {@code rotation} offset advances each
-     * tick so the knowledge that goes first keeps changing — no fixed ordering can starve a tail.
-     */
     private void processIndexingFairly() {
         List<String> pending = entities.distinctPendingKnowledgeIds(maxKnowledges);
         if (pending.isEmpty()) {

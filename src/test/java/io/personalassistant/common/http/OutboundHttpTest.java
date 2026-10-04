@@ -22,13 +22,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The shared transport, against a local stub {@link HttpServer} — no network.
- *
- * <p>The load-bearing case is the {@code 429}: this is the only layer that sees the response, so if the
- * {@code Retry-After} is not fed back into the limiter here it is lost, and the next caller hammers a
- * service that just asked us to stop.
- */
 class OutboundHttpTest {
 
     private static final RateLimitKey KEY = RateLimitKey.board("greenhouse");
@@ -114,7 +107,6 @@ class OutboundHttpTest {
         assertTrue(until.isAfter(before.plusSeconds(115)), "expected ~120s pause, got " + until);
     }
 
-    /** RFC 9110 allows an HTTP-date instead of delta-seconds, and real services send both. */
     @Test
     void feedsAnHttpDateRetryAfterBackIntoTheLimiter() {
         status = 429;
@@ -135,6 +127,33 @@ class OutboundHttpTest {
 
         Instant until = limiter.penalties.get(KEY.value());
         assertTrue(until.isAfter(before.plusSeconds(85)), "expected the 90s default, got " + until);
+    }
+
+    @Test
+    void aTooManyRequestsCarriesThePauseTheLimiterActuallyApplied() {
+        Instant clamped = Instant.parse("2026-10-03T21:00:00Z");
+        OutboundHttp http = new OutboundHttp(new RecordingRateLimiter() {
+            @Override
+            public Instant penalize(RateLimitKey key, Instant until) {
+                super.penalize(key, until);
+                return clamped;
+            }
+        });
+        status = 429;
+        retryAfter.set("86400");
+
+        OutboundHttpException e = assertThrows(OutboundHttpException.class, () -> http.json(call()));
+
+        assertEquals(clamped, e.retryAt(), "the clamped instant, not the server's raw answer");
+    }
+
+    @Test
+    void onlyATooManyRequestsCarriesARetryInstant() {
+        status = 503;
+
+        OutboundHttpException e = assertThrows(OutboundHttpException.class, () -> http().json(call()));
+
+        assertEquals(null, e.retryAt());
     }
 
     @Test

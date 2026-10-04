@@ -3,7 +3,7 @@ import type { Delivery, DeliveryStatus } from './types'
 
 export interface DeliveryListParams {
   channelId?: string
-  /** What one producer queued — a digest run's id. */
+  /** The producer's reference: a digest run id. */
   refId?: string
   status?: DeliveryStatus | null
   /** Capped at 100 server-side. */

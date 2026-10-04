@@ -12,19 +12,14 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Unit tests for {@link OpenSearchSearchIndex#filters(SearchQuery)} focused on field resolution.
- * The RestClient is unused by {@code filters()}, so {@code null} is passed deliberately.
- */
 class OpenSearchSearchIndexFiltersTest {
 
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
 
     private SearchQuery queryWith(List<String> knowledgeIds, Map<String, Object> filters) {
-        return new SearchQuery("anything", knowledgeIds, filters, 10, Mode.HYBRID, false, null, false, null);
+        return new SearchQuery("anything", knowledgeIds, filters, 10, Mode.HYBRID, false, null, false);
     }
 
-    /** Pulls the single {field: value} pair out of a {"term": {...}} clause. */
     private Map.Entry<String, JsonNode> termOf(JsonNode clause) {
         assertTrue(clause.has("term"), "expected a term clause but was: " + clause);
         JsonNode term = clause.get("term");
@@ -83,7 +78,6 @@ class OpenSearchSearchIndexFiltersTest {
                 queryWith(List.of("k1", "k2"), Map.of("sourceType", "EMAIL")));
 
         assertEquals(2, filters.size());
-        // First clause is the knowledgeId terms filter.
         assertTrue(filters.get(0).has("terms"), "expected knowledgeId terms clause first");
         JsonNode ids = filters.get(0).get("terms").get("knowledgeId");
         assertEquals(2, ids.size());

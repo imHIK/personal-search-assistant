@@ -20,9 +20,6 @@ import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-/**
- * Manage publishing channels — the places messages can be sent — and queue messages to them.
- */
 @Path("/api/channels")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
@@ -50,7 +47,7 @@ public class ChannelResource {
     public ChannelDto create(ChannelDto dto) {
         try {
             return ChannelDto.from(channels.create(dto.toRequest()));
-        } catch (IllegalArgumentException e) { // unknown type, no publisher, invalid target
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
@@ -68,9 +65,8 @@ public class ChannelResource {
     }
 
     /**
-     * Send a sample message now, bypassing the queue, and record the outcome. Returns 200 whether or not
-     * the send worked — read {@code status} and {@code lastError}. A success also brings a channel parked
-     * in {@code ERROR} back, releasing everything queued for it.
+     * Sends a sample now, bypassing the queue. 200 whether or not it worked: read {@code status} and
+     * {@code lastError}. A success brings an ERROR channel back and releases its queue.
      */
     @POST
     @Path("/{id}/test")
@@ -82,10 +78,7 @@ public class ChannelResource {
         }
     }
 
-    /**
-     * Queue a message for this channel. 202: the delivery is written, not yet sent — poll
-     * {@code GET /api/deliveries/{id}} for the outcome.
-     */
+    /** 202: the delivery is queued, not yet sent. */
     @POST
     @Path("/{id}/publish")
     public Response publish(@PathParam("id") String id, PublishMessageDto dto) {
@@ -102,7 +95,7 @@ public class ChannelResource {
         }
     }
 
-    /** Delete a channel together with its queued and sent deliveries. 409 while a digest sends to it. */
+    /** Deletes its deliveries too. 409 while a digest sends to it. */
     @DELETE
     @Path("/{id}")
     public void delete(@PathParam("id") String id) {
@@ -110,7 +103,7 @@ public class ChannelResource {
             channels.delete(id);
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalStateException e) { // a digest still sends to it
+        } catch (IllegalStateException e) {
             throw ApiErrors.conflict(e.getMessage());
         }
     }

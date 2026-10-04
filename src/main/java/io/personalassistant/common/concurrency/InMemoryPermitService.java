@@ -12,21 +12,13 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory {@link PermitService}: each scope keeps a map of live permit-id → expiry. Acquisition
- * purges expired permits first, then checks every requested scope is below its ceiling, and
- * commits to all scopes atomically under a single lock. Expiry provides the same auto-reclaim
- * semantics a Redis TTL would, so a crashed worker's permit frees up without manual cleanup.
- *
- * <p>The TTL is supplied per acquisition by the caller and carried on the {@link Permit}, so this
- * shared limiter holds no TTL of its own — each stage sizes its own.
- *
- * <p>Single-node only. Swap in a Redis-backed implementation for multi-node deployments — the
- * {@link PermitService} contract is unchanged.
+ * Acquisition is all-or-nothing across scopes, under one lock; expired permits are reclaimed like a Redis
+ * TTL. Single-node only.
  */
 @ApplicationScoped
 public class InMemoryPermitService implements PermitService {
 
-    /** scopeKey → (permitId → expiry). */
+    /** scopeKey → (permitId → expiry) */
     private final Map<String, Map<String, Instant>> scopes = new ConcurrentHashMap<>();
     private final Object lock = new Object();
 
@@ -48,7 +40,6 @@ public class InMemoryPermitService implements PermitService {
         String permitId = UUID.randomUUID().toString();
 
         synchronized (lock) {
-            // 1. Verify every scope has headroom (after purging expired permits).
             for (ScopeLimit limit : limits) {
                 Map<String, Instant> live = scopes.computeIfAbsent(limit.key(), k -> new HashMap<>());
                 purgeExpired(live, now);
@@ -56,7 +47,6 @@ public class InMemoryPermitService implements PermitService {
                     return Optional.empty();
                 }
             }
-            // 2. Commit to all scopes atomically.
             List<String> keys = new ArrayList<>(limits.size());
             for (ScopeLimit limit : limits) {
                 scopes.get(limit.key()).put(permitId, expiry);
@@ -97,7 +87,6 @@ public class InMemoryPermitService implements PermitService {
         }
     }
 
-    /** Test/diagnostics hook: number of live permits currently occupying a scope. */
     public int liveCount(String scopeKey) {
         synchronized (lock) {
             Map<String, Instant> live = scopes.get(scopeKey);

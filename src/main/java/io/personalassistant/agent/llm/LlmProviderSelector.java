@@ -9,13 +9,6 @@ import java.util.List;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * Produces the single active {@link LlmProvider} — the {@code @Default} bean {@code DefaultSearchAgent}
- * injects — by matching {@code app.llm.provider} against the {@code providerId()} of each
- * {@link ProviderImpl}-qualified implementation discovered via CDI. Mirror of
- * {@code EmbeddingProviderSelector}; adding a new LLM backend is a new {@code @ProviderImpl} bean plus
- * a config value.
- */
 @ApplicationScoped
 public class LlmProviderSelector {
 
@@ -30,7 +23,7 @@ public class LlmProviderSelector {
         for (LlmProvider provider : implementations) {
             available.add(provider.providerId());
             if (provider.providerId().equals(selected)) {
-                LOG.info("Active LLM provider: " + selected + " (model=" + provider.model() + ")");
+                LOG.info("Active LLM provider: " + selected);
                 return provider;
             }
         }

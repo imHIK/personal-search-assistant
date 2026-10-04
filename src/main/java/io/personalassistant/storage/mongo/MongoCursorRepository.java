@@ -35,11 +35,6 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * MongoDB adapter for {@link CursorRepository}. The {@link #claim} and {@link #armForwardCursors}
- * operations are implemented as atomic {@code findOneAndUpdate}/{@code updateMany} so the
- * ingestion loop is safe under concurrency and crash recovery (an expired lease is reclaimable).
- */
 @ApplicationScoped
 public class MongoCursorRepository implements CursorRepository {
 
@@ -62,7 +57,7 @@ public class MongoCursorRepository implements CursorRepository {
 
     @Override
     public boolean insertIfAbsent(Cursor cursor) {
-        // _id comes from the filter on insert; including it in $setOnInsert would conflict.
+        // _id comes from the filter on insert; setting it in $setOnInsert would conflict.
         Document onInsert = toDoc(cursor);
         onInsert.remove("_id");
         var result = collection().updateOne(eq("_id", cursor.id()),
@@ -89,9 +84,7 @@ public class MongoCursorRepository implements CursorRepository {
         if (knowledgeIds.isEmpty()) {
             return out;
         }
-        // Fairness: least-recently-run first. Never-run cursors (null lastRunAt) sort first in
-        // Mongo ascending order, so fresh work is picked up promptly and no active knowledge can
-        // monopolise the bounded batch.
+        // Least-recently-run first; never-run cursors (null lastRunAt) sort first.
         collection().find(and(in("knowledgeId", knowledgeIds), claimableFilter(Instant.now())))
                 .sort(ascending("stats.lastRunAt"))
                 .limit(limit)
@@ -133,13 +126,9 @@ public class MongoCursorRepository implements CursorRepository {
     public boolean release(String cursorId, String owner, CursorStatus restingStatus) {
         var result = collection().updateOne(ownedBy(cursorId, owner), Updates.combine(
                 Updates.set("status", restingStatus.name()),
-                // Success ends the streak: retry.count is CONSECUTIVE failures, not lifetime ones.
-                // release() is the right seam because every successful resting reaches it (IDLE and
-                // EXHAUSTED when drained, AVAILABLE when the batch cap hit with pages left), while
-                // recordFailure() is the only failure path. Deliberately NOT reset in
-                // advancePosition(): that would zero the streak mid-lease, so a page-2 failure would
-                // record 1 instead of continuing the run's streak — and it would add a write to the
-                // hot per-page path.
+                // Success ends the streak: retry.count is consecutive failures. Reset here because every
+                // successful resting passes through release; not in advancePosition, which would zero the
+                // streak mid-lease and add a write per page.
                 Updates.set("retry", zeroRetry()),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
@@ -152,18 +141,14 @@ public class MongoCursorRepository implements CursorRepository {
                 Updates.set("status", restingStatus.name()),
                 Updates.set("retry.count", retryCount),
                 Updates.set("retry.lastError", lastError),
-                // Always written, never merely left in place: a stale instant from an earlier hold
-                // would otherwise keep excluding a cursor that is resting AVAILABLE.
+                // Always written: a stale instant from an earlier hold would keep excluding a cursor resting
+                // AVAILABLE.
                 Updates.set("retry.nextAttemptAt", BsonSupport.date(nextAttemptAt)),
                 Updates.unset("lease")));
         return result.getMatchedCount() > 0;
     }
 
-    /**
-     * Lease fence: matches the cursor only if {@code owner} still holds a live (non-expired) lease.
-     * A worker whose lease lapsed (and was re-claimed by another worker) matches nothing, so its
-     * late writes are no-ops instead of clobbering the new owner.
-     */
+    /** Matches only while owner holds a live lease, so a lapsed worker's late writes are no-ops. */
     private static Bson ownedBy(String cursorId, String owner) {
         return and(eq("_id", cursorId), eq("lease.owner", owner),
                 gt("lease.expiresAt", BsonSupport.date(Instant.now())));
@@ -183,8 +168,8 @@ public class MongoCursorRepository implements CursorRepository {
     public int suspendByKnowledge(String knowledgeId) {
         var result = collection().updateMany(
                 and(eq("knowledgeId", knowledgeId),
-                        // RATE_LIMITED too: its hold elapses on its own, so a cursor left in it
-                        // would rejoin the claim batch while the knowledge is paused.
+                        // RATE_LIMITED too: its hold elapses on its own, and the cursor would rejoin the
+                        // batch mid-pause.
                         in("status", CursorStatus.AVAILABLE.name(), CursorStatus.IDLE.name(),
                                 CursorStatus.RATE_LIMITED.name())),
                 Updates.set("status", CursorStatus.SUSPENDED.name()));
@@ -202,9 +187,8 @@ public class MongoCursorRepository implements CursorRepository {
 
     @Override
     public int retryFailedByKnowledge(String knowledgeId) {
-        // No lease fence needed: recordFailure already unset the lease on its way to FAILED.
-        // RATE_LIMITED is included so this doubles as "I raised the quota, run now" — zeroRetry()
-        // clears the hold along with the streak.
+        // No lease fence: recordFailure unset the lease on the way to FAILED. RATE_LIMITED is included, and
+        // zeroRetry() clears its hold.
         var result = collection().updateMany(
                 and(eq("knowledgeId", knowledgeId),
                         in("status", CursorStatus.FAILED.name(), CursorStatus.RATE_LIMITED.name())),
@@ -217,7 +201,7 @@ public class MongoCursorRepository implements CursorRepository {
 
     @Override
     public boolean retire(String cursorId) {
-        // Skip a cursor a worker is mid-run on; the next reconcile pass retires it once it rests.
+        // Skip a cursor mid-run; the next reconcile retires it once it rests.
         var result = collection().updateOne(
                 and(eq("_id", cursorId), ne("status", CursorStatus.IN_PROGRESS.name())),
                 Updates.combine(
@@ -246,7 +230,7 @@ public class MongoCursorRepository implements CursorRepository {
 
     @Override
     public boolean resetToStart(String cursorId) {
-        // Skip a cursor mid-run; its live lease would otherwise be clobbered. Attributes/stats kept.
+        // Skip a cursor mid-run, whose live lease would be clobbered.
         var result = collection().updateOne(
                 and(eq("_id", cursorId), ne("status", CursorStatus.IN_PROGRESS.name())),
                 Updates.combine(
@@ -263,17 +247,9 @@ public class MongoCursorRepository implements CursorRepository {
     }
 
     /**
-     * Claimable = {@code AVAILABLE}, a {@code RATE_LIMITED} cursor whose hold has elapsed, or an
-     * {@code IN_PROGRESS} one whose lease has expired (crash recovery).
-     *
-     * <p>This clause is what makes the rate-limit hold work: no sweeper job flips the status back,
-     * the persisted instant simply stops excluding the cursor, so the timestamp is the single source
-     * of truth and nothing can strand a cursor by dying.
-     *
-     * <p>Note the deliberate asymmetry with {@code MongoEntityRepository.indexingFilter}, which reads
-     * a null {@code nextAttemptAt} as "no backoff, claim it". Here a missing instant matches nothing,
-     * so a {@code RATE_LIMITED} row without one stays out of the batch instead of being re-picked
-     * every tick — which is why {@link #recordFailure} must never write that combination.
+     * The persisted instant alone lifts a rate-limit hold, so nothing can strand a cursor. Unlike the entity
+     * indexing filter, a missing nextAttemptAt matches nothing here: a RATE_LIMITED row without one stays out
+     * rather than being re-picked every tick.
      */
     private static Bson claimableFilter(Instant now) {
         return or(
@@ -284,13 +260,10 @@ public class MongoCursorRepository implements CursorRepository {
                         lt("lease.expiresAt", BsonSupport.date(now))));
     }
 
-    /** A cleared retry block. Mirrors {@code MongoEntityRepository.zeroRetry()} — every field, so a
-     * reset can never leave a stale rate-limit hold behind. */
+    /** Every field, so a reset never leaves a stale hold behind. */
     private static Document zeroRetry() {
         return new Document("count", 0).append("lastError", null).append("nextAttemptAt", null);
     }
-
-    // ---- mapping -----------------------------------------------------------------------------
 
     private Document toDoc(Cursor c) {
         Document lease = c.lease() == null ? null

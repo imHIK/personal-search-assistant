@@ -24,10 +24,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * The outbox worker: sending, retrying, dead-lettering, parking a broken channel, holding the queue for a
- * broken account, and the lease fence.
- */
 class DeliveryRunnerTest {
 
     private static final String SEND_TYPE = "GMAIL_SEND";
@@ -239,8 +235,6 @@ class DeliveryRunnerTest {
         Assertions.assertEquals(Duration.ofSeconds(3600), runner.backoff(30));
     }
 
-    // ---- sending through an account ----------------------------------------------------------------
-
     @Test
     void sendsThroughTheDefaultAccountOfThePublishersType() {
         publisher.connectionType = SEND_TYPE;
@@ -308,7 +302,7 @@ class DeliveryRunnerTest {
         Assertions.assertEquals(0, deliveries.store.get("dlv_1").attempts());
         Assertions.assertTrue(publisher.references.isEmpty());
 
-        account("conn_send", SEND_TYPE, ConnectionStatus.ACTIVE); // the user reconnects
+        account("conn_send", SEND_TYPE, ConnectionStatus.ACTIVE);
 
         Assertions.assertEquals(1, runner.runOnce());
         Assertions.assertEquals(DeliveryStatus.SENT, deliveries.store.get("dlv_1").status());

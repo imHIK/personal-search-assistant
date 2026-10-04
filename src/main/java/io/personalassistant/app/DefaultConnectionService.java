@@ -19,12 +19,6 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.logging.Logger;
 
-/**
- * Default connection lifecycle orchestration. Creation verifies credentials via the type's ConnectionKind
- * (so a bad token fails fast at connect time, not on the first grab), then persists and assigns the
- * per-type default. Deletion enforces referential integrity against bound knowledges and keeps the
- * per-type default well-formed by promoting a survivor.
- */
 @ApplicationScoped
 public class DefaultConnectionService implements ConnectionService {
 
@@ -46,7 +40,6 @@ public class DefaultConnectionService implements ConnectionService {
 
     @Override
     public Connection create(NewConnection request) {
-        // Unknown type, or a connector that needs no connection → IllegalArgumentException → 400.
         ConnectionKind kind = kinds.get(request.type());
 
         Instant now = Instant.now();
@@ -54,10 +47,10 @@ public class DefaultConnectionService implements ConnectionService {
                 request.auth(), request.config(), request.rateLimit(), false,
                 ConnectionStatus.ACTIVE, null, now, now);
 
-        verify(kind, draft); // bad credentials → throws → 400, nothing persisted
+        verify(kind, draft);
 
         boolean makeDefault = request.makeDefault()
-                || connections.findDefault(request.type()).isEmpty(); // first-of-type is the default
+                || connections.findDefault(request.type()).isEmpty();
         if (makeDefault) {
             connections.clearDefault(request.type());
         }
@@ -92,8 +85,10 @@ public class DefaultConnectionService implements ConnectionService {
                 edit.rateLimit() != null ? edit.rateLimit() : current.rateLimit(),
                 Instant.now());
 
-        if (edit.auth() != null && !edit.auth().equals(current.auth())) {
-            verify(kinds.get(current.type()), edited); // re-verify changed creds
+        boolean authChanged = edit.auth() != null && !edit.auth().equals(current.auth());
+        boolean configChanged = edit.config() != null && !edit.config().equals(current.config());
+        if (authChanged || configChanged) {
+            verify(kinds.get(current.type()), edited);
             edited = edited.withStatus(ConnectionStatus.ACTIVE, null);
         }
         return connections.save(edited);
@@ -108,8 +103,8 @@ public class DefaultConnectionService implements ConnectionService {
         }
         try {
             kinds.get(current.type()).verify(current);
-            // DISABLED is an operator decision, not a credential state — a passing check must not
-            // silently re-enable a connection someone turned off.
+            // DISABLED is an operator decision, not a credential state: a passing check must not re-enable
+            // it.
             if (current.status() == ConnectionStatus.DISABLED) {
                 return current;
             }
@@ -143,7 +138,7 @@ public class DefaultConnectionService implements ConnectionService {
         }
         connections.delete(id);
 
-        // Keep the per-type default well-formed: if we removed the default, promote the oldest survivor.
+        // Promote the oldest survivor so the type keeps a default.
         if (current.isDefault()) {
             connections.findByType(current.type()).stream()
                     .min(Comparator.comparing(Connection::createdAt))
@@ -157,20 +152,14 @@ public class DefaultConnectionService implements ConnectionService {
     }
 
     /**
-     * Run the connector's credential check, funnelling every failure into
-     * {@link IllegalArgumentException} so the resource maps it to a 400 that carries the reason.
-     *
-     * <p>Connectors raise their own transport exceptions — {@code GoogleApiException},
-     * {@code AtsApiException}, {@code RateLimitedException} — and the resource knows none of them, so an
-     * expired refresh token used to escape as a bare 500 whose body said nothing and left the console
-     * with no cause to display. The message is worded like {@link #test}'s {@code lastError} on purpose:
-     * a rejected save and a failed re-test should read identically.
+     * Every failure becomes an IllegalArgumentException, so the resource answers 400 with the reason instead
+     * of a bare 500.
      */
     private void verify(ConnectionKind kind, Connection connection) {
         try {
             kind.verify(connection);
         } catch (IllegalArgumentException e) {
-            throw e; // already the shape the resource turns into a 400
+            throw e;
         } catch (RuntimeException e) {
             throw new IllegalArgumentException(
                     connection.type() + " rejected the credentials: " + reason(e), e);

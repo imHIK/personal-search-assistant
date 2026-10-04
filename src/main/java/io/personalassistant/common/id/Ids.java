@@ -2,12 +2,6 @@ package io.personalassistant.common.id;
 
 import java.util.UUID;
 
-/**
- * Central factory for the opaque, prefixed identifiers used across the domain. Prefixes make
- * ids self-describing in logs and stores ({@code kn_}, {@code cur_}, {@code ent_}) while the
- * body stays an opaque random token. Keeping id shape in one place avoids leaking store
- * specifics and keeps formats consistent.
- */
 public final class Ids {
 
     public static final String KNOWLEDGE_PREFIX = "kn_";
@@ -48,11 +42,7 @@ public final class Ids {
         return DIGEST_RUN_PREFIX + token();
     }
 
-    /**
-     * User-defined prompt tasks. The prefix is what separates them from the bundled catalogue's
-     * slug-shaped ids ({@code answer}, {@code job-fit}), so a user task can never shadow a built-in
-     * one and {@code TaskLibrary} can route a lookup on the id alone.
-     */
+    /** The prefix separates user tasks from bundled slugs, so a user task can never shadow a built-in. */
     public static String task() {
         return TASK_PREFIX + token();
     }
@@ -65,23 +55,16 @@ public final class Ids {
         return DELIVERY_PREFIX + token();
     }
 
-    /**
-     * Deterministic cursor id for a {@code (knowledgeId, iterableId, direction)} triple so the
-     * same logical cursor is never created twice (idempotent discovery / re-arm).
-     */
+    /** Deterministic, so the same logical cursor is never created twice. */
     public static String cursorFor(String knowledgeId, String iterableId, String direction) {
         return CURSOR_PREFIX + knowledgeId + ":" + iterableId + ":" + direction;
     }
 
-    /**
-     * Deterministic discovery-status id for a {@code (knowledgeId, direction)} pair so the same
-     * logical record is upserted (one discovery status per knowledge per grabber direction).
-     */
     public static String discoveryFor(String knowledgeId, String direction) {
         return DISCOVERY_PREFIX + knowledgeId + ":" + direction;
     }
 
-    /** Derived, stable chunk id so re-indexing the same chunk overwrites rather than dupes. */
+    /** Stable, so re-indexing a chunk overwrites it instead of duplicating it. */
     public static String chunk(String entityId, int ordinal) {
         return entityId + "_" + ordinal;
     }

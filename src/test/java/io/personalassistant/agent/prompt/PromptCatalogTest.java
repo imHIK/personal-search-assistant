@@ -17,17 +17,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/**
- * The prompt catalogue: what ships, how it is overridden, and what it refuses to load.
- *
- * <p>Externalising the prompt is only a win if the failure modes are loud. A hand-edited JSON file
- * introduces mistakes a Java constant could not — a task pointing at a deleted prompt, a {@code {{typo}}}
- * that would reach the model verbatim — and every one of those degrades silently at runtime rather than
- * erroring. So the interesting assertions here are the ones about failing, not the ones about loading.
- */
 class PromptCatalogTest {
 
-    /** Loads {@code json} through the real override path, so tests exercise the shipped loader. */
     private static PromptCatalog from(String json, Path dir) throws IOException {
         Path file = dir.resolve("prompts.json");
         Files.writeString(file, json);
@@ -40,8 +31,6 @@ class PromptCatalogTest {
     private static String doc(String prompts, String tasks) {
         return "{\"version\":1,\"prompts\":" + prompts + ",\"tasks\":" + tasks + "}";
     }
-
-    // ---- the shipped catalogue ---------------------------------------------------------------
 
     @Test
     void loadsTheBundledCatalogue() {
@@ -60,11 +49,6 @@ class PromptCatalogTest {
         assertEquals(PromptCatalog.bundled().prompt("answer"), PromptCatalog.bundled().promptForTask("answer"));
     }
 
-    /**
-     * The guard for "no model-specific prompts". A prompt naming a model cannot be reused when the model
-     * changes and cannot be shared by two features on different models — the model belongs in an
-     * LlmProfile, which a task references by name.
-     */
     @Test
     void noPromptMentionsAModelOrProvider() {
         List<String> banned = List.of("llama", "gemini", "groq", "gpt-", "claude", "openai", "mistral",
@@ -81,8 +65,6 @@ class PromptCatalogTest {
             }
         }
     }
-
-    // ---- overriding --------------------------------------------------------------------------
 
     @Test
     void anExternalFileReplacesTheBundledCatalogue(@TempDir Path dir) throws IOException {
@@ -105,8 +87,6 @@ class PromptCatalogTest {
         assertTrue(assertThrows(IllegalStateException.class, catalog::load).getMessage().contains("not readable"));
     }
 
-    // ---- rendering ---------------------------------------------------------------------------
-
     @Test
     void rendersDeclaredVariables(@TempDir Path dir) throws IOException {
         PromptCatalog catalog = from(doc(
@@ -118,11 +98,6 @@ class PromptCatalogTest {
         assertEquals("holidays", catalog.prompt("p").renderUser(Map.of("query", "holidays")));
     }
 
-    /**
-     * An unresolved placeholder must throw, not pass through. A prompt reaching a model with a literal
-     * {@code {{today}}} in it degrades the answer with no error anywhere — the worst kind of failure for
-     * something a human edits by hand.
-     */
     @Test
     void anUnsuppliedVariableThrowsRatherThanReachingTheModel(@TempDir Path dir) throws IOException {
         PromptCatalog catalog = from(doc(
@@ -145,8 +120,6 @@ class PromptCatalogTest {
                 catalog.prompt("p").renderUser(Map.of("query", "cost is $5 \\ 100%")),
                 "a user query is arbitrary text and must never be treated as a replacement pattern");
     }
-
-    // ---- validation --------------------------------------------------------------------------
 
     @Test
     void aTaskPointingAtAMissingPromptFailsToLoad(@TempDir Path dir) {
@@ -175,7 +148,6 @@ class PromptCatalogTest {
                 .getMessage().contains("never uses"));
     }
 
-    /** {@code query} and {@code sources} are always supplied by the caller, so need no declaration. */
     @Test
     void callerSuppliedVariablesNeedNoDeclaration(@TempDir Path dir) throws IOException {
         PromptCatalog catalog = from(doc(
@@ -197,8 +169,6 @@ class PromptCatalogTest {
         assertTrue(assertThrows(IllegalStateException.class,
                 () -> from(doc("{}", "{}"), dir)).getMessage().contains("at least one"));
     }
-
-    // ---- lookups -----------------------------------------------------------------------------
 
     @Test
     void anUnknownPromptOrTaskNamesWhatIsAvailable() {
@@ -229,8 +199,6 @@ class PromptCatalogTest {
 
     @Test
     void aTypoInATaskShapeFieldIsFatalRatherThanSilentlyDefaulted(@TempDir Path dir) throws IOException {
-        // Defaulting would leave the task quietly running the wrong shape — the exact failure this
-        // catalogue's boot-time validation exists to prevent.
         String json = doc("{\"p\":{\"system\":\"s\",\"user\":\"{{query}}\"}}",
                 "{\"t\":{\"prompt\":\"p\",\"sourceText\":\"ENTTIY\"}}");
 

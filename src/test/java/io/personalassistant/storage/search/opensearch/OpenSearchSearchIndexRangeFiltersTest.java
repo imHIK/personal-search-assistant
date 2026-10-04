@@ -13,16 +13,12 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * Range-filter emission and JSON typing. The RestClient is unused by {@code filters()}, so {@code null}
- * is passed deliberately, matching {@link OpenSearchSearchIndexFiltersTest}.
- */
 class OpenSearchSearchIndexRangeFiltersTest {
 
     private final OpenSearchSearchIndex index = new OpenSearchSearchIndex(null, "chunks");
 
     private ArrayNode filtersFor(Map<String, Object> filters) {
-        return index.filters(new SearchQuery("anything", List.of(), filters, 10, Mode.HYBRID, false, null, false, null));
+        return index.filters(new SearchQuery("anything", List.of(), filters, 10, Mode.HYBRID, false, null, false));
     }
 
     @Test
@@ -38,26 +34,24 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void bothBoundsAreCarried() {
-        JsonNode bounds = filtersFor(Map.of("metadata.compMin",
-                new java.util.LinkedHashMap<>(Map.of("gte", 150000, "lte", 250000))))
-                .get(0).get("range").get("metadata.compMin");
+        JsonNode bounds = filtersFor(Map.of("metadata.sourceRank",
+                new java.util.LinkedHashMap<>(Map.of("gte", 10, "lte", 100))))
+                .get(0).get("range").get("metadata.sourceRank");
 
-        assertEquals(150000, bounds.get("gte").asInt());
-        assertEquals(250000, bounds.get("lte").asInt());
+        assertEquals(10, bounds.get("gte").asInt());
+        assertEquals(100, bounds.get("lte").asInt());
     }
 
     @Test
     void numericBoundsStayNumbersRatherThanStrings() {
-        // A quoted number against a long field makes the comparison lexicographic, so "9" > "150000".
-        JsonNode gte = filtersFor(Map.of("metadata.compMin", Map.of("gte", 150000L)))
-                .get(0).get("range").get("metadata.compMin").get("gte");
+        JsonNode gte = filtersFor(Map.of("metadata.sourceRank", Map.of("gte", 100L)))
+                .get(0).get("range").get("metadata.sourceRank").get("gte");
 
         assertTrue(gte.isNumber(), "numeric bound must not be serialised as a string: " + gte);
     }
 
     @Test
     void booleanTermStaysABooleanRatherThanAString() {
-        // metadata.remote is mapped boolean; a "true" string term matches nothing at all.
         JsonNode value = filtersFor(Map.of("metadata.remote", true)).get(0).get("term").get("metadata.remote");
 
         assertTrue(value.isBoolean(), "boolean term must not be serialised as a string: " + value);
@@ -83,8 +77,6 @@ class OpenSearchSearchIndexRangeFiltersTest {
 
     @Test
     void aMapWithNoRecognisedBoundDoesNotWidenTheSearch() {
-        // Forwarding unknown keys would let a caller inject query DSL; matching everything would be
-        // worse still. It degrades to a term that simply matches nothing.
         ArrayNode filters = filtersFor(Map.of("metadata.company", Map.of("script", "evil")));
 
         assertEquals(1, filters.size());

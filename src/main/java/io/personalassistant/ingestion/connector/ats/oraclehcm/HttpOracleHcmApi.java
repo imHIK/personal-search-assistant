@@ -11,11 +11,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** HTTP adapter for {@link OracleHcmApi} against the public candidate-experience API (no auth). */
 @ApplicationScoped
 public class HttpOracleHcmApi implements OracleHcmApi {
 
-    /** These sites are public, so the platform — not an account — is the quota's owner. */
+    /** Public boards: the platform, not an account, owns the quota. */
     private static final String PLATFORM = "oraclehcm";
 
     @ConfigProperty(name = "app.ingestion.oraclehcm.timeout-seconds", defaultValue = "30")
@@ -31,23 +30,31 @@ public class HttpOracleHcmApi implements OracleHcmApi {
     }
 
     /**
-     * {@inheritDoc}
-     *
-     * <p>The filter travels in Oracle's {@code finder} syntax — {@code findReqs;name=value,...} — which
-     * is a query-string value containing semicolons and commas that must survive intact, so the finder
-     * is assembled from already-encoded parts rather than encoded wholesale.
+     * The finder ({@code findReqs;name=value,...}) must keep its semicolons and commas, so it is assembled
+     * from already-encoded parts.
      */
     @Override
-    public JsonNode searchRequisitions(OracleHcmSite site, String keyword, int limit, int offset) {
+    public JsonNode searchRequisitions(OracleHcmSite site, String keyword, String locationId, int limit,
+                                       int offset) {
         StringBuilder finder = new StringBuilder("findReqs;siteNumber=").append(enc(site.site()));
         if (keyword != null && !keyword.isBlank()) {
             finder.append(",keyword=").append(enc(keyword));
+        }
+        if (locationId != null && !locationId.isBlank()) {
+            finder.append(",locationId=").append(enc(locationId));
         }
         finder.append(",limit=").append(limit).append(",offset=").append(offset)
                 .append(",sortBy=POSTING_DATES_DESC");
         String url = site.apiRoot() + "/recruitingCEJobRequisitions?onlyData=true"
                 + "&expand=requisitionList.secondaryLocations,flexFieldsFacet.values"
                 + "&finder=" + finder;
+        return http.getJson(url, timeoutSeconds, rateLimit());
+    }
+
+    @Override
+    public JsonNode locationSuggestions(OracleHcmSite site, String term) {
+        String url = site.apiRoot() + "/recruitingCESearchAutoSuggestions?onlyData=true&limit=20"
+                + "&finder=findByLoc;string=" + enc(term);
         return http.getJson(url, timeoutSeconds, rateLimit());
     }
 

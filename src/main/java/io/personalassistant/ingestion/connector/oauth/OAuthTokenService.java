@@ -14,33 +14,17 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Turns a {@link Connection}'s stored OAuth material into a usable bearer token, for any provider.
- *
- * <p>This is the piece worth writing once. Everything here is the same whoever the vendor is: prefer a
- * stored access token that has not expired, otherwise refresh from the refresh token, cache the result
- * in process, write it back onto the connection so it survives a restart, and react correctly when the
- * grant turns out to be dead. Only the HTTP call in the middle is vendor-specific, and that is
- * delegated to the {@link OAuthProvider}.
- *
- * <h2>Recognised {@code auth} keys (on {@link Connection#auth()})</h2>
- * <ul>
- *   <li>{@code accessToken} — a short-lived bearer token (optional if a refresh token is present)</li>
- *   <li>{@code expiresAtEpochSec} — when {@code accessToken} expires; treated as expired when absent</li>
- *   <li>{@code refreshToken} — long-lived token used to mint new access tokens (recommended)</li>
- * </ul>
- *
- * <h2>Recognised {@code config} keys (on {@link Connection#config()})</h2>
- * <ul>
- *   <li>{@code clientId} / {@code clientSecret} — the OAuth client to refresh as; falls back to
- *       {@code app.oauth.<providerId>.client-id/secret}. See {@link OAuthClients}.</li>
- * </ul>
+ * Turns a connection's OAuth material into a bearer for any provider: a stored unexpired access token, else a
+ * refresh, cached in process and written back to survive restarts. Recognised {@code auth} keys: accessToken,
+ * expiresAtEpochSec (absent means expired), refreshToken. {@code config.clientId}/{@code clientSecret}
+ * override the app-level client (see OAuthClients).
  */
 @ApplicationScoped
 public class OAuthTokenService {
 
     private static final Logger LOG = Logger.getLogger(OAuthTokenService.class.getName());
 
-    /** Refresh a little before the real expiry so an in-flight page never carries a just-expired token. */
+    /** Refresh a little early, so an in-flight page never carries a just-expired token. */
     private static final long EXPIRY_SKEW_SECONDS = 60;
 
     private final OAuthProviderRegistry providers;
@@ -57,12 +41,10 @@ public class OAuthTokenService {
     }
 
     /**
-     * @param limit the account's quota, charged for any refresh this triggers
-     * @return a bearer token valid for calls on behalf of {@code connection}
-     * @throws IllegalArgumentException     if the connection carries no usable credentials at all
-     * @throws CredentialsRejectedException if the refresh token is dead — the connection is marked
-     *                                      {@code ERROR} before this is thrown
-     * @throws OAuthTransportException      if the refresh failed for a transient reason
+     * @param limit charged for any refresh this triggers
+     * @throws IllegalArgumentException if the connection carries no usable credentials
+     * @throws CredentialsRejectedException if the refresh token is dead; the connection is marked ERROR first
+     * @throws OAuthTransportException if the refresh failed transiently
      */
     public String bearer(Connection connection, RateLimit limit) {
         if (connection == null) {
@@ -99,10 +81,8 @@ public class OAuthTokenService {
         try {
             tokens = provider.refresh(str(connection.auth(), "refreshToken"), client, limit);
         } catch (CredentialsRejectedException e) {
-            // The grant is dead: every later attempt would fail identically, so stop pretending this is
-            // a blip. Drop the cached token (a stale entry would otherwise mask the failure until it
-            // expired) and mark the connection so IngestionJob skips it from the very next tick and the
-            // console can ask the user to reconnect — rather than waiting on the 30-minute health sweep.
+            // The grant is dead: drop the cached token and mark the connection ERROR now, so ingestion skips
+            // it from the next tick and the console asks for a reconnect.
             cache.remove(connection.id());
             markRejected(connection, e);
             throw e;
@@ -113,26 +93,25 @@ public class OAuthTokenService {
         return tokens.accessToken();
     }
 
-    /** Write the freshly-minted token back onto the connection so it survives restarts. Best-effort. */
     private void persist(Connection connection, OAuthTokens tokens) {
         try {
             Map<String, Object> newAuth = new LinkedHashMap<>(connection.auth());
             newAuth.put("accessToken", tokens.accessToken());
             newAuth.put("expiresAtEpochSec", tokens.expiresAtEpochSec());
             if (tokens.refreshToken() != null) {
-                // Some providers rotate the refresh token on every use. Only ever write a real one:
-                // a null here means "unchanged", never "clear it".
+                // Some providers rotate the refresh token. Only ever write a real one: null means unchanged,
+                // never clear.
                 newAuth.put("refreshToken", tokens.refreshToken());
             }
             connections.save(connection.withAuth(newAuth, Instant.now()));
         } catch (RuntimeException ignored) {
-            // A persistence hiccup must not fail the grab — the in-process cache still holds the token.
+            // A persistence hiccup must not fail the grab: the cache still holds the token.
         }
     }
 
     private void markRejected(Connection connection, CredentialsRejectedException cause) {
-        // DISABLED is an operator decision, and the health sweep deliberately refuses to overwrite it.
-        // Overwriting it here would make a connection someone switched off reappear as a broken one.
+        // DISABLED is an operator decision; overwriting it would make a switched-off connection reappear as
+        // broken.
         if (connection.status() == ConnectionStatus.DISABLED) {
             return;
         }
@@ -142,12 +121,11 @@ public class OAuthTokenService {
             LOG.warning("Connection " + connection.id() + " (" + connection.type()
                     + ") marked ERROR: credentials rejected by the provider");
         } catch (RuntimeException e) {
-            // Losing the flag only costs us the early warning; the health sweep still catches it.
+            // Losing the flag costs only the early warning; the health sweep still catches it.
             LOG.log(Level.WARNING, "Could not mark connection " + connection.id() + " as ERROR", e);
         }
     }
 
-    /** Forget any cached token for a connection — used when its credentials are replaced. */
     public void invalidate(String connectionId) {
         cache.remove(connectionId);
     }

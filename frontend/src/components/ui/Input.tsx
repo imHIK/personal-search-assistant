@@ -17,7 +17,6 @@ export const Textarea = React.forwardRef<
   return <textarea ref={ref} className={cn(base, 'min-h-20 py-2 leading-relaxed', className)} {...props} />
 })
 
-/** Native select, styled to match. Used where a Radix Select would be overkill. */
 export const Select = React.forwardRef<
   HTMLSelectElement,
   React.SelectHTMLAttributes<HTMLSelectElement>
@@ -47,7 +46,6 @@ interface FieldProps {
   className?: string
 }
 
-/** Label + control + hint + error, so every form row is laid out identically. */
 export function Field({ label, hint, error, required, htmlFor, children, className }: FieldProps) {
   return (
     <div className={cn('space-y-1.5', className)}>

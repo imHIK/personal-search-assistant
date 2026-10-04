@@ -21,8 +21,6 @@ class RecursiveCharacterChunkingStrategyTest {
     @Test
     void splitsOnParagraphBoundariesFirst() {
         var entity = TestData.ingestedText("ent_1", "kn_1", "doc", "x");
-        // Three 4-char paragraphs separated by blank lines; with size 5 none can be merged (join
-        // would exceed 5), so each paragraph becomes its own chunk on the top separator.
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "aaaa\n\nbbbb\n\ncccc", spec(5, 0));
 
         assertEquals(List.of("aaaa", "bbbb", "cccc"), chunks.stream().map(Chunk::text).toList());
@@ -34,7 +32,7 @@ class RecursiveCharacterChunkingStrategyTest {
     void neverExceedsMaxSizeAndDropsNothingBlank() {
         var entity = TestData.ingestedText("ent_2", "kn_1", "doc", "x");
         String prose = "Sentence one is here. Sentence two follows. Sentence three ends it all now.";
-        // Overlap 0 so the target is a hard ceiling (overlap carry can push a chunk slightly over).
+        // Overlap 0: overlap carry can push a chunk past the target.
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, prose, spec(30, 0));
 
         assertFalse(chunks.isEmpty());

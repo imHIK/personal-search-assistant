@@ -4,7 +4,6 @@ import io.personalassistant.indexing.chunking.ChunkingStrategy;
 import io.personalassistant.indexing.chunking.ChunkingStrategyRegistry;
 import java.util.Set;
 
-/** Registry that always returns a single strategy, for indexing tests that don't vary the chunker. */
 public class SingleChunkingRegistry implements ChunkingStrategyRegistry {
 
     private final ChunkingStrategy strategy;

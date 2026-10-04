@@ -11,13 +11,8 @@ import jakarta.inject.Inject;
 import java.util.List;
 
 /**
- * The send-only Gmail account ({@code GMAIL_SEND}) the email publisher sends through. The first
- * connection type that belongs to nothing in the knowledge flow.
- *
- * <p>Verification cannot do what the Gmail connector does — {@code users.getProfile} refuses a token
- * holding only {@code gmail.send}, which is the point of that scope. So it asks Google's tokeninfo which
- * scopes the token carries. That proves more than a successful refresh would: an account connected
- * before the scope was added to the consent screen refreshes happily and then fails every send.
+ * users.getProfile refuses a send-only token, so verification asks tokeninfo for the scopes. That proves more
+ * than a refresh: an account connected before the scope was added refreshes fine and then fails every send.
  */
 @ApplicationScoped
 public class GmailSendConnectionKind implements ConnectionKind {
@@ -36,10 +31,7 @@ public class GmailSendConnectionKind implements ConnectionKind {
         return GoogleConnectionTypes.GMAIL_SEND;
     }
 
-    /**
-     * @throws IllegalArgumentException if the token lacks the send scope
-     * @throws RuntimeException         whatever obtaining the token or calling tokeninfo raised
-     */
+    /** @throws IllegalArgumentException if the token lacks the send scope */
     @Override
     public void verify(Connection connection) {
         String bearer = tokens.authFor(connection).bearer();

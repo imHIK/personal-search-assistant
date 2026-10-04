@@ -20,7 +20,6 @@ class CharacterChunkingStrategyTest {
     @Test
     void splitsOnDefaultBlankLineSeparator() {
         var entity = TestData.ingestedText("ent_1", "kn_1", "doc", "x");
-        // Default separator "\n\n"; each 4-char paragraph exceeds no limit but can't merge under 5.
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "aaaa\n\nbbbb\n\ncccc", spec(5, 0, List.of()));
 
         assertEquals(List.of("aaaa", "bbbb", "cccc"), chunks.stream().map(Chunk::text).toList());
@@ -29,7 +28,6 @@ class CharacterChunkingStrategyTest {
     @Test
     void hardWindowsAnOversizedSegmentAsSafetyNet() {
         var entity = TestData.ingestedText("ent_2", "kn_1", "doc", "x");
-        // No blank line, so the single 10-char segment is larger than maxSize and must be hard-split.
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "abcdefghij", spec(5, 0, List.of()));
 
         assertEquals(List.of("abcde", "fghij"), chunks.stream().map(Chunk::text).toList());
@@ -40,7 +38,6 @@ class CharacterChunkingStrategyTest {
         var entity = TestData.ingestedText("ent_3", "kn_1", "doc", "x");
         List<Chunk> chunks = chunker.chunk(entity, SourceType.LOCAL_FS, "one|two|three", spec(5, 0, List.of("|")));
 
-        // Split on "|" into one/two/three; none merge under size 5 (join with "|" would exceed).
         assertEquals(List.of("one", "two", "three"), chunks.stream().map(Chunk::text).toList());
         for (Chunk c : chunks) {
             assertTrue(c.text().length() <= 5);

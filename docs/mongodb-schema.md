@@ -31,7 +31,8 @@ One document per connected, configured source instance (a folder, a mailbox, a D
     "webhookSettings":  { "enabled": false, "secret": null },
     "backfill":         { "enabled": true },
     "chunking":         { "strategy": null, "maxSize": null, "overlap": null, "separators": null },
-    "retention":        { "period": null }             // null = never expire (see below)
+    "retention":        { "period": null },            // null = never expire (see below)
+    "enrichment":       { "taskId": null }             // a METADATA task run at indexing time
   },
   "anchor": "2026-06-20T10:00:00Z",   // the forward/backward boundary — NEVER moves
   "nextSyncDueAt": "2026-06-20T11:00:00Z",
@@ -62,6 +63,10 @@ Indexes: `{ status: 1 }`, `{ "connectorDetails.type": 1 }`, `{ "connectorDetails
 > `config.chunking` is *inherit-by-default*: null fields fall through to `app.chunking.*`. Changing
 > it is a direct update — new chunks use the new spec, already-indexed chunks are left alone until
 > an explicit `POST /api/index/entities/{id}/reindex`.
+>
+> `config.enrichment.taskId` (set as `enrichTaskId`) behaves the same way: it must name a user task
+> with `output: METADATA`, and existing entities are enriched only when re-indexed. See
+> [`indexing-implementation.md`](./indexing-implementation.md#enrichment-indexingrunner--entityenrichment).
 
 ---
 
@@ -95,10 +100,27 @@ One document per ingested item (a file, an email, a message).
   "retry": { "count": 0, "nextAttemptAt": null },
   "lastSeenGeneration": 3,                          // vs knowledge.syncGeneration → staleness mark
   "expiresAt": null,                                // source-declared end date, or null
+  "enriched": { "yoe": 5, "skills": ["Java", "Go"] },  // a METADATA task's reply — indexer-owned
+  "enrichment": {                                   // what produced `enriched`
+    "taskId": "task_…", "taskVersion": "…",         //   the task and its updatedAt
+    "checksum": "…", "at": "…",                     //   the content it read, and when
+    "error": null                                   //   set when the last attempt failed
+  },
+  "custom": { "applied": "2026-10-01T…", "hidden": true },  // user marks — written only by the API
   "createdAt": "…",
   "updatedAt": "…"
 }
 ```
+
+> **`enriched` is not inside `metadata` on purpose.** `upsert` replaces `metadata` wholesale on every
+> re-ingest, so LLM-produced values there would be lost each time and re-bought from the model.
+> `enriched` and `enrichment` are indexer-owned like `index.*`, written only by the fenced
+> `markIndexed` or `markFailed` (a pass that fails after enriching keeps what it paid for); the chunks
+> receive `metadata ∪ enriched`.
+>
+> **`custom` belongs to the user.** `PATCH /api/entities/{id}/custom` merges keys into it field by field
+> (`custom.<key>`), so neither stage's writes reach it and it survives re-ingest and re-index. It is
+> not a terminal write, so it is not lease-fenced, and it leaves `updatedAt` alone.
 
 Indexes:
 - `{ knowledgeId: 1, externalId: 1 }` **unique** — this is what makes upsert dedupe work.
@@ -109,10 +131,22 @@ Indexes:
 - `{ knowledgeId: 1, createdAt: 1 }` — its per-knowledge retention-window pass.
 - `{ knowledgeId: 1, updatedAt: -1, _id: 1 }` and `{ knowledgeId: 1, status: 1, updatedAt: -1, _id: 1 }`
   — the sorted listing behind `GET /api/knowledge/{id}/entities`, unfiltered and status-filtered.
+  The listing's `q` filter (`EntityQuery.titleContains`) adds an unanchored case-insensitive regex on
+  `metadata.title`/`externalId`, which no index can serve — it is allowed because `knowledgeId` still
+  leads, so the scan is bounded by one source rather than the collection. That listing also hides
+  `DELETED` unless the caller names the status, so a tombstone on its way out is not offered as a row.
   `_id` is the paging tiebreak so two entities touched in the same millisecond can't swap places
   between pages. Note `{ knowledgeId: 1, status: 1 }` is now a strict prefix of the second one and
   therefore redundant; `MongoIndexInitializer` only ever creates indexes (no drop path, no migration
   framework), so it is deliberately left in place rather than removed.
+- `{ entityType: 1, createdAt: -1, _id: 1 }` — the cross-knowledge browser
+  (`POST /api/entities/query`, the `/jobs` page): one entity type, newest first. Its `metadata.*` /
+  `enriched.*` / `custom.*` filters are residual on top of it, which is fine at posting volumes; the
+  facets endpoint runs a `$facet` aggregation over the same match.
+- `{ knowledgeId: 1, iterableId: 1, updatedAt: -1, _id: 1 }` — the same listing narrowed to one or
+  more groups (`?iterableId=`), so picking one company on a large job-board source reads that
+  company's rows instead of the whole knowledge's. Each listed row also carries `iterableId`, which
+  the console names by joining with the knowledge's cursors.
 
 > **Listing reads a projection.** `EntityRepository.findByKnowledge` returns `EntitySummary`, not
 > `Entity` — `raw` and `content.text` are the bulk of the document and a table view needs neither.
@@ -301,6 +335,8 @@ A saved search plus a schedule, and one document per execution. Documented in
   three are absent on runs written before they existed and read back as `items.size()`, `0` and `0`.
 - `digests.channelIds` lists the publishing channels each run is sent to (absent on older documents,
   read as empty). Indexed, because deleting a channel is refused while a digest names it.
+- `digests.useLlm` switches the digest's task off while keeping `taskId`. **Absent reads as `true`**:
+  every digest stored before the switch existed ran its task, so a missing field must not turn that off.
 - `digests.historyResetAt` bounds the newness read: runs before it are ignored when working out what
   has already been reported, so the seen-set can be cleared without deleting the history that is also
   the audit trail.
@@ -310,6 +346,8 @@ A saved search plus a schedule, and one document per execution. Documented in
 - A **failed** run is still written, carrying `error` and no items. That is what makes a digest that has
   been erroring visible rather than merely quiet, and an empty `items` array means it cannot suppress
   anything later.
+- `taskError` records a task that failed after the search succeeded. That run keeps its items, so they
+  count as reported like any other run's. Absent on older runs, read as null.
 - History is unbounded — see [L8](./limitations.md).
 
 ---

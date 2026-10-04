@@ -1,43 +1,28 @@
 package io.personalassistant.domain.model.enums;
 
 /**
- * Operational state of a {@link io.personalassistant.domain.model.Cursor}.
- *
- * <p>The ingestion loop asks one question: may this cursor be claimed now? {@link #AVAILABLE} and a
- * lease-expired {@link #IN_PROGRESS} always may; {@link #RATE_LIMITED} may once its
- * {@code retry.nextAttemptAt} has passed; everything else simply means "don't pick me".
+ * Claimable: AVAILABLE, a lease-expired IN_PROGRESS, and RATE_LIMITED once {@code retry.nextAttemptAt} has
+ * passed.
  */
 public enum CursorStatus {
-    /** Re-pick me: just created, more pages remain, or re-armed by the scheduler. */
     AVAILABLE,
-    /** Leased and running right now. */
     IN_PROGRESS,
     /** A forward cursor that has caught up; rests here until its schedule re-arms it. */
     IDLE,
-    /**
-     * Parked because the owning knowledge is paused: excluded from claiming so a paused
-     * knowledge's cursors cannot starve active knowledge within the bounded claim batch.
-     * Re-armed to {@link #AVAILABLE} when the knowledge resumes.
-     */
+    /** Parked while its knowledge is paused, so it cannot starve active knowledge in the claim batch. */
     SUSPENDED,
-    /** A backward cursor that has drained all history (terminal). */
+    /** A backward cursor that has drained all history. Terminal. */
     EXHAUSTED,
     /**
-     * The iterable this cursor paged was deleted at the source, so its indexed data has been
-     * purged and the cursor is parked here — distinct from {@link #EXHAUSTED}, which means a
-     * backfill finished normally. Reconcile revives it to {@link #AVAILABLE} if the iterable
+     * Its iterable was deleted at the source and its data purged; reconcile revives it if the iterable
      * reappears.
      */
     RETIRED,
     /**
-     * Held out of the claim batch because the source's quota is spent: the limiter said the window
-     * reopens at {@code retry.nextAttemptAt}, and the claim filter skips this cursor until then.
-     *
-     * <p>A resting state like {@link #AVAILABLE}, not a failure — being throttled is the limiter
-     * working. It is a separate status rather than a quiet {@code AVAILABLE} precisely so the
-     * console can say so: the fix, if any, is the user's (raise the account's limit), not the app's.
+     * Held out of claiming until {@code retry.nextAttemptAt}. A resting state, not a failure; separate from
+     * AVAILABLE so the console can say so.
      */
     RATE_LIMITED,
-    /** Errored past the retry limit; dead-letter, needs intervention. */
+    /** Dead-letter: errored past the retry limit. */
     FAILED
 }

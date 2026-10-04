@@ -15,9 +15,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Exercised entirely through a {@link StubOAuthProvider} — no Google anywhere — because that is the
- * claim being tested: refresh, caching, write-back and the reaction to a revoked grant belong to every
- * provider, not to the one that happened to need them first.
+ * Uses a stub provider, never Google: refresh, caching, write-back and revocation must hold for every
+ * provider.
  */
 class OAuthTokenServiceTest {
 

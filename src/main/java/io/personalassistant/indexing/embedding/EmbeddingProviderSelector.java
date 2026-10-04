@@ -9,17 +9,7 @@ import java.util.List;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * Produces the single active {@link EmbeddingProvider} — the {@code @Default} bean every caller
- * injects — by matching {@code app.embedding.provider} against the {@code providerId()} of each
- * {@link ProviderImpl}-qualified implementation discovered via CDI.
- *
- * <p>Because the concrete providers carry {@link ProviderImpl} (and therefore are <em>not</em>
- * {@code @Default}), they are never injected directly; adding a new embedding model is a new
- * {@code @ProviderImpl} bean plus a config value, with no change to {@code DefaultSearchService},
- * {@code IndexingRunner}, or a central switch. The produced bean is not itself {@code @ProviderImpl},
- * so the lookup below can never select itself.
- */
+/** The produced bean is not {@code @ProviderImpl}, so the lookup never selects itself. */
 @ApplicationScoped
 public class EmbeddingProviderSelector {
 

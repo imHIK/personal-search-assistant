@@ -11,7 +11,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** Chunk-vs-entity source resolution, and the collapsing that entity mode requires. */
 class SourceTextsTest {
 
     private final InMemoryEntityRepository entities = new InMemoryEntityRepository();
@@ -53,8 +52,6 @@ class SourceTextsTest {
 
     @Test
     void entityModeCollapsesSeveralChunksOfOneDocument() {
-        // Without this the same document is repeated verbatim, burning budget and inviting the model
-        // to treat one item as several.
         store("ent_1", "the entire posting");
         store("ent_2", "a different posting");
         List<SearchHit> hits = List.of(
@@ -70,7 +67,6 @@ class SourceTextsTest {
 
     @Test
     void anEntityWithNoLoadableTextFallsBackToTheChunk() {
-        // A file-backed entity keeps only a fileRef; a degraded source beats a missing one.
         List<SearchHit> hits = List.of(hit("c0", "ent_missing", "the chunk text"));
 
         SourceTexts.Resolved resolved = sourceTexts.resolve(task(TaskSpec.SourceText.ENTITY), hits);

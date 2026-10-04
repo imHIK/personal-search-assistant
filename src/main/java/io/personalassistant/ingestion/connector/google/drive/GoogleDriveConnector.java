@@ -41,40 +41,11 @@ import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Google Drive connector. Like {@code LocalFsConnector} it turns a folder tree into independently
- * paged iterables, but over an authenticated cloud API — proving the {@link TokenWindowGrabber} base
- * against remote, paginated, mixed-content storage.
- *
- * <h2>Iterables</h2>
- * Discovery walks the folder tree breadth-first from the configured roots ({@code inputs.folderIds},
- * or {@code root} = My Drive by default) and emits one non-recursive iterable per folder. Drive's API
- * is itself per-parent ({@code '<folderId>' in parents}), so one-folder-per-iterable maps cleanly onto
- * it and lets each folder page independently. New folders appearing later are picked up by the
- * periodic discovery pass ({@link #hasDynamicIterables()} is true).
- *
- * <h2>Pagination</h2>
- * Drive exposes {@code modifiedTime} ordering and a {@code modifiedTime} predicate — the token-paged,
- * time-windowed shape {@link TokenWindowGrabber} drives — so this connector extends it and implements a
- * single {@link #fetchWindow}: translate the {@link TimeWindow} to a {@code modifiedTime} clause, list
- * (oldest-first for a forward window so the high-water advances cleanly, newest-first for a backfill
- * window), and map. The base owns the forward floor and the backward sweep. The lower bound is
- * {@code >=} so a file sharing the boundary timestamp is never skipped; the ingestion runner's checksum
- * ({@code version}) change-detection drops the re-listed boundary files, giving progress without gaps.
- *
- * <h2>Content</h2>
- * Google-native docs are exported to text ({@code Document}→text/plain, {@code Spreadsheet}→text/csv,
- * {@code Presentation}→text/plain) and carried inline in {@link RawItem#text()}. Binary files are
- * downloaded to a local scratch directory and referenced by {@link RawItem#fileRef()} so the existing
- * Tika indexing path parses them — exactly like a local file. Unsupported native types (forms, maps,
- * drawings) are skipped.
- *
- * <p>Neither transfer happens during the walk. Drive's checksum is its {@code version}, which the
- * listing already carries, so {@link #fetchWindow} maps a file using metadata alone — the export or
- * download is deferred to {@link #materialize}, which the runner calls only once change-detection has
- * said the item is worth persisting. Since the boundary of a forward window is re-listed on every arm
- * by design, fetching in the walk meant re-downloading those files on every arm just to have the bytes
- * thrown away by the skip; a backfill or a membership re-walk re-fetched the entire corpus the same
- * way.
+ * One non-recursive iterable per folder, found breadth-first from the configured roots (My Drive by default).
+ * Extends TokenWindowGrabber over modifiedTime; the lower bound is {@code >=}, so a file on the boundary is
+ * never skipped and the version checksum drops the re-listed ones. Native docs are exported to inline text;
+ * binary files are staged to a scratch dir as a fileRef. Neither transfer happens in the walk: fetchWindow
+ * maps metadata only, and materialize fetches just the items the runner keeps.
  */
 @ApplicationScoped
 public class GoogleDriveConnector extends TokenWindowGrabber {
@@ -86,13 +57,13 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     private static final String NATIVE_PREFIX = "application/vnd.google-apps";
     private static final String FOLDER_KEY = "folderId";
 
-    /** Google-native mime → export mime. Types absent here (forms, maps, drawings) are skipped. */
+    /** Types absent here (forms, maps, drawings) are skipped. */
     private static final Map<String, String> EXPORT_AS = Map.of(
             "application/vnd.google-apps.document", "text/plain",
             "application/vnd.google-apps.spreadsheet", "text/csv",
             "application/vnd.google-apps.presentation", "text/plain");
 
-    /** Optional: blank falls back to {@code ${java.io.tmpdir}/psa-drive}. See {@link ConfigText}. */
+    /** Blank falls back to {@code ${java.io.tmpdir}/psa-drive}. */
     @ConfigProperty(name = "app.ingestion.google-drive.download-dir")
     Optional<String> downloadDir;
 
@@ -120,31 +91,24 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public boolean requiresConnection() {
-        return true; // Drive is OAuth-authenticated through a Connection
+        return true;
     }
 
     @Override
     public boolean hasDynamicIterables() {
-        return true; // new folders can appear under the roots after activation
+        return true;
     }
 
     @Override
     public SyncSchedule defaultSchedule() {
-        // No change-feed wired up, so incremental sync is a poll; 15 minutes balances freshness and
-        // API load. Users can override per-knowledge.
+        // No change-feed, so incremental sync is a poll.
         return SyncSchedule.ofInterval(Duration.ofMinutes(15));
     }
 
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        // Drive's only input, folderIds, is a discovery-set dimension: it selects the roots of the
-        // walk — i.e. WHICH folder iterables exist. Adding/removing a root is an iterable add/remove
-        // handled by iterable-level reconcile (design §3.1: create/park), not a within-iterable
-        // re-walk (§3.2). A folder iterable's membership is "the files directly in that folder id,"
-        // independent of the configured root list, and fetchWindow applies no input-based file filter
-        // (no fileTypes/query/globs) — so no input here moves the boundary *inside* an existing
-        // iterable. Constant signature → editing folderIds never forces a needless re-walk of the
-        // surviving folders (reconcile still walks any newly-added root's fresh cursor).
+        // folderIds only chooses which folder iterables exist, which reconcile handles, and no input filters
+        // files inside a folder: nothing moves a boundary within one, so the signature is constant.
         return "";
     }
 
@@ -160,8 +124,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
 
     @Override
     public void verify(Knowledge knowledge) {
-        // folderIds is optional (defaults to My Drive root); credentials are verified at the
-        // connection level via verifyConnection. Nothing knowledge-specific to validate here.
+        // Nothing knowledge-specific to validate: credentials are verified per connection.
     }
 
     @Override
@@ -192,15 +155,8 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     }
 
     /**
-     * The display name of a configured root folder.
-     *
-     * <p>Sub-folders arrive from a listing that already carries names; a root is a bare id the user
-     * pasted in, and using it as its own label put a raw Drive id in front of the user as the folder's
-     * name — twice, on the source's overview and over its sync history. One extra metadata call per
-     * root per discovery pass is a fair price for a readable label.
-     *
-     * <p>Falls back to the id. A root that cannot be read is a discovery problem, and the walk itself
-     * will surface it; losing a label is not worth failing on.
+     * A configured root is a bare id that no listing names. Falls back to the id rather than failing
+     * discovery.
      */
     private String rootName(GoogleAuth token, String root) {
         if (ROOT_ALIAS.equals(root)) {
@@ -237,9 +193,8 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         }
         GoogleAuth token = tokens.authFor(connections.resolve(ctx.knowledge()));
         String query = childrenQuery(folderId.toString()) + windowClause(window);
-        // A forward (lower-bounded) window lists oldest-first so the high-water advances cleanly; a
-        // backfill window lists newest-first. Either way the base drains the whole window, so the order
-        // is a free, source-native choice.
+        // Forward lists oldest-first so the high-water mark advances cleanly; the base drains the whole
+        // window either way.
         String orderBy = window.hasLo() ? "modifiedTime,name" : "modifiedTime desc";
         JsonNode page = api.listFiles(token, query, orderBy, pageToken, cap);
 
@@ -253,7 +208,6 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         return new Page(items, page.path("nextPageToken").asText(null));
     }
 
-    /** Translate the window's bounds into Drive's {@code modifiedTime} predicates (open bound = none). */
     private static String windowClause(TimeWindow window) {
         StringBuilder q = new StringBuilder();
         if (window.hasLo()) {
@@ -268,8 +222,6 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     private static String childrenQuery(String folderId) {
         return "'" + folderId + "' in parents and trashed=false and mimeType!='" + FOLDER_MIME + "'";
     }
-
-    // ---- file -> RawItem ----------------------------------------------------------------------
 
     private RawItem toRawItem(JsonNode f) {
         String id = f.path("id").asText();
@@ -300,27 +252,23 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
     }
 
     /**
-     * Google-native doc: exported to text, but <em>not here</em>. The export is an API call and the
-     * item may well be skipped as unchanged, so it is deferred to {@link #materialize}; the export
-     * mime is recorded as the item's content type so that call needs no second lookup. Unsupported
-     * native types are still rejected up front — that decision is pure mime-type and costs nothing.
+     * The export is deferred to materialize, with the export mime recorded as the content type so that call
+     * needs no lookup. An unsupported type is rejected here, which costs nothing.
      */
     private RawItem nativeDoc(String id, String name, String mimeType, String uri,
                               String checksum, Instant modifiedAt, Map<String, Object> raw,
                               Map<String, Object> metadata) {
         String exportMime = EXPORT_AS.get(mimeType);
         if (exportMime == null) {
-            return null; // form / map / drawing — nothing textual to index
+            return null; // form / map / drawing: nothing textual to index
         }
         return new RawItem(id, EntityType.PAGE, exportMime, name, uri, checksum, modifiedAt,
                 raw, null, null, metadata, null, false);
     }
 
     /**
-     * Regular file: recorded by the scratch path its bytes <em>will</em> occupy, without downloading
-     * them. The download happens in {@link #materialize}, and only for items the runner decides to
-     * persist. The size cap still applies here because {@code size} comes from the listing, so an
-     * oversized file is skipped without ever being fetched.
+     * Recorded by the path its bytes will occupy, without downloading. The size cap applies here, from the
+     * listing, so an oversized file is never fetched.
      */
     private RawItem binaryFile(JsonNode f, String id, String name, String mimeType,
                                String uri, String checksum, Instant modifiedAt,
@@ -329,24 +277,21 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         metadata.put("sizeBytes", size);
         raw.put("sizeBytes", size);
         if (size > maxFileBytes) {
-            return null; // too large to download/index; skip
+            return null; // too large to download or index
         }
         return RawItem.file(id, mimeType, name, uri, checksum, modifiedAt,
                 stagedPath(id, name).toString(), raw, metadata);
     }
 
     /**
-     * Fetch the bytes for an item the runner has decided to keep — the only place this connector
-     * transfers content. Native docs export to text carried inline; binary files are staged at the
-     * very path {@link #binaryFile} already reported, so what is written and what is stored cannot
-     * drift apart.
+     * The only place this connector transfers content. A binary is staged at the very path binaryFile
+     * reported, so what is written and what is stored cannot drift.
      */
     @Override
     public Entity.Content materialize(Knowledge knowledge, RawItem item) {
         GoogleAuth token = tokens.authFor(connections.resolve(knowledge));
         String mimeType = String.valueOf(item.raw().get("mimeType"));
         if (mimeType.startsWith(NATIVE_PREFIX)) {
-            // contentType is the export mime nativeDoc resolved from EXPORT_AS.
             byte[] bytes = api.export(token, item.externalId(), item.contentType());
             return Entity.Content.ofText(new String(bytes, StandardCharsets.UTF_8));
         }
@@ -354,23 +299,15 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         return Entity.Content.ofFile(stage(item.externalId(), Path.of(item.fileRef()), bytes).toString());
     }
 
-    /**
-     * Drive is the one connector whose {@code fileRef} is a copy rather than the file itself: the
-     * bytes live under {@code app.ingestion.google-drive.download-dir}, which defaults into the
-     * per-user temp dir the OS purges. A re-index therefore has to fetch again.
-     */
+    /** Drive's fileRef is a staged copy in a temp dir the OS purges, so a re-index must fetch again. */
     @Override
     public ReindexMode defaultReindexMode() {
         return ReindexMode.FETCH_AND_REINDEX;
     }
 
     /**
-     * Re-read one file's listing row through {@code files.get}, mapped by the same {@link #toRawItem}
-     * the walk uses. Empty means "no longer indexable from here": the id stopped resolving, the file
-     * was trashed, or it now maps to nothing we index — a native type with no export, or a file that
-     * has grown past {@code max-file-bytes}. The walk treats all of those as absent too (its query
-     * excludes trashed files and {@code toRawItem} drops the rest), so tombstoning the entity keeps
-     * the two paths agreeing rather than leaving content indexed that no walk would produce again.
+     * Empty when the id stopped resolving, the file was trashed, or it now maps to nothing indexable. The
+     * walk treats all of those as absent too, so the two paths agree.
      */
     @Override
     public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
@@ -400,11 +337,7 @@ public class GoogleDriveConnector extends TokenWindowGrabber {
         }
     }
 
-    /**
-     * Where a file's bytes live once staged. Deterministic in {@code (id, name)} so the path can be
-     * named during the walk and written to later — and so a re-fetch of the same revision overwrites
-     * rather than accumulating.
-     */
+    /** Deterministic in (id, name), so the path can be named during the walk and a re-fetch overwrites it. */
     private Path stagedPath(String id, String name) {
         return scratchDir().resolve(id + "-" + sanitize(name));
     }

@@ -9,23 +9,20 @@ One connector, one prompt, and one row of config. That is the whole of it:
 
 | Piece | Where | Generic? |
 |---|---|---|
-| `JOB_BOARDS` connector, its five platforms + normalisers | `ingestion/connector/ats/` — see [`connectors.md`](./connectors.md) | **No.** Irreducibly source-specific |
+| `JOB_BOARDS` connector, its fifteen platforms + normalisers | `ingestion/connector/ats/` — see [`connectors.md`](./connectors.md) | **No.** Irreducibly source-specific |
 | `job-fit` prompt and task | `config/prompts.json` | Config, not code |
 | The daily digest itself | one row in `digests` | Data, not code |
 | Ageing closed postings out | retention — [`knowledge-lifecycle.md`](./knowledge-lifecycle.md) §4b | Generic |
-| Filtering by company / remote / pay / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
-| One result per posting | `maxChunksPerEntity` | Generic |
+| Filtering by company / remote / date | range filters — [`opensearch-index.md`](./opensearch-index.md) | Generic |
+| One result per posting | results are one per entity on every search — [`opensearch-index.md`](./opensearch-index.md) | Generic |
 | Collapsing the same role from two boards | duplicate collapsing | Generic |
-| Ranking postings against a CV | document-as-query | Generic |
 | Scoring the shortlist and delivering it | [`digests.md`](./digests.md) | Generic |
+| Extracting yoe / skills / … from each posting | a METADATA task — [`tasks.md`](./tasks.md#metadata-tasks-enrichment-at-indexing-time) | Data, not code |
+| Browsing every posting, filtering, marking applied / hidden | `/api/entities` + the `/jobs` page — below | Generic API; the page is job-specific config |
 
 ## Setting it up
 
-**1. Index the CV.** Add a `LOCAL_FS` knowledge pointing at the folder holding it, and note the
-entity id from `GET /api/knowledge/{id}/entities`. **Wait until it is `INDEXED`**: a local file keeps
-only a `fileRef`, so its text is read back from its chunks, which do not exist until indexing finishes.
-
-**2. Add the companies.** **One** `JOB_BOARDS` knowledge, with `inputs.companies` listing company
+**1. Add the companies.** **One** `JOB_BOARDS` knowledge, with `inputs.companies` listing company
 handles and `inputs.locations` listing the cities you would work in. Which platform hosts each company
 is resolved for you — check a batch of candidates first with `POST /api/connectors/job-boards/lookup`,
 or the same helper in the console. `retentionPeriod` inherits the connector default of 14 days.
@@ -33,14 +30,16 @@ Backfill off; the connector is forward-only anyway.
 
 **List the cities, not just `India`** — most boards file a role as plain `Bengaluru` with no country,
 so `["India"]` alone kept 3 of Stripe's 36 Indian roles. See [`connectors.md`](./connectors.md).
+`includeRemote` adds remote roles that name no place (`Remote`, `Anywhere`); a remote role filed under a
+place — `Remote - US`, `Czech Republic` — must match `locations` like any other, so name the Indian
+cities there and `Remote - Bengaluru` is kept.
 
-**3. Create the digest.**
+**2. Create the digest.**
 
 ```jsonc
 {
   "name": "New roles for me",
-  "query": "roles I could do next",
-  "sourceEntityId": "ent_…",              // the CV
+  "query": "backend engineer java",
   "knowledgeIds": ["kn_job_boards"],       // the companies knowledge
   "filters": { "metadata.remote": true },
   "window": "1d",
@@ -69,6 +68,13 @@ every platform before concluding a company is unreachable; that is what the look
 | Greenhouse / Lever / Ashby | none | 31 boards found, **~904 India roles** |
 | Workday | none | 9 of 22 URL guesses resolved → **1,827 postings** |
 | SmartRecruiters | none | Swiggy 71 (**70 in India**), Freshworks 157 |
+| Rippling | none | Rippling 331 (**81 in India**), ThoughtSpot 50 (9) — measured 2026-10-03 |
+| iCIMS Jibe | none | Docusign 257 (**87 in India**), Booking.com 153 — measured 2026-10-03 |
+| Eightfold | none | Qualcomm 2,054 (573 in India), Morgan Stanley 1,348 (118), Netflix 471 (7), PayPal 288 (10), Millennium 214 (28 in Bengaluru) — measured 2026-10-03 |
+| Keka / Zwayam / AInterviews | none | WebEngage 24, Cultfit 128, Lenskart 74 — measured 2026-10-03 |
+| Kula / Freshteam | none | Multiplier 185, Rocketlane 49, Leap Finance 45, Plum 38 … — measured 2026-10-04 |
+| TurboHire | anonymous token | Purplle 36, Khatabook 12, Urban Company 10, Flipkart 8 — measured 2026-10-05 |
+| Oracle HCM, after the place-id fix | none | JPMorgan 312 in India (was ~110 by keyword), Honeywell 290, TI 133, BNY 166 |
 
 Per-board, the India share varies by an order of magnitude:
 
@@ -99,12 +105,17 @@ the manual step each remaining one needs — is in [`job-board-companies.md`](./
 
 ### What is still out of reach
 
-Anything posted only to Naukri, Instahyre, Hirist, Wellfound or LinkedIn, every company on an Indian
-ATS (Darwinbox, Keka, Zoho Recruit), and bespoke careers pages — so most services companies and
-smaller Indian firms. Also, for now, the other hosted ATSs a real watchlist turns up: Avature (Delta),
-iCIMS (Docusign), SuccessFactors (HCL), Radancy (Intuit) and RippleHire (7-Eleven). Each is one more
-`BoardPlatform` bean; none is reachable today. There is no fix inside this design: Naukri never published a job-search API,
-LinkedIn and Indeed retired theirs, and scraping breaches their terms.
+Anything posted only to Naukri, Instahyre, Hirist, Wellfound or LinkedIn, companies on Darwinbox
+(Cloudflare refuses non-browser clients — Porter, CarDekho, Tata 1mg, Rapido, Delhivery and more),
+Trakstar Hire, Mynexthire, SenseHQ or
+Zoho Recruit, and bespoke careers pages — so most services
+companies and smaller Indian firms. Also, for now, the other hosted ATSs a real watchlist turns up:
+Avature (Delta, Bloomberg), SuccessFactors (HCL), Radancy (Intuit) and RippleHire (7-Eleven). Each is
+one more `BoardPlatform` bean; none is reachable today. iCIMS, Rippling, Keka, Zwayam, AInterviews,
+Eightfold, Kula, Freshteam and TurboHire were on this list
+and now are — see [`connectors.md`](./connectors.md#rippling-and-icims-jibe), which also says why
+Avature and Darwinbox were not built. There is no fix inside this design: Naukri never published a
+job-search API, LinkedIn and Indeed retired theirs, and scraping breaches their terms.
 
 Treat the companies list as a **watchlist you keep widening**, not as market coverage. Reach is a
 direct function of how many names are in it, which is the whole reason a company is an iterable and
@@ -115,28 +126,13 @@ the lookup endpoint exists.
 Aggregators (Adzuna, Careerjet, Google for Jobs) index postings copied from many sources. They are
 useful for *discovering companies you had not thought of*, but they carry duplicates, staleness and
 often no direct apply link — and the big ones are closed to new users. Adzuna's India endpoint is
-live and free, but it does not reach Naukri's inventory either. With five platforms in play the direct
+live and free, but it does not reach Naukri's inventory either. With fifteen platforms in play the direct
 route now has both the better data and the breadth, so Adzuna stays deferred; see `ROADMAP.md`.
 
-## Compensation: expect it to be absent
+## Compensation is not extracted
 
-`metadata.compMin`/`compMax` parse Indian notation — Indian digit grouping (`₹15,00,000`), `LPA`,
-lakh and crore — as well as the western forms. In practice that will almost never fire on these
-boards.
-
-Of **211 India-located postings** sampled across the platforms, **0** stated pay in any
-form. US postings do (**9** of 1,426 sampled parsed a real band, and the true rate is higher — the
-sample truncated long descriptions and comp usually sits at the end), because pay-transparency law in
-several US states requires it. India has no such requirement.
-
-The practical consequence: **a filter on `metadata.compMin` excludes nearly every Indian role**, since
-a posting with no stated pay has no value to compare. Filter on company, location, seniority or
-posted-date instead, and treat comp as a bonus when it happens to be there.
-
-> **A comp filter without a currency filter is meaningless.** `compMin`/`compMax` are plain numbers in
-> the index, so `compMin >= 150000` reads as USD on one posting and INR on the next — a filter that
-> looks precise and is not. `metadata.compCurrency` is recorded alongside whenever a range is parsed;
-> pair the two, e.g. `{"metadata.compCurrency": "INR", "metadata.compMin": {"gte": 1500000}}`.
+Of **211 India-located postings** sampled across the platforms, **0** stated pay in any form, so pay
+is not parsed and there is no pay filter. It is still in the posting text the `job-fit` task reads.
 
 ## Things to know before trusting the output
 
@@ -144,16 +140,70 @@ posted-date instead, and treat comp as a bonus when it happens to be there.
   ranks and takes the top N rather than thresholding. The score is persisted for calibration; do not
   build a "fit >= 8" gate on it.
 - **`job-fit` uses the `lite` profile** because it runs over every new posting every day. Judgement
-  quality is bounded by that choice; raise the profile if the reasons read as shallow.
-- **Seniority, remoteness and pay are only as good as the posting.** The normalisers return null rather
+  quality is bounded by that choice; raise the profile if the reasons read as shallow. Its
+  `contextChars` is 80000 so all ten postings of a run fit whole (median posting ~6k chars); a budget
+  that does not fit them drops the tail silently, since `AnswerPromptBuilder` stops at the budget. That
+  one request is ~20k tokens, which is why the `lite` connection should be Gemini rather than Groq — see
+  [providers.md](./providers.md#llm-connections).
+- **Seniority and remoteness are only as good as the posting.** The normalisers return null rather
   than guessing, so a filter on `metadata.seniority` silently excludes every posting whose title states
-  no level — which is many of them, and a filter on comp excludes nearly every Indian one. Prefer
-  filters on facts boards state structurally (`metadata.company`, `metadata.location`, Ashby's
-  `remote` and pay bands).
+  no level — which is many of them. Prefer filters on facts boards state structurally
+  (`metadata.company`, `metadata.location`, Ashby's `remote`).
 - **A closed posting lingers** until its retention window elapses; it stops appearing in *digests*
   immediately, since the window is a day. See [L2b](./limitations.md).
 
+## The dashboard (`/jobs`)
+
+A standalone console page — no nav entry, no console chrome — that works as one combined careers page
+across every `JOB_BOARDS` source, so the boards need not be checked one by one. Open
+`http://localhost:8080/jobs` (or `:5173/jobs` under `frontendDev`); `SpaRoutingConfigurator` serves the
+deep link.
+
+- **It lists stored entities, not search hits.** `POST /api/entities/query` reads Mongo directly:
+  every `JOB_POSTING` that is not `DELETED`, newest **first seen** (`createdAt`) first, 25 a page.
+  There is no query text to rank by and no top-K cut-off, which is why this is not built on
+  `/api/search`.
+- **Each posting is a card**: logo, title (linking to the posting), then company and posting date;
+  location, seniority, remote and short enriched values as fact chips; list-valued enriched fields
+  (skills) as tags, the first six shown. A card with a status gets a left edge in that status's
+  colour. The logo: `frontend/src/config/companies.ts` gives each known
+  company a `domain`, and the browser loads its icon from DuckDuckGo's icon service — so DuckDuckGo
+  sees which domains are looked up. A company with no known domain, or an icon that fails to load,
+  gets a coloured monogram instead. `companyFor` also maps the spellings a board stores
+  (`mastercard`, a bare Oracle tenant `CX_1001`) to the known label, and the company filter merges
+  them into one chip.
+- **Filters** are declared in `frontend/src/config/jobDashboard.ts`: title, company / team / platform /
+  source (options from `GET /api/entities/facets`, with counts), location (substring), remote,
+  seniority, posted within, first seen within, status, and show hidden. The state lives in the URL,
+  so a filtered view can be bookmarked.
+- **Enriched fields become filters by themselves.** The page reads the sources' `enrichTaskId`, and
+  each field of that task is a filter — `NUMBER` a min/max, `BOOLEAN` yes/no, `TEXT`/`LIST` chips from
+  the field's `values` or from facets. Adding a field to the task adds the filter; re-index the source
+  to fill it on existing postings. On the card, `jobDashboard.enrichedDisplay` places a field it names
+  (`minYoe` as "2+ yrs", `skills` as tags, `locations` hidden in favour of the board's location);
+  any other field is placed by its value — a list as tags, text of 80+ characters as a two-line
+  description, anything else a `name value` chip.
+- **Browser-only conveniences** live in `localStorage`, never the backend: postings first seen since
+  the previous visit get a *New* mark (the previous visit is pinned per tab in `sessionStorage`, so a
+  reload keeps the marks; a first visit marks nothing), and *My skills* in the sidebar highlights
+  matching tags (case-insensitive, whole value) and sorts them first.
+- **Status and hidden are user marks in `custom`.** Each posting has at most one status —
+  `INTERESTED` (worth reaching out to, not yet done), `REACHED_OUT`, `APPLIED` or `APPLIED_COLD` —
+  in `custom.status`, with `custom.statusAt` stamped when it is set; *Hide* writes `custom.hidden: true`. Both go through `PATCH /api/entities/{id}/custom` (a
+  `null` removes a key). The status filter's *No status* option is a `$nin` over the other statuses,
+  which also matches a posting that has none. `custom` is a third owner on the entity — the user — so neither ingestion nor
+  the indexer touches it, and it survives re-ingest and re-index. Hidden postings are filtered out
+  (`custom.hidden {ne: true}`) unless *Show hidden* is on. A posting removed by retention takes its
+  marks with it.
+
+The endpoints are generic — any entity type, any `metadata.*` / `enriched.*` / `custom.*` path:
+
+| Endpoint | Effect |
+|---|---|
+| `POST /api/entities/query` | `{entityTypes, knowledgeIds, q, filters, sort, limit, offset}` → `{items, total, limit, offset}`. A filter value that is a scalar is equality, an array any-of, an object operators (`eq ne in nin gte gt lte lt contains exists`); an ISO date compares as a date. Paths outside `metadata.* enriched.* custom.* createdAt updatedAt` are a 400. Items carry `metadata`, `enriched`, `custom` and `enrichmentError`, never `raw` or content |
+| `GET /api/entities/facets?entityTypes=&knowledgeIds=&fields=a,b&limit=` | distinct values with counts per path, list elements counted one by one; counted over the type and sources only, so picking a value never hides the others |
+| `PATCH /api/entities/{id}/custom` | merges keys into `custom`; values are text, numbers or booleans, `null` removes |
+
 ## Not built
 
-Aggregator APIs (Adzuna and similar), email delivery, and dismiss/applied tracking. See the
-limitations doc and `digests.md`.
+Aggregator APIs (Adzuna and similar) and email delivery. See the limitations doc and `digests.md`.

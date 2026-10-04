@@ -10,15 +10,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * What actually gets embedded, as opposed to what gets stored.
- *
- * <p>Only the chunk body was ever embedded, so the title was invisible to the vector leg. A chunk holding
- * nothing but table rows — {@code "17 Dussehra 20/10/2026 Tuesday"} — shares no term and no semantic
- * signal with a document called {@code public_holidays_2026.pdf}, so a query about holidays never
- * retrieved it even though it was exactly what the user asked for. Prefixing the title (and any
- * structural locator) is what links the two.
- */
 class ChunkEmbedTextTest {
 
     private static Chunk chunk(String text, Map<String, Object> metadata) {
@@ -54,7 +45,6 @@ class ChunkEmbedTextTest {
         assertFalse(embedded.contains("checksum"), "machinery is not a retrieval signal");
     }
 
-    /** A field only some formats produce must not become a hole in the embedded text. */
     @Test
     void skipsFieldsThatAreAbsentOrBlank() {
         Chunk plain = chunk("body", Map.of("sheet", "   "));
@@ -77,7 +67,6 @@ class ChunkEmbedTextTest {
                 .contains("author: ada"));
     }
 
-    /** Only the embedding input changes; BM25, snippets and the answer's grounding all use text(). */
     @Test
     void leavesTheStoredTextUntouched() {
         Chunk c = rows();

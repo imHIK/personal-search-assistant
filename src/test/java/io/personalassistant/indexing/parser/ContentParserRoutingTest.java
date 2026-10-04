@@ -6,11 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-/**
- * Verifies MIME routing across the dedicated parsers: each claims its own family, the plain-text
- * parser deliberately yields HTML to the HTML parser, and dedicated parsers outrank the generic
- * Tika fallback (lower {@link ContentParser#priority()} wins).
- */
 class ContentParserRoutingTest {
 
     @Test

@@ -65,9 +65,13 @@ Two things worth knowing about how it presents the system:
 > dev with neither, set `app.embedding.provider=local-hashing`. See
 > [`docs/providers.md`](docs/providers.md).
 >
-> **Optional env vars.** `GROQ_API_KEY` (grounded answers), `GEMINI_API_KEY` (hosted embeddings),
-> `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (Gmail/Drive token refresh). All genuinely
-> optional — the app starts without any of them; the corresponding feature just stays off.
+> **Optional env vars.** `GEMINI_API_KEY` (hosted embeddings), `GOOGLE_OAUTH_CLIENT_ID` /
+> `GOOGLE_OAUTH_CLIENT_SECRET` (Gmail/Drive token refresh). All genuinely optional — the app starts
+> without any of them; the corresponding feature just stays off.
+>
+> **The LLM is set up in the console, not in config.** Add an `LLM` connection under Accounts → LLM
+> (endpoint, key, model, optional profile and rate limit). Until one exists, grounded answers, digest
+> tasks and enrichment are off. See [`docs/providers.md`](docs/providers.md#llm-connections).
 
 ## REST API
 

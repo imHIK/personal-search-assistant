@@ -11,34 +11,21 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Holds the short-lived context of an in-flight consent: what the user was connecting, where to send
- * them back, and a single-use token proving the callback belongs to a flow this server started.
- *
- * <p>The {@code state} parameter is the CSRF defence the OAuth spec asks for — without it anyone can
- * hand the callback a code of their choosing. It is also the only way the callback knows what it is
- * completing, since the provider echoes nothing else back.
- *
- * <p><strong>Single-node, in memory.</strong> The same accepted trade-off as
- * {@code InMemoryPermitService} (invariant 7). Losing the map across a restart costs the user one
- * click on Connect, which is not worth a Mongo collection and a startup index for data whose whole
- * life is ten minutes.
+ * The state token is the CSRF defence: without it anyone could hand the callback a code of their choosing,
+ * and it is how the callback knows what it completes. In memory and single-node: a restart costs one click on
+ * Connect.
  */
 @ApplicationScoped
 public class OAuthStateStore {
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    /**
-     * How long a user has to complete the consent screen before the callback stops being accepted.
-     * Public (rather than the usual package-private) because the flow's tests live in {@code app} and
-     * set it directly — the same reason {@code IngestionRunner.maxDeferrals} is.
-     */
+    /** Public rather than package-private: the flow's tests live in {@code app}. */
     @ConfigProperty(name = "app.oauth.state-ttl-seconds", defaultValue = "600")
     public long stateTtlSeconds;
 
     private final Map<String, PendingConnect> pending = new ConcurrentHashMap<>();
 
-    /** Mint a state token for one consent attempt and remember what it is for. */
     public String issue(PendingConnect connect) {
         purgeExpired();
         byte[] bytes = new byte[32];
@@ -49,10 +36,9 @@ public class OAuthStateStore {
     }
 
     /**
-     * Consume a state token. Single-use by construction — a replayed callback finds nothing, which is
-     * the point of the token in the first place.
+     * Single-use: a replayed callback finds nothing.
      *
-     * @return the context that was stored, or empty when the token is unknown, replayed or expired
+     * @return empty when the token is unknown, replayed or expired
      */
     public Optional<PendingConnect> consume(String state) {
         purgeExpired();
@@ -64,9 +50,7 @@ public class OAuthStateStore {
     }
 
     /**
-     * Read a state token's context without consuming it. Used only to land a provider-reported error
-     * (the user pressed Cancel) back on the page they started from — a failed consent must not burn the
-     * token, so a retry from the same page still works.
+     * Does not consume the token: a cancelled consent must not burn it, so a retry from the same page works.
      */
     public Optional<PendingConnect> peek(String state) {
         PendingConnect connect = state == null ? null : pending.get(state);
@@ -86,17 +70,7 @@ public class OAuthStateStore {
         return Duration.ofSeconds(stateTtlSeconds);
     }
 
-    /**
-     * One consent in flight.
-     *
-     * @param providerId   which provider's flow this is
-     * @param type         the connector the resulting connection is for
-     * @param connectionId existing connection to re-credential, or null to create one
-     * @param name         label for the connection when one is being created, or null for a default
-     * @param redirectUri  the exact redirect URI sent to the provider; the code exchange must reuse it
-     * @param returnTo     the console origin to bounce the browser back to
-     * @param startedAt    when the flow began, for expiry
-     */
+    /** @param redirectUri the exact one sent to the provider; the code exchange must reuse it */
     public record PendingConnect(String providerId, String type, String connectionId, String name,
                                  String redirectUri, String returnTo, Instant startedAt) {
 

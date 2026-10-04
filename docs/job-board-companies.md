@@ -9,6 +9,7 @@ The console ships the working set in `frontend/src/config/companies.ts` as a che
 is the worksheet for everything that still needs a human to look something up.
 
 **71 in the catalog · 11 blocked by an unsupported ATS · 22 on a custom careers API · 6 duplicates.**
+(As of 2026-09-05. The 2026-10-03 batch and the links collected for it brought the catalog to 99; the 2026-10-04 discovery pass to 208; TurboHire to 212.)
 
 Resolved from the URLs collected on 2026-09-05. ☑ is verified and shipping in
 `frontend/src/config/companies.ts`; ✗ is a dead end and why. Rows still showing ☐ were never filled
@@ -20,6 +21,82 @@ is often **not derivable from the company name at all**: DigitalOcean's Greenhou
 `digitalocean98`, Bank of America's Workday tenant is `ghr`, Akamai's Oracle pod is
 `fa-extu-saasfaprod1.fa.ocs.oraclecloud.com`. No amount of guessing reaches those, which is the
 argument for the catalog existing.
+
+## Links collected — 2026-10-03
+
+Careers links for the names that reached no board by name, each resolved by reading what the page
+actually loads. ☑ is in the catalog, ✗ is a dead end and why.
+
+| Company   | Link given                                            | Outcome                                                                             | Done |
+|-----------|-------------------------------------------------------|-------------------------------------------------------------------------------------|------|
+| JioStar   | `jiostar.wd102.myworkdayjobs.com/en-GB/JioStar/...`   | `jiostar/JioStar/wd102` — workday, 222                                              | ☑    |
+| Amadeus   | `amadeus.wd502.myworkdayjobs.com/en-US/jobs/...`      | `amadeus/jobs/wd502` — workday, 112                                                 | ☑    |
+| Walmart   | `walmart.wd504.myworkdayjobs.com/en-US/WalmartExternal/...` | `walmart/WalmartExternal/wd504` — workday, 2000+ · **set locations**          | ☑    |
+| Cohesity  | `cohesity.com/careers/open-positions/?...&type=wd`    | the Apply links go to `cohesity/Cohesity_Careers/wd5` — workday, 183                | ☑    |
+| Zomato    | `jobs.smartrecruiters.com/Zomato1/...`                | `Zomato1` — smartrecruiters, 3 ⚠️ (real, but nearly empty)                           | ☑    |
+| WebEngage | `webklipper.keka.com/careers/jobdetails/80114`        | `webklipper.keka.com` — **keka** (new platform), 24                                 | ☑    |
+| Cultfit   | `careers.cult.fit/cult/jobview/...`                   | `careers.cult.fit` — **zwayam** (new platform), 128                                 | ☑    |
+| Lenskart  | `ainterviews.com/job_board/lenskart_ho/job/418/`      | `lenskart_ho` — **ainterviews** (new platform), 74                                  | ☑    |
+| Netflix   | `explore.jobs.netflix.net/careers?...&domain=netflix.com` | `explore.jobs.netflix.net/netflix.com` — **eightfold** (new platform), 471      | ☑    |
+| Zepto     | `zepto.darwinbox.in/...`                              | Darwinbox — Cloudflare returns 403 to every non-browser client                      | ✗    |
+| Blinkit   | `blinkit.com/careers/jobs`                            | own page, 0 openings, and it serves a bot-block page to non-browsers                | ✗    |
+| Juspay    | `joinus.juspay.in/?jobId=DEV-BE01`                    | own site with an open JSON endpoint (`/api/careerJobOpening`, 10 jobs) — not built  | ✗    |
+| Indeed    | `in.indeed.com/cmp/Indeed/jobs`                       | Indeed's own job site; reading it breaches its terms                                | ✗    |
+| Snapdeal  | — (only on LinkedIn / Instahyre)                      | no careers board                                                                    | ✗    |
+| Commotion | — (only on LinkedIn / Instahyre)                      | no careers board                                                                    | ✗    |
+| PinnacleU, FloBiz | — (dropped)                                   |                                                                                     | ✗    |
+
+Millennium came along with Netflix: it is on the same platform (`mlp.eightfold.ai/mlp.com`, 214) and
+is in the catalog too.
+
+## Discovery — 2026-10-04
+
+A pass for companies with Indian engineering hiring that were in neither the catalog nor this file:
+about 270 names probed against every platform, careers pages fingerprinted, Workday / Eightfold / iCIMS
+tenants guessed, the careers links collected for the misses, and Peak XV's portfolio job board (Consider)
+paged for its 80 companies' real ATSs. **109 added**, every one returned `found: true` from the lookup.
+Counts are India roles when probed; Workday's are `searchText=India`, so approximate.
+
+- **Name-addressable:** Zscaler 84, MongoDB 82, Sarvam 59, Hevo 51, Freshworks 31, Sigmoid 31, Wise 29,
+  Sprinto 28, Zeta 23, Check Point 23, Glance 22, Arista 21, Toast 20, DoorDash 19, FamPay 17,
+  MindTickle 16, SigNoz 16, Commvault 16, Elastic 14, Gen Digital 13, Nium 12, Grab 12, Truecaller 11,
+  Druva 11, OpenAI 10, Couchbase 9, Agoda 9, WorldQuant 8, Zynga 6, Quizizz 6, Canva 5, Ubisoft 5,
+  Anthropic 5, Atlan 4, Observe.AI 4, Adyen 4, Redis 3, Thoughtworks 3, Unacademy 3; Keka: Awfis,
+  Jupiter, Zluri, LambdaTest.
+- **Workday:** Micron, Deutsche Bank, LSEG, Cadence, NXP, Palo Alto Networks, Analog Devices, Wolters
+  Kluwer, Nike, Fractal, Vanguard, State Street, Northern Trust, Gartner, Thomson Reuters, Invesco,
+  BlackRock, Morningstar, Broadridge, PTC, Nasdaq, Expedia, Workday, Marvell, Zendesk, FactSet, Worldpay,
+  Capital One, Synchrony, Trellix, Qualys, Unity, Cloud Software Group, Uniphore, Red Hat, Broadcom,
+  Rapid7, and — behind Phenom front ends — GE HealthCare, GE Aerospace, Fiserv, FIS.
+- **Eightfold:** Infineon, HP, Autodesk, HSBC, NetApp. **iCIMS:** AMD, ICE, ZS.
+- **Oracle** (needs the place-id fix in `connectors.md`): Honeywell, Texas Instruments, Icertis, Dell.
+- **New platforms:** Kula — Multiplier, Rocketlane, Plum, Cashfree, Acko, CleverTap, Brightmoney,
+  SaaS Labs. Freshteam — Leap Finance, Haptik, Log 9 Materials, Mesh, Flynote.
+
+### Unsupported ATSs found
+
+| ATS | Companies | Verdict |
+|---|---|---|
+| Darwinbox | Porter, CarDekho, Tata 1mg, Perfios, Digit, Ninjacart, BigBasket, LeadSquared, M2P, Rapido, upGrad, Delhivery, Spinny, Airtel (Bharti), Zepto | Cloudflare refuses non-browser clients — not buildable |
+| TurboHire — **now supported** | Flipkart (incl. Cleartrip), Purplle, Khatabook, Urban Company are in the catalog. Ola (`olacareers`) and Setu (`pinelabsgroup`) have 0 public jobs today, so the lookup cannot verify them yet | See `connectors.md` § TurboHire |
+| Trakstar Hire | MoEngage, Whatfix, Drip Capital, Trusting Social | Server-rendered HTML only |
+| Mynexthire (likely) | Netcore, CoinDCX, Jupiter, SirionLabs | Its `?src=careers&p=<base64>` URLs; unverified |
+| SuccessFactors | SAP Labs, Moody's, Standard Chartered, Nomura | Not investigated |
+| Avature | Delta, Bloomberg, Synopsys, Siemens, EA, Tesco, Lululemon | Feed is 20 items, no paging, no location; job pages redirect |
+| Phenom (Workday hidden) | Franklin Templeton | Its Workday site lists 0 through the public API |
+| Zoho Recruit / SenseHQ / BrassRing / Taleo | Zoho, DrinkPrime · Capillary, Zetwerk · UBS · Société Générale | Not investigated |
+| raw iCIMS | MSCI, Arm | HTML portal, no Jibe front |
+| Workable | apna, Hugging Face | Open widget API; cheap to add |
+| own site / none | Kissflow, Exotel, Deel, Revolut, Ather, Zerodha, Pine Labs, Nykaa, OYO, Krutrim, Snapdeal, Commotion | — |
+
+### Skipped on pay
+
+Left out because a 2–3 years-of-experience CTC is likely under 10 LPA — an estimate from general market
+ranges, not measured: Accenture, Wipro, TCS, Infosys, Cognizant, Capgemini, Tech Mahindra, LTIMindtree,
+Mphasis, Hexaware, Coforge, Zensar, Persistent, Nagarro; EY, PwC, KPMG, Deloitte; Mu Sigma, LatentView,
+Tiger Analytics; Axis, HDFC, ICICI, Yes Bank, Vodafone Idea; Bosch (BGSW), Simplilearn, BYJU'S, Turing,
+Uplers. Kept although borderline: State Street, Northern Trust, HSBC, FIS, Fiserv, Broadridge,
+Morningstar.
 
 ## How to read a careers URL
 
@@ -34,6 +111,16 @@ what the handle must be.
 | `jobs.ashbyhq.com/acme`                                        | Ashby           | `acme` (or `ashby:acme`)                          |
 | `careers.smartrecruiters.com/Acme`                             | SmartRecruiters | `Acme`                                            |
 | `acme.wd5.myworkdayjobs.com/External_Careers`                  | Workday         | **the whole URL**, or `acme/External_Careers/wd5` |
+| `ats.rippling.com/acme/jobs`                                   | Rippling        | `acme` (or `rippling:acme`)                       |
+| `careers.acme.com/careers-home/jobs/123` with `icims.com` apply | iCIMS Jibe      | the host, `careers.acme.com`                      |
+| `acme.keka.com/careers/...`                                    | Keka            | the host, `acme.keka.com`                         |
+| `careers.acme.com/...` whose page calls `public.zwayam.com`    | Zwayam          | the host, `careers.acme.com`                      |
+| `ainterviews.com/job_board/acme_ho/...`                        | AInterviews     | `acme_ho`                                         |
+| `<host>/careers?...&domain=acme.com` (Eightfold)               | Eightfold       | `<host>/acme.com`, or the whole URL               |
+| `careers.kula.ai/acme`                                         | Kula            | `acme`                                            |
+| `acme.freshteam.com/jobs`                                      | Freshteam       | the host, `acme.freshteam.com`                    |
+| `acme.turbohire.co/careerpage/...`                             | TurboHire       | the host, `acme.turbohire.co`                     |
+| a Phenom site (`/global/en/job/...`, `/us/en/apply?...`)       | front end       | open a job; its `applyUrl` is usually Workday     |
 | anything else (custom careers site)                            | own ATS         | nothing — needs a new connector, see below        |
 
 Paste it into the **Check** box on the Add-a-source form first. `found: true` with a sensible posting
@@ -97,6 +184,34 @@ LinkedIn is the one to check first: it resolved on Lever, but
 [`job-discovery.md`](./job-discovery.md) lists LinkedIn among the sources that are out of reach, so
 `lever/linkedin` is unlikely to be theirs.
 
+## 2026-10-03 batch
+
+A second list of 46 names, probed on every platform the same day. Already in the catalog: UiPath,
+Tekion, JPMC, Cisco, Akamai, Visa, Mastercard, Adobe, eBay, American Express, Target, Harness, Lowe's,
+Meesho, Paytm. Duplicates within it: MMT, Visa, Walmart.
+
+| Company     | Handle                         | Board           | Postings | Note                                          |
+|-------------|--------------------------------|-----------------|----------|-----------------------------------------------|
+| Alteryx     | `alteryx/AlteryxCareers/wd108` | workday         | 74       |                                               |
+| Q2          | `q2ebanking/Q2/wd5`            | workday         | 51       |                                               |
+| ThoughtSpot | `thoughtspot`                  | rippling        | 50       |                                               |
+| Atlys       | `atlys`                        | ashby           | 47       |                                               |
+| Project44   | `project44`                    | greenhouse      | 35       |                                               |
+| Netomi      | `netomi`                       | lever           | 23       |                                               |
+| AiPrise     | `aiprise`                      | ashby           | 16       | mostly US                                     |
+| Ixigo       | `ixigo`                        | smartrecruiters | 10       |                                               |
+| Groww       | `growwreferrals`               | greenhouse      | 9        | a second board; holds the engineering roles   |
+| Termgrid    | `termgrid`                     | lever           | 6        |                                               |
+| Hyperproof  | `hyperproof`                   | greenhouse      | 3        |                                               |
+
+Groww's job URLs say `job-boards.eu.greenhouse.io`, but the ordinary boards API serves both of its
+boards; there is no EU API host to configure.
+
+**Not reachable:** Google, MakeMyTrip, PayU and Teradata run their own careers stacks (and the
+Teradata link supplied 404s); Digii posts openings as plain WordPress pages with no ATS behind them;
+Delta is Avature behind bot protection. The rest were resolved from careers links — see **Links collected** above. Phenom (on its own
+Phenom CX front end) was dropped by choice.
+
 ## Not working — Workday, no code needed (37 left)
 
 Workday **is already supported**. It is the one platform that cannot be resolved from a bare company
@@ -159,8 +274,8 @@ at a time and consider a slower schedule for that source.
 | BNY Mellon                  | `eofe.fa.us2.oraclecloud.com/BNY-Careers` — oraclehcm, 1385, **in catalog**        | ☑    |
 | Cisco                       | `cisco/Cisco_Careers/wd5` — workday, 1288, **in catalog**                          | ☑    |
 | Citi                        | `citi/2/wd5` — workday, 2000, **in catalog**                                       | ☑    |
-| Delta Air Lines             | Avature — no connector                                                             | ✗    |
-| Docusign                    | iCIMS — no connector                                                               | ✗    |
+| Delta Air Lines             | Avature, and the tenant blocks non-browser requests (HTTP 202)                     | ✗    |
+| Docusign                    | `careers.docusign.com` — jibe, 257, **in catalog**                                 | ☑    |
 | Goldman Sachs               | own careers API — no third-party ATS in the page                                   | ✗    |
 | HCL Group                   | SuccessFactors — no connector                                                      | ✗    |
 | Hewlett Packard Enterprise  | `hpe/Jobsathpe/wd5` — workday, 1148, **in catalog**                                | ☑    |
@@ -172,21 +287,21 @@ at a time and consider a slower schedule for that source.
 | MasterCard                  | `mastercard/CorporateCareers/wd1` — 1080 postings, **in the catalog**              | ☑    |
 | MathWorks                   | own careers API — no third-party ATS in the page                                   | ✗    |
 | MediaTek                    | own careers API — no third-party ATS in the page                                   | ✗    |
-| Millennium                  | Eightfold — **API open**, `app.eightfold.ai?domain=mlp.com`, 217 roles             | ✗    |
-| Morgan Stanley              | Eightfold — API gated                                                              | ✗    |
+| Millennium                  | `mlp.eightfold.ai/mlp.com` — eightfold, 214, **in catalog**                        | ☑    |
+| Morgan Stanley              | `morganstanley.eightfold.ai/morganstanley.com` — eightfold, 1348, **in catalog**   | ☑    |
 | Nutanix                     | own careers API — no third-party ATS in the page                                   | ✗    |
 | Nvidia                      | `nvidia/NVIDIAExternalCareerSite/wd5` — workday, 2000, **in catalog**              | ☑    |
-| PayPal                      | Eightfold — API gated                                                              | ✗    |
+| PayPal                      | `paypal.eightfold.ai/paypal.com` — eightfold, 288, **in catalog**                  | ☑    |
 | PayU                        | own careers API — no third-party ATS in the page                                   | ✗    |
 | Philips                     | `philips/jobs-and-careers/wd3` — workday, 813, **in catalog**                      | ☑    |
-| Qualcomm                    | Eightfold — API gated                                                              | ✗    |
+| Qualcomm                    | `careers.qualcomm.com/qualcomm.com` — eightfold, 2054 · **set locations**, **in catalog** | ☑ |
 | S&P Global                  | `spgi/SPGI_Careers/wd5` — workday, 308, **in catalog**                             | ☑    |
 | Salesforce                  | own careers API — no third-party ATS in the page                                   | ✗    |
 | Schrödinger                 | own careers API — no third-party ATS in the page                                   | ✗    |
 | Teradata                    | own careers API — no third-party ATS in the page                                   | ✗    |
 | Tower Research Capital      | `towerresearchcapital` — greenhouse, 85, **in catalog**                            | ☑    |
 | Visa                        | `visa/Visa/wd5` — workday, 759, **in catalog**                                     | ☑    |
-| Walmart                     | own careers API — no third-party ATS in the page                                   | ✗    |
+| Walmart                     | `walmart/WalmartExternal/wd504` — workday, 2000+, **in catalog**                   | ☑    |
 | Wells Fargo                 | own careers API — no third-party ATS in the page                                   | ✗    |
 
 ## Not working — probably a supported board under a slug I could not guess (20)
@@ -201,18 +316,18 @@ off the careers URL — it is usually a 30-second job and needs no code.
 | Atlassian                                         | own careers API — no third-party ATS in the page                              | ✗    |
 | BrowserStack                                      | `browserstack/External/wd3` — workday, 29, **in catalog**                     | ☑    |
 | CrowdStrike                                       | `crowdstrike/crowdstrikecareers/wd5` — workday, 416, **in catalog**           | ☑    |
-| Cohesity                                          | own careers API — no third-party ATS in the page                              | ✗    |
+| Cohesity                                          | `cohesity/Cohesity_Careers/wd5` — workday, 183, **in catalog**                | ☑    |
 | Commotion *(could not identify — check the name)* | not able to find careers site                                                 | ☐    |
 | DigitalOcean                                      | `digitalocean98` — greenhouse, 150 *(token is not guessable)*, **in catalog** | ☑    |
-| Eightfold                                         | Eightfold — API gated ("Not authorized for PCSX")                             | ✗    |
+| Eightfold                                         | `app.eightfold.ai/eightfold.ai` — eightfold, 60, **in catalog**               | ☑    |
 | GoJek                                             | own careers API — no third-party ATS in the page                              | ✗    |
 | Harness                                           | `harnessinc` — greenhouse, 77, **in catalog**                                 | ☑    |
-| Juspay                                            | own careers API — no third-party ATS in the page                              | ✗    |
-| Lenskart                                          | own careers API — no third-party ATS in the page                              | ✗    |
+| Juspay                                            | own site, open JSON endpoint (10 jobs) — not built                            | ✗    |
+| Lenskart                                          | `lenskart_ho` — ainterviews, 74, **in catalog**                               | ☑    |
 | MakeMyTrip                                        | own careers API — no third-party ATS in the page                              | ✗    |
 | Moveworks                                         | own careers API — no third-party ATS in the page                              | ✗    |
 | Razorpay                                          | `razorpaysoftwareprivatelimited` — greenhouse, 25, **in catalog**             | ☑    |
-| Rippling                                          | own careers API — no third-party ATS in the page                              | ✗    |
+| Rippling                                          | `rippling` — rippling, 331, **in catalog**                                    | ☑    |
 | ShareChat                                         | own careers API — no third-party ATS in the page                              | ✗    |
 | Spotnana                                          | own careers API — no third-party ATS in the page                              | ✗    |
 | Sprinklr                                          | `sprinklr/careers/wd1` — workday, 92, **in catalog**                          | ☑    |
@@ -234,25 +349,25 @@ fragile.
 |-------------|------------------------|------|
 | Amazon | own careers API — no third-party ATS in the page | ✗ |
 | Apple | own careers API — no third-party ATS in the page | ✗ |
-| Blinkit     |                        | ☐    |
+| Blinkit     | own page, 0 openings, bot-blocked | ✗ |
 | Bloomberg | Avature — no connector | ✗ |
-| Booking.com | iCIMS (`external-workingatbooking.icims.com`) — no connector | ✗ |
+| Booking.com | `jobs.booking.com` — jibe, 153, **in catalog** | ☑ |
 | D. E. Shaw | own careers API — no third-party ATS in the page | ✗ |
 | eBay | `ebay/apply/wd5` — workday, 274 *(Phenom front-end hides it)*, **in catalog** | ☑ |
-| Flipkart | TurboHire — no connector | ✗ |
+| Flipkart | `flipkart.turbohire.co` — turbohire, 8 public, **in catalog** | ☑ |
 | Google | own careers API — no third-party ATS in the page | ✗ |
 | Intel | `intel/External/wd1` — workday, 598, **in catalog** | ☑ |
 | Jio | own careers API — no third-party ATS in the page | ✗ |
 | Meta | own careers API — no third-party ATS in the page | ✗ |
 | Microsoft | own careers API — no third-party ATS in the page | ✗ |
 | Myntra | own careers API — no third-party ATS in the page | ✗ |
-| Netflix | Eightfold — **API open**, `netflix.eightfold.ai?domain=netflix.com`, 500 roles | ✗ |
+| Netflix | `explore.jobs.netflix.net/netflix.com` — eightfold, 471, **in catalog** | ☑ |
 | Oracle | `eeho.fa.us2.oraclecloud.com/CX_45001` — oraclehcm, 2283, **in catalog** | ☑ |
 | PhonePe | `PHONEPELIMITED` — smartrecruiters, 42, **in catalog** | ☑ |
 | Samsung | `sec/Samsung_Careers/wd3` — workday, 662 *(tenant is `sec`, not `samsung`)*, **in catalog** | ☑ |
 | Target | `target/targetcareers/wd5` — workday, 2000, **in catalog** | ☑ |
-| Zepto       |                        | ☐    |
-| Zomato      |                        | ☐    |
+| Zepto       | Darwinbox, Cloudflare-blocked | ✗ |
+| Zomato      | `Zomato1` — smartrecruiters, 3, **in catalog** | ☑ |
 
 ## Duplicates and typos in the original list
 

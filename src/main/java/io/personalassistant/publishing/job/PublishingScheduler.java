@@ -7,11 +7,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Wakes periodically and drains the outbox. The tick bounds how long a freshly queued message waits for
- * its first attempt; retry timing is each delivery's own {@code nextAttemptAt}.
- *
- * <p>Single-node, like every other scheduler here: {@code SKIP} stops overlapping ticks in one process,
- * and the delivery lease is what would keep two processes apart.
+ * The tick bounds how long a fresh message waits for its first attempt; retries follow each delivery's
+ * nextAttemptAt. SKIP stops overlapping ticks in one process; the delivery lease would keep two processes
+ * apart.
  */
 @ApplicationScoped
 public class PublishingScheduler {

@@ -1,20 +1,8 @@
 import { ApiError, NetworkError } from '@/api/http'
 
-/**
- * Backend errors, rewritten into something a user can act on.
- *
- * The server has no exception mappers, so failures arrive as raw exception messages or a bare 500.
- * Showing those verbatim is useless ("SRCFG00040: The config property … considered to be null").
- * Each rule below maps a recognisable signature to a cause and a fix; the original text is always
- * kept in `raw` and shown under Technical details, so nothing is hidden — just de-emphasised.
- */
-
 export interface FriendlyError {
-  /** Short headline. */
   title: string
-  /** What went wrong and what to do, in one or two sentences. */
   detail: string
-  /** The original server message, for the Technical details disclosure. */
   raw?: string
 }
 
@@ -81,7 +69,7 @@ const rules: Rule[] = [
     match: /llm|groq|api.?key|StubLlmProvider|completion/i,
     title: 'The answer service is unavailable',
     detail:
-      'Written answers need an LLM provider. Set GROQ_API_KEY (or another OpenAI-compatible endpoint) and restart the server. Search itself still works without it.',
+      'Written answers need an LLM. Add or fix one in the LLM section under Accounts. Search itself still works without it.',
   },
   {
     match: /opensearch|connection refused.*9200|index_not_found/i,
@@ -147,10 +135,6 @@ export function friendlyError(error: unknown): FriendlyError {
   return { title: 'Something went wrong', detail: raw || 'No further detail was given.', raw }
 }
 
-/**
- * Same translation for the `lastError` string carried on a Knowledge or Connection — those never
- * come through an HTTP error, so they need their own entry point.
- */
 export function friendlyLastError(lastError: string): FriendlyError {
   const matched = rules.find((rule) => rule.match.test(lastError))
   if (matched) return { title: matched.title, detail: matched.detail, raw: lastError }

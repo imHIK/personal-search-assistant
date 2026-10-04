@@ -1,193 +1,149 @@
 package io.personalassistant.storage.repository;
 
+import io.personalassistant.domain.model.EnrichmentOutcome;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityFilter;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
+import io.personalassistant.domain.model.FacetValue;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
-/**
- * Persistence port for the {@code entities} collection (replaces {@code DocumentRepository}).
- * The claim methods power the indexing work queue and, like cursors, must be atomic.
- */
+/** The claim methods power the indexing queue and must be atomic. */
 public interface EntityRepository {
 
     /**
-     * Insert or update by natural key {@code (knowledgeId, externalId)}; preserves id/createdAt.
+     * Writes only the fields ingestion owns, never the indexer's {@code index.*}, which stay true until the
+     * chunks are replaced. New content resets the work queue and drops any lease, fencing out a worker
+     * mid-index on the previous revision: its markIndexed becomes a no-op.
      *
-     * <p><b>Field ownership.</b> This writes only the fields ingestion owns — {@code iterableId},
-     * {@code entityType}, {@code raw}, {@code content}, {@code metadata}, {@code checksum},
-     * {@code expiresAt}, {@code lastSeenGeneration}, {@code updatedAt} — and never the indexer's
-     * {@code index.chunkCount}/{@code embeddingModel}/{@code indexedAt}, which describe what is
-     * currently in the search index and stay true until the chunks are actually replaced.
-     *
-     * <p>New content also resets the work queue ({@code status=INGESTED}, {@code needsReindex=false},
-     * retry cleared, {@code index.error} cleared) <em>and drops any lease</em>. Dropping the lease is
-     * what fences out a worker mid-index on the previous revision: its {@link #markIndexed} is
-     * lease-fenced, so it becomes a no-op instead of marking the stale text INDEXED and leaving the
-     * new content permanently unsearchable.
-     *
-     * @return the stored entity as it now exists
+     * @return the stored entity
      */
     Entity upsert(Entity entity);
 
     Optional<Entity> findById(String id);
 
-    /** Change-detection lookup during ingestion. */
     Optional<Entity> findByKnowledgeAndExternalId(String knowledgeId, String externalId);
 
-    /**
-     * Atomically claim up to {@code limit} entities that need (re)indexing — {@code INGESTED},
-     * or {@code needsReindex=true}, or an {@code INDEXING} entity whose lease has expired —
-     * flipping each to {@code INDEXING} with a fresh lease.
-     */
+    /** INGESTED, needsReindex, or INDEXING with an expired lease, flipped to INDEXING with a fresh lease. */
     List<Entity> claimForIndexing(int limit, String owner, Duration lease);
 
-    /**
-     * Same as {@link #claimForIndexing(int, String, Duration)} but restricted to a single
-     * knowledge. Used by the indexing job to claim a fair per-knowledge quota so one knowledge's
-     * backlog can't starve the others.
-     */
+    /** Restricted to one knowledge, for the indexing job's fair per-knowledge quota. */
     List<Entity> claimForIndexing(String knowledgeId, int limit, String owner, Duration lease);
 
-    /**
-     * The distinct knowledge ids that currently have entities awaiting (re)indexing. Drives
-     * round-robin fairness in the indexing job. Capped at {@code limit} ids.
-     */
     List<String> distinctPendingKnowledgeIds(int limit);
 
-    /** Atomically claim up to {@code limit} tombstoned entities whose chunks still need removal. */
+    /** Tombstoned entities whose chunks still need removal. */
     List<Entity> claimForDeletion(int limit, String owner, Duration lease);
 
     /**
-     * Mark an entity successfully indexed and record what was written, clearing the retry streak.
-     *
-     * <p>Lease-fenced: applies only if {@code owner} still holds a live lease. Returns {@code false}
-     * if the lease was lost, in which case the caller must stop touching this entity — another
-     * worker owns it now (invariant 2).
+     * Clears the retry streak. Fenced: false means the lease was lost, and the caller must stop touching the
+     * entity.
      */
-    boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt);
+    default boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel,
+                                Instant indexedAt) {
+        return markIndexed(id, owner, chunkCount, embeddingModel, indexedAt, EnrichmentOutcome.keep());
+    }
 
-    /**
-     * Mark a tombstoned entity's chunks as cleaned (idempotent terminal state). Lease-fenced; see
-     * {@link #markIndexed}.
-     */
+    /** Also writes the enrichment outcome, in the same fenced update. */
+    boolean markIndexed(String id, String owner, int chunkCount, String embeddingModel, Instant indexedAt,
+                        EnrichmentOutcome enrichment);
+
+    /** An idempotent terminal state. Fenced. */
     boolean markDeletionComplete(String id, String owner, Instant cleanedAt);
 
-    /**
-     * Record an indexing failure: retry/backoff bookkeeping, or terminal {@code FAILED}. A terminal
-     * resting status also clears {@code needsReindex}, so the entity leaves the indexing queue for
-     * good — {@link #flagNeedsReindex} is the only way back. Lease-fenced; see {@link #markIndexed}.
-     */
-    boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
-                       int retryCount, Instant nextAttemptAt);
+    /** A terminal status also clears needsReindex; flagNeedsReindex is the only way back. Fenced. */
+    default boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                               int retryCount, Instant nextAttemptAt) {
+        return markFailed(id, owner, restingStatus, error, retryCount, nextAttemptAt, EnrichmentOutcome.keep());
+    }
 
     /**
-     * Dead-letter an entity whose stored content reference no longer resolves, and mark it for
-     * re-fetching. One fenced write rather than {@link #markFailed} plus a flag, because markFailed
-     * drops the lease and would fence the second call out.
+     * Also writes the enrichment outcome, in the same fenced update: a pass that enriched and then failed
+     * keeps what it paid for, so the retry does not call the LLM again.
+     */
+    boolean markFailed(String id, String owner, EntityStatus restingStatus, String error,
+                       int retryCount, Instant nextAttemptAt, EnrichmentOutcome enrichment);
+
+    /**
+     * Dead-letters and sets needsRefetch in one fenced write, since markFailed drops the lease and would
+     * fence out a second call. Terminal at once: a purged staged file does not come back, and needsRefetch is
+     * the recovery route.
      *
-     * <p>Terminal immediately — no retry budget is consumed or granted — because a staged file that
-     * has been purged does not come back, so the retry ladder would only postpone an actionable dead
-     * letter by {@code retry-limit × backoff}. The {@code needsRefetch} it sets is the recovery
-     * route: the next walk that re-lists the item re-materializes it despite an unchanged checksum.
-     *
-     * @return {@code true} if the caller still held the lease
+     * @return false if the lease was lost
      */
     boolean markContentMissing(String id, String owner, String error);
 
     /**
-     * Flag every file-backed entity of a knowledge as needing its content fetched again, for
-     * connectors whose {@code fileRef} is a staged copy rather than the source file.
+     * Pairs with rewinding the cursors: the flag alone never reaches an unchanged item, and a rewind alone
+     * meets a matching checksum. Inline-text and DELETED entities are skipped.
      *
-     * <p>Pairs with rewinding the knowledge's cursors: the flag alone changes nothing, because an
-     * unchanged item never reaches the walk's materialize step, and a rewind alone changes nothing,
-     * because the checksum still matches. Together they make the ordinary ingestion walk refresh the
-     * content — which keeps re-fetching inside the existing lease, permit and rate-limit machinery
-     * instead of issuing one API call per entity from an HTTP thread.
-     *
-     * <p>Entities with inline text are skipped: their content is in this collection and is not at
-     * risk. {@code DELETED} is excluded.
-     *
-     * @return how many entities were flagged
+     * @return how many were flagged
      */
     int flagNeedsRefetchByKnowledge(String knowledgeId);
 
-    /**
-     * Flag an entity for re-indexing without re-fetching (e.g. after a config/model bump), and — if
-     * it was dead-lettered — revive it with a fresh retry budget. This is the documented exit from
-     * terminal {@code FAILED}. Deliberately leaves any live lease alone: an entity a worker is
-     * mid-run on stays out of the queue until that lease lapses.
-     */
+    /** Also revives a FAILED entity: the documented exit. A live lease is left alone. */
     void flagNeedsReindex(String id);
 
     /**
-     * Flag every one of a knowledge's entities for re-indexing without re-fetching any of them.
+     * For an embedding-model change, when every vector must be rebuilt. Excludes DELETED and skips entities
+     * with a live lease.
      *
-     * <p>The bulk counterpart to {@link #flagNeedsReindex}, and what makes changing the embedding model
-     * survivable: vectors from two different models are not comparable even at the same dimension, so a
-     * model switch leaves the corpus half-and-half and semantically broken until everything is
-     * re-embedded. Entity-at-a-time was the only route before this.
-     *
-     * <p>Excludes {@code DELETED} (already on its way out) and skips any entity with a live lease, whose
-     * in-flight run would otherwise be fenced out mid-write.
-     *
-     * @return how many entities were flagged
+     * @return how many were flagged
      */
     int flagNeedsReindexByKnowledge(String knowledgeId);
 
-    /**
-     * Stamp the generation a walk last saw this entity at — the cheap single-field touch used by the
-     * change-detection skip path so an unchanged, already-{@code INDEXED} entity is still recorded as
-     * "seen this generation" and doesn't later look stale. Idempotent; leaves {@code updatedAt}.
-     */
+    /** Leaves updatedAt alone, so a re-walk does not reshuffle the listing. */
     void stampLastSeen(String id, long generation);
 
-    /**
-     * Return a knowledge's dead-lettered entities to the indexing queue with a fresh retry budget
-     * ({@code FAILED} → {@code INGESTED}). The bulk counterpart to {@link #flagNeedsReindex}, and the
-     * only other way out of {@code FAILED}.
-     *
-     * @return how many entities were revived
-     */
+    /** FAILED to INGESTED with a fresh retry budget. */
     int retryFailedByKnowledge(String knowledgeId);
 
-    /** Tombstone an entity so the indexing stage removes its chunks. */
     void markDeleted(String id, Instant updatedAt);
 
-    /**
-     * Entities carrying an explicit {@code expiresAt} that has passed — the source told us when the
-     * item stops being valid, which always beats the knowledge-level window. Already-{@code DELETED}
-     * entities are excluded so a sweep does not re-tombstone what is already on its way out.
-     */
+    /** Excludes DELETED, so a sweep does not re-tombstone. */
     List<Entity> findExpired(int limit, Instant now);
 
-    /**
-     * A knowledge's entities created strictly before {@code cutoff} — the knowledge-level retention
-     * window, applied only to entities with no explicit {@code expiresAt} of their own.
-     *
-     * <p>Age is deliberately measured from {@code createdAt} rather than {@code updatedAt}: an item
-     * that has sat unchanged is exactly what retention is for, so a change-based clock would never
-     * fire on it. Already-{@code DELETED} entities are excluded.
-     */
+    /** Only entities with no expiresAt of their own; excludes DELETED. */
     List<Entity> findCreatedBefore(String knowledgeId, Instant cutoff, int limit);
 
     List<Entity> findByStatus(EntityStatus status, int limit);
 
     /**
-     * Page a knowledge's entities newest-first for the console's entity browser. Returns
-     * {@link EntitySummary} projections rather than full entities — {@code raw} and
-     * {@code content.text} dominate an entity document and a listing needs neither.
-     *
-     * <p>Ordered {@code updatedAt} descending with {@code id} as the tiebreak so paging is
-     * deterministic. Note {@link #stampLastSeen} deliberately leaves {@code updatedAt} alone, so a
-     * membership re-walk does not reshuffle the listing.
-     *
-     * @param status optional status filter; {@code null} means all statuses
+     * Summaries, since raw and content.text dominate a document. Ordered by updatedAt descending with id as
+     * the tiebreak, so paging is deterministic.
      */
-    List<EntitySummary> findByKnowledge(String knowledgeId, EntityStatus status, int limit, int offset);
+    List<EntitySummary> findByKnowledge(String knowledgeId, EntityQuery query, int limit, int offset);
+
+    /** Must apply exactly findByKnowledge's filter, or the last page renders empty. */
+    long countByKnowledge(String knowledgeId, EntityQuery query);
+
+    /**
+     * Across knowledges, without {@code raw} and {@code content}: the bulk of a document, and a browser needs
+     * neither. Ordered by the filter's sort with id as the tiebreak.
+     */
+    List<Entity> findMatching(EntityFilter filter, int limit, int offset);
+
+    /** Must apply exactly findMatching's filter. */
+    long countMatching(EntityFilter filter);
+
+    /**
+     * Distinct values of each path with their counts, most common first; a list-valued field counts each
+     * element. Nulls are left out.
+     */
+    Map<String, List<FacetValue>> facets(EntityFilter filter, List<String> paths, int limitPerPath);
+
+    /**
+     * Merges into {@code custom}: a null value removes that key. User-owned, so neither stage's lease
+     * applies.
+     *
+     * @return false if no such entity
+     */
+    boolean mergeCustom(String id, Map<String, Object> values);
 
     long countByKnowledgeAndStatus(String knowledgeId, EntityStatus status);
 
@@ -197,6 +153,5 @@ public interface EntityRepository {
 
     void deleteByKnowledge(String knowledgeId);
 
-    /** Remove all entities of one iterable within a knowledge (cascade when the iterable is deleted at source). */
     void deleteByKnowledgeAndIterable(String knowledgeId, String iterableId);
 }

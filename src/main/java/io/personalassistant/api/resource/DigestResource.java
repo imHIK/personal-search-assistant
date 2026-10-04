@@ -19,17 +19,11 @@ import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-/**
- * Scheduled saved searches: a query (or a source document), a cadence, a look-back window, and an
- * optional prompt-catalogue task over the results. Each execution is kept as a run, which is both the
- * history and how "only what is new" is computed.
- */
 @Path("/api/digests")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class DigestResource {
 
-    /** Cap on how many runs one listing returns; the history is unbounded. */
     private static final int MAX_RUNS = 100;
 
     @Inject
@@ -56,19 +50,10 @@ public class DigestResource {
         }
     }
 
-    /**
-     * Edit a digest. Any field may be sent; anything absent is left alone, so the pause/resume body
-     * {@code {"enabled": false}} still works exactly as before.
-     *
-     * <p>The run history survives an edit, which matters more than it looks: the history is the
-     * already-seen set, so the previous delete-and-recreate route silently made an edited digest
-     * re-report its whole window. Use {@code POST /{id}/reset-history} when that is what you want.
-     */
+    /** Absent fields are left alone. The run history, which is the already-seen set, survives an edit. */
     @PATCH
     @Path("/{id}")
     public DigestDto update(@PathParam("id") String id, JsonNode body) {
-        // Taken as a tree rather than a bound record on purpose: which keys were *sent* is part of
-        // this endpoint's contract, and binding loses it. DigestPatchDto explains why.
         if (body == null || !body.isObject()) {
             throw ApiErrors.badRequest("a patch body is required");
         }
@@ -76,15 +61,12 @@ public class DigestResource {
             return DigestDto.from(digests.update(id, new DigestPatchDto(body).toPatch()));
         } catch (NoSuchElementException e) {
             throw ApiErrors.notFound(e.getMessage());
-        } catch (IllegalArgumentException e) {          // unparseable schedule/window, or empty query
+        } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());
         }
     }
 
-    /**
-     * Forget what has already been reported, keeping the recorded runs. The next run may repeat things
-     * already seen — the point of the operation after widening a query.
-     */
+    /** Forgets what was already reported, keeping the recorded runs. */
     @POST
     @Path("/{id}/reset-history")
     public DigestDto resetHistory(@PathParam("id") String id) {
@@ -103,8 +85,8 @@ public class DigestResource {
     }
 
     /**
-     * Run now, without waiting for the schedule, and return the run. A search or task failure comes
-     * back as a run carrying {@code error} rather than as a 5xx — the run happened, it just failed.
+     * A search failure comes back as a run carrying {@code error}, not a 5xx; a task failure as one carrying
+     * {@code taskError}.
      */
     @POST
     @Path("/{id}/run")
@@ -132,7 +114,7 @@ public class DigestResource {
                 .orElseThrow(() -> ApiErrors.notFound("Digest " + id + " has no run yet"));
     }
 
-    /** One run by id. {@code 404} when it is not this digest's, so a stale link cannot leak a run. */
+    /** 404 when the run belongs to another digest. */
     @GET
     @Path("/{id}/runs/{runId}")
     public DigestRunDto run(@PathParam("id") String id, @PathParam("runId") String runId) {

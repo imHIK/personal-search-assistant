@@ -6,15 +6,8 @@ import java.util.List;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Resolves the effective {@link ChunkingSpec} for a knowledge by overlaying its per-knowledge
- * {@link Knowledge.ChunkingSettings} (each field nullable = "inherit") onto the global
- * {@code app.chunking.*} defaults. Character-based strategies default to the character size/overlap;
- * the {@code token} strategy defaults to the (smaller) token size/overlap so a knowledge that just
- * switches to {@code token} gets sensible token-scaled windows without having to also resize.
- *
- * <p>Because {@code IndexingRunner} calls this fresh for every entity it indexes, a settings change
- * takes effect on the next entity indexed with no re-chunk of existing chunks — the "direct update"
- * semantics the edit path guarantees.
+ * Per-knowledge settings overlaid on {@code app.chunking.*}; {@code token} defaults to token-scaled sizes.
+ * Resolved fresh per entity, so a change applies to the next entity indexed without re-chunking anything.
  */
 @ApplicationScoped
 public class ChunkingSpecResolver {
@@ -28,10 +21,10 @@ public class ChunkingSpecResolver {
     @ConfigProperty(name = "app.chunking.overlap", defaultValue = "150")
     int defaultOverlap;
 
-    @ConfigProperty(name = "app.chunking.token.size", defaultValue = "256")
+    @ConfigProperty(name = "app.chunking.token.size", defaultValue = "512")
     int defaultTokenSize;
 
-    @ConfigProperty(name = "app.chunking.token.overlap", defaultValue = "32")
+    @ConfigProperty(name = "app.chunking.token.overlap", defaultValue = "64")
     int defaultTokenOverlap;
 
     public ChunkingSpec resolve(Knowledge knowledge) {

@@ -28,28 +28,10 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Gmail connector. Where the local filesystem is a no-auth walk, Gmail is the interesting case that
- * proves the {@link TokenWindowGrabber} base against a real cloud API: OAuth bearer auth, opaque
- * page-token pagination, an N+1 list→get fetch shape, and a source whose native order (newest-first)
- * differs from the anchor-relative window the framework asks for.
- *
- * <h2>Iterables</h2>
- * When {@code inputs.labelIds} lists specific labels, each becomes its own independently-paged
- * iterable (a natural sub-stream — INBOX, a project label…). With none configured the connector
- * exposes a single {@code all-mail} iterable that pages every message. A message carrying several
- * labels is grabbed once per matching label iterable but upserts to the same {@code (knowledge,
- * externalId)} entity, so storage never duplicates it.
- *
- * <h2>Pagination</h2>
- * Gmail's {@code messages.list} always returns newest-first and paginates by opaque token; the only
- * lever on the window is the {@code after:}/{@code before:} search predicate. That is exactly the shape
- * {@link TokenWindowGrabber} drives, so this connector extends it and implements a single
- * {@link #fetchWindow}: translate the {@link TimeWindow} to {@code after:}/{@code before:}, list, map.
- * The base owns the forward high-water floor and the backward token sweep — the connector never
- * branches on direction. {@code after:} is applied at second granularity, so a boundary second can
- * re-list a handful of already-seen messages; the ingestion runner's checksum change-detection drops
- * them, guaranteeing progress without gaps. Bodies travel inline in {@link RawItem#text()} (subject +
- * participants + plain-text body), never as a file ref.
+ * Each configured label is an iterable, or one all-mail iterable when none is. A message under several labels
+ * is grabbed per label but upserts to one entity. Extends TokenWindowGrabber, translating the window to
+ * after:/before: at second granularity; the boundary second re-lists a few messages, which the checksum
+ * drops. Bodies are inline text, never a fileRef.
  */
 @ApplicationScoped
 public class GmailConnector extends TokenWindowGrabber {
@@ -75,30 +57,24 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     public boolean requiresConnection() {
-        return true; // Gmail is OAuth-authenticated through a Connection
+        return true;
     }
 
     @Override
     public boolean hasDynamicIterables() {
-        return true; // new labels can appear after activation
+        return true;
     }
 
     @Override
     public SyncSchedule defaultSchedule() {
-        // No push channel wired up, so incremental sync is a poll. A 15-minute cadence keeps mail
-        // reasonably fresh without hammering the API; users can override per-knowledge.
+        // No push channel, so incremental sync is a poll.
         return SyncSchedule.ofInterval(Duration.ofMinutes(15));
     }
 
     @Override
     public String membershipSignature(Map<String, Object> inputs) {
-        // Only `query` is a within-iterable filter (design §3.2): it is combined into EVERY iterable's
-        // fetch, so changing it moves the membership boundary *inside* each surviving iterable — the
-        // case a discovery diff can't see, which must trigger a re-walk. `labelIds` is deliberately
-        // NOT here: each label is its own iterable, so adding/removing a label is an iterable
-        // add/remove handled by reconcile (§3.1: create/park), and a given label iterable's messages
-        // don't change because a *different* label was added. Including labelIds would force a
-        // needless re-walk of the untouched labels on every label add/remove.
+        // Only query filters inside every iterable, so only it moves a boundary. labelIds is left out: each
+        // label is its own iterable, handled by reconcile.
         Object query = inputs == null ? null : inputs.get("query");
         return "query=" + query;
     }
@@ -115,8 +91,7 @@ public class GmailConnector extends TokenWindowGrabber {
 
     @Override
     public void verify(Knowledge knowledge) {
-        // Inputs are all optional for Gmail (labelIds/query); credentials are verified at the
-        // connection level via verifyConnection. Nothing knowledge-specific to validate here.
+        // Nothing knowledge-specific to validate: credentials are verified per connection.
     }
 
     @Override
@@ -153,11 +128,7 @@ public class GmailConnector extends TokenWindowGrabber {
         return new Page(items, list.path("nextPageToken").asText(null));
     }
 
-    /**
-     * Translate the window's bounds into Gmail's {@code after:}/{@code before:} search predicates
-     * (second granularity). An open bound emits no predicate on that side, so the same method serves
-     * the forward window ({@code after:<floor>}) and the backward window ({@code before:<anchor>}).
-     */
+    /** An open bound emits no predicate on that side. */
     private static String windowQuery(TimeWindow window) {
         StringBuilder q = new StringBuilder();
         if (window.hasLo()) {
@@ -173,11 +144,8 @@ public class GmailConnector extends TokenWindowGrabber {
     }
 
     /**
-     * Re-read one message by id. Gmail bodies are stored inline in Mongo, so this connector stays
-     * {@code REINDEX_ONLY} and nothing calls this unless fetching has been forced on globally — but
-     * {@code messages.get} is exactly what the walk already uses per message, so the re-listed item
-     * is byte-for-byte what a walk would have produced. A deleted message 404s, which is the one
-     * signal this source gives that a message is gone.
+     * Bodies are stored inline, so this connector is REINDEX_ONLY and this runs only when fetching is forced
+     * globally. A deleted message 404s, the one signal that it is gone.
      */
     @Override
     public Optional<RawItem> fetchOne(Knowledge knowledge, Entity entity) {
@@ -191,8 +159,6 @@ public class GmailConnector extends TokenWindowGrabber {
             throw e;
         }
     }
-
-    // ---- message -> RawItem ------------------------------------------------------------------
 
     private RawItem fetchAndMap(GoogleAuth token, String id) {
         if (id == null || id.isBlank()) {
@@ -258,7 +224,7 @@ public class GmailConnector extends TokenWindowGrabber {
         return sb.toString();
     }
 
-    /** Depth-first search of the MIME tree for the best textual body (prefer text/plain). */
+    /** Depth-first, preferring text/plain. */
     private static String extractText(JsonNode payload) {
         String plain = findPart(payload, "text/plain");
         if (plain != null) {
@@ -311,7 +277,7 @@ public class GmailConnector extends TokenWindowGrabber {
         }
     }
 
-    /** Crude tag strip — good enough to make an HTML-only mail searchable; Tika is not on this path. */
+    /** Crude, but enough to make an HTML-only mail searchable; Tika is not on this path. */
     private static String stripHtml(String html) {
         return html.replaceAll("(?is)<(script|style).*?</\\1>", " ")
                 .replaceAll("(?s)<[^>]+>", " ")
@@ -320,8 +286,6 @@ public class GmailConnector extends TokenWindowGrabber {
                 .replaceAll("\\n{3,}", "\n\n")
                 .trim();
     }
-
-    // ---- inputs / labels ---------------------------------------------------------------------
 
     @SuppressWarnings("unchecked")
     private static List<String> configuredLabelIds(Knowledge knowledge) {

@@ -70,7 +70,7 @@ the core.
 | `domain.model.enums` | `SourceType`, `KnowledgeStatus`, `EntityStatus`, `EntityType`, `CursorStatus`, `CursorDirection`, `ConnectionStatus`, `DiscoveryOutcome`, `DiscoveryTrigger` | core |
 | `domain.model.search` | `SearchQuery`, `SearchHit`, `SearchResponse` | core |
 | `domain.service` | Use-case ports: `KnowledgeService`, `IndexingService`, `SearchService`, `ConnectionService`, `KnowledgePatch` | core |
-| `ingestion.connector` | `SourceConnector` port + registry, `GrabContext`/`GrabResult`, `SourceIterable`, `TimeWindow`, and the `TokenWindowGrabber` / `TimeWindowGrabber` base classes | core port |
+| `ingestion.connector` | `SourceConnector` port + registry, `GrabContext`/`GrabResult`, `SourceIterable`, `TimeWindow`, and the `TokenWindowGrabber` base class | core port |
 | `ingestion.connector.localfs` · `.google.gmail` · `.google.drive` | Connector adapters | adapter |
 | `ingestion.job` | `IngestionJob` poll loop, `IngestionRunner`, `ForwardCursorScheduler`, `IterableDiscoveryScheduler` | core |
 | `ingestion.schedule` | `ScheduleResolver` — custom → connector default → global default | core |

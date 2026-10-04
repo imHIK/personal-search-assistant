@@ -7,16 +7,23 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.common.fields.FieldSets;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.Knowledge;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.enums.EntityStatus;
 import io.personalassistant.domain.model.enums.SourceType;
 import io.personalassistant.indexing.chunking.ChunkingSpecResolver;
+import io.personalassistant.indexing.enrichment.EntityEnrichment;
 import io.personalassistant.testsupport.FakeEmbeddingProvider;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.PlainTextParserRegistry;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleChunkingRegistry;
+import io.personalassistant.testsupport.StubMetadataEnricher;
 import io.personalassistant.testsupport.TestData;
 import io.personalassistant.testsupport.WholeTextChunkingStrategy;
 import java.io.IOException;
@@ -24,6 +31,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,6 +45,8 @@ class IndexingRunnerTest {
     private InMemoryEntityRepository entities;
     private InMemoryKnowledgeRepository knowledge;
     private RecordingSearchIndex index;
+    private InMemoryTaskRepository tasks;
+    private StubMetadataEnricher enricher;
     private IndexingRunner runner;
 
     @BeforeEach
@@ -43,16 +54,17 @@ class IndexingRunnerTest {
         entities = new InMemoryEntityRepository();
         knowledge = new InMemoryKnowledgeRepository();
         index = new RecordingSearchIndex();
+        tasks = new InMemoryTaskRepository();
+        enricher = new StubMetadataEnricher();
         runner = runnerWith(new FakeEmbeddingProvider(8));
 
         knowledge.save(TestData.knowledge("kn_1", SourceType.LOCAL_FS, Instant.now(), java.util.Map.of()));
     }
 
-    /** A runner over the shared fakes, so a test can swap in a deliberately broken embedding provider. */
     private IndexingRunner runnerWith(FakeEmbeddingProvider embeddings) {
         IndexingRunner r = new IndexingRunner(entities, knowledge, new PlainTextParserRegistry(),
                 new SingleChunkingRegistry(new WholeTextChunkingStrategy()), new ChunkingSpecResolver(),
-                embeddings, index, FieldSets.bundled());
+                embeddings, index, FieldSets.bundled(), new EntityEnrichment(tasks, enricher, index));
         r.embedBatch = 64;
         r.retryLimit = 2;
         r.backoffSeconds = 30;
@@ -62,9 +74,8 @@ class IndexingRunnerTest {
     }
 
     /**
-     * Claim through the real work-queue path rather than handing the runner a lease-less entity —
-     * every terminal write is now lease-fenced, so a test that skips the claim is not testing the
-     * production path.
+     * Claims through the work queue: terminal writes are lease-fenced, so a lease-less entity would not
+     * exercise the production path.
      */
     private Entity claim(String id) {
         return entities.claimForIndexing(10, WORKER, LEASE).stream()
@@ -73,11 +84,6 @@ class IndexingRunnerTest {
                 .orElseThrow(() -> new AssertionError("entity " + id + " was not claimable"));
     }
 
-    /**
-     * Being throttled is the limiter working, not the source failing. The entity must come back as
-     * retryable with the reopening instant the limiter computed — not the flat backoff, and not
-     * {@code FAILED}.
-     */
     @Test
     void aRateLimitedEntityIsDeferredToTheReopeningInstantRatherThanFailed() {
         Instant reopensAt = Instant.now().plusSeconds(3600);
@@ -95,15 +101,10 @@ class IndexingRunnerTest {
         assertTrue(stored.index().error().contains("Rate limited"), stored.index().error());
     }
 
-    /**
-     * Deferrals get their own, far larger budget: charging them to retry-limit would dead-letter a
-     * healthy entity after a handful of throttled attempts.
-     */
     @Test
     void deferralsDoNotCountAgainstTheOrdinaryRetryLimit() {
         FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
-        // Reopening immediately keeps the entity claimable each pass, so the deferral COUNT is what is
-        // under test rather than the backoff window.
+        // Reopens at once so every pass can re-claim it; the deferral count is under test, not the backoff.
         throttled.rateLimitedUntil = Instant.now();
         IndexingRunner limited = runnerWith(throttled); // retryLimit = 2, maxDeferrals = 4
         entities.upsert(TestData.ingestedText("ent_rl2", "kn_1", "doc", "hello"));
@@ -115,7 +116,6 @@ class IndexingRunnerTest {
         }
     }
 
-    /** An unsatisfiable limit must eventually surface rather than being retried forever. */
     @Test
     void aPersistentlyRateLimitedEntityEventuallyDeadLetters() {
         FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
@@ -163,11 +163,6 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INDEXED, entities.findById("ent_2").orElseThrow().status());
     }
 
-    /**
-     * L11. A staged copy that has been purged is the one failure the retry ladder cannot help with,
-     * so it dead-letters at once — and carries the flag that lets a later walk re-fetch it, which is
-     * what stops this being the permanent dead end it used to be.
-     */
     @Test
     void deadLettersImmediatelyAndFlagsForRefetchWhenTheFileIsGone() {
         entities.upsert(TestData.ingestedFile("ent_3", "kn_1", "missing", "/no/such/file.txt", "text/plain"));
@@ -184,10 +179,6 @@ class IndexingRunnerTest {
                 "the error names the path that vanished: " + stored.index().error());
     }
 
-    /**
-     * The counterpart: a file that is present but unreadable is exactly the transient case the ladder
-     * exists for, so it must keep its backoff rather than being swept into the fast-fail above.
-     */
     @Test
     void stillRetriesWhenTheFileExistsButCannotBeRead(@TempDir Path dir) throws IOException {
         Path unreadable = dir.resolve("locked");
@@ -217,17 +208,11 @@ class IndexingRunnerTest {
         assertEquals(false, stored.needsReindex(), "cleanup clears the deletion flag");
     }
 
-    /**
-     * B2 regression. A worker whose lease lapsed mid-run must not record its outcome — the entity was
-     * re-claimed by someone else who is now working on it, and a late markIndexed would both report a
-     * half-finished run as complete and unset the new owner's lease.
-     */
     @Test
     void staleWorkerCannotRecordItsOutcome() {
         entities.upsert(TestData.ingestedText("ent_5", "kn_1", "doc5", "hello"));
         Entity claimed = claim("ent_5");
 
-        // Same entity, but run under an owner that does not hold the lease.
         runner.indexEntity(claimed, "some-other-worker");
 
         Entity stored = entities.findById("ent_5").orElseThrow();
@@ -237,11 +222,6 @@ class IndexingRunnerTest {
         assertEquals(WORKER, stored.lease().owner());
     }
 
-    /**
-     * B5 regression: retry.count is <em>consecutive</em> failures. Without the reset it accumulates
-     * for the entity's whole lifetime, so something that fails once a month is dead-lettered after
-     * retryLimit months of otherwise-successful indexing.
-     */
     @Test
     void successResetsTheConsecutiveFailureStreak() {
         entities.upsert(TestData.ingestedText("ent_6", "kn_1", "doc6", "fine now"));
@@ -255,11 +235,6 @@ class IndexingRunnerTest {
         assertNull(stored.index().error(), "a success clears the recorded error");
     }
 
-    /**
-     * B7 regression. A chunk whose vector is missing is still accepted by OpenSearch (the mapping
-     * does not require the field), counted by markIndexed, and then invisible to semantic search
-     * forever. It must be a loud failure, not a silent success.
-     */
     @Test
     void anEmbeddingHoleFailsTheRunInsteadOfIndexingAVectorlessChunk() {
         runner = runnerWith(new FakeEmbeddingProvider(8).breaking(FakeEmbeddingProvider.Defect.HOLE));
@@ -275,7 +250,6 @@ class IndexingRunnerTest {
         assertNotNull(stored.index().error());
     }
 
-    /** Same contract, the other way a provider can break it: fewer vectors than chunks. */
     @Test
     void aShortEmbeddingResponseFailsTheRun() {
         runner = runnerWith(new FakeEmbeddingProvider(8).breaking(FakeEmbeddingProvider.Defect.SHORT));
@@ -287,10 +261,6 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INGESTED, entities.findById("ent_9").orElseThrow().status());
     }
 
-    /**
-     * B8a regression. A bulk that OpenSearch partly rejects must not be recorded as a success — the
-     * entity would claim a chunk count it does not have and never be retried.
-     */
     @Test
     void aRejectedBulkIsNotRecordedAsSuccess() {
         entities.upsert(TestData.ingestedText("ent_10", "kn_1", "doc10", "some text"));
@@ -305,10 +275,6 @@ class IndexingRunnerTest {
         assertTrue(stored.index().error().contains("rejected"), "the reason survives onto the entity");
     }
 
-    /**
-     * B1 regression. A dead-lettered entity must leave the work queue entirely; before the fix it was
-     * re-claimed on every tick forever, consuming the per-knowledge quota and the global batch budget.
-     */
     @Test
     void terminalFailureLeavesTheIndexingQueueUntilExplicitlyRevived() {
         entities.upsert(TestData.ingestedFile("ent_7", "kn_1", "gone", "/no/such/file.txt", "text/plain"));
@@ -325,12 +291,158 @@ class IndexingRunnerTest {
         assertTrue(entities.distinctPendingKnowledgeIds(10).isEmpty(),
                 "and it must not keep its knowledge in the pending rotation either");
 
-        // The sanctioned way back in, with a fresh budget.
         entities.flagNeedsReindex("ent_7");
         Entity revived = entities.findById("ent_7").orElseThrow();
         assertEquals(EntityStatus.INGESTED, revived.status());
         assertEquals(0, revived.retry().count(), "a revived entity gets a fresh retry budget");
         assertNull(revived.index().error());
         assertEquals(1, entities.claimForIndexing(10, "any-worker", LEASE).size());
+    }
+
+    private Task metadataTask(String id) {
+        Instant at = Instant.parse("2026-09-01T00:00:00Z");
+        return tasks.save(new Task(id, "Posting facts", "", Task.Mode.SIMPLE, "Extract facts.",
+                Task.Output.METADATA, List.of(new Task.Field("yoe", Task.FieldType.NUMBER, "", true),
+                        new Task.Field("title", Task.FieldType.TEXT, "", true)),
+                null, null, "lite", Task.SourceText.ENTITY, 0, 0, at, at));
+    }
+
+    private void enrichWith(String taskId) {
+        Knowledge kn = knowledge.findById("kn_1").orElseThrow();
+        Knowledge.Config c = kn.config();
+        knowledge.save(kn.withEdits(kn.name(), kn.connectorDetails(), kn.inputs(),
+                new Knowledge.Config(c.scheduleSettings(), c.webhookSettings(), c.backfill(), c.chunking(),
+                        c.retention(), new Knowledge.EnrichmentSettings(taskId)), Instant.now()));
+    }
+
+    @Test
+    void enrichedFieldsReachTheChunksAndAreStoredApartFromMetadata() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L, "title", "a guess");
+        entities.upsert(TestData.ingestedText("ent_e1", "kn_1", "doc", "five years of Java"));
+
+        runner.indexEntity(claim("ent_e1"), WORKER);
+
+        Map<String, Object> chunkMeta = index.indexed.get(0).metadata();
+        assertEquals(5L, chunkMeta.get("yoe"));
+        assertEquals("doc", chunkMeta.get("title"), "a connector value wins a clash");
+        Entity stored = entities.findById("ent_e1").orElseThrow();
+        assertEquals(EntityStatus.INDEXED, stored.status());
+        assertEquals(5L, stored.enriched().get("yoe"));
+        assertFalse(stored.metadata().containsKey("yoe"), "metadata stays the connector's");
+        assertEquals("task_meta", stored.enrichment().taskId());
+        assertEquals(stored.checksum(), stored.enrichment().checksum());
+        assertEquals(Task.FieldType.NUMBER, index.mappedMetadata.get("yoe"));
+    }
+
+    @Test
+    void aCurrentEnrichmentIsNotRecomputedOnReindex() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        entities.upsert(TestData.ingestedText("ent_e2", "kn_1", "doc", "text"));
+        runner.indexEntity(claim("ent_e2"), WORKER);
+
+        entities.flagNeedsReindex("ent_e2");
+        runner.indexEntity(claim("ent_e2"), WORKER);
+
+        assertEquals(1, enricher.calls.size(), "unchanged task and checksum: no second LLM call");
+        assertEquals(5L, index.indexed.get(1).metadata().get("yoe"), "kept values still reach the chunks");
+    }
+
+    @Test
+    void anEnrichmentFailureStillIndexesAndRecordsTheError() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.failure = new IllegalStateException("The model's reply was not a JSON object");
+        entities.upsert(TestData.ingestedText("ent_e3", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e3"), WORKER);
+
+        Entity stored = entities.findById("ent_e3").orElseThrow();
+        assertEquals(EntityStatus.INDEXED, stored.status());
+        assertTrue(stored.enrichment().error().contains("JSON"), stored.enrichment().error());
+
+        enricher.failure = null;
+        enricher.reply = Map.of("yoe", 2L);
+        entities.flagNeedsReindex("ent_e3");
+        runner.indexEntity(claim("ent_e3"), WORKER);
+        assertEquals(2L, entities.findById("ent_e3").orElseThrow().enriched().get("yoe"),
+                "an errored enrichment is retried on the next pass");
+    }
+
+    @Test
+    void aRateLimitedEnrichmentDefersTheWholePass() {
+        enrichWith(metadataTask("task_meta").id());
+        Instant reopensAt = Instant.now().plusSeconds(600);
+        enricher.failure = new RateLimitedException(RateLimitKey.connection("conn_llm"), reopensAt);
+        entities.upsert(TestData.ingestedText("ent_e4", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e4"), WORKER);
+
+        Entity stored = entities.findById("ent_e4").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, stored.status());
+        assertEquals(reopensAt, stored.retry().nextAttemptAt());
+        assertTrue(index.indexed.isEmpty(), "nothing is indexed half-enriched");
+    }
+
+    @Test
+    void aRateLimitedEmbedKeepsTheEnrichmentItAlreadyPaidFor() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        FakeEmbeddingProvider throttled = new FakeEmbeddingProvider(8);
+        throttled.rateLimitedUntil = Instant.now();
+        IndexingRunner limited = runnerWith(throttled);
+        entities.upsert(TestData.ingestedText("ent_e6", "kn_1", "doc", "text"));
+
+        limited.indexEntity(claim("ent_e6"), WORKER);
+
+        Entity deferred = entities.findById("ent_e6").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, deferred.status());
+        assertEquals(5L, deferred.enriched().get("yoe"), "the deferral records the enrichment");
+        assertEquals(deferred.checksum(), deferred.enrichment().checksum());
+
+        throttled.rateLimitedUntil = null;
+        limited.indexEntity(claim("ent_e6"), WORKER);
+
+        assertEquals(1, enricher.calls.size(), "the retry reuses it instead of calling the LLM again");
+        assertEquals(EntityStatus.INDEXED, entities.findById("ent_e6").orElseThrow().status());
+        assertEquals(5L, index.indexed.get(0).metadata().get("yoe"));
+    }
+
+    @Test
+    void aFailedWriteAfterEnrichingKeepsTheEnrichment() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        index.indexChunksFailure = new IllegalStateException("1 of 1 chunks rejected by OpenSearch");
+        runner.backoffSeconds = 0;
+        entities.upsert(TestData.ingestedText("ent_e7", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e7"), WORKER);
+
+        Entity failed = entities.findById("ent_e7").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, failed.status(), "it took the retry path");
+        assertEquals(5L, failed.enriched().get("yoe"));
+
+        index.indexChunksFailure = null;
+        runner.indexEntity(claim("ent_e7"), WORKER);
+
+        assertEquals(1, enricher.calls.size());
+        assertEquals(EntityStatus.INDEXED, entities.findById("ent_e7").orElseThrow().status());
+    }
+
+    @Test
+    void removingTheTaskClearsStoredValuesOnTheNextPass() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.reply = Map.of("yoe", 5L);
+        entities.upsert(TestData.ingestedText("ent_e5", "kn_1", "doc", "text"));
+        runner.indexEntity(claim("ent_e5"), WORKER);
+
+        enrichWith(null);
+        entities.flagNeedsReindex("ent_e5");
+        runner.indexEntity(claim("ent_e5"), WORKER);
+
+        Entity stored = entities.findById("ent_e5").orElseThrow();
+        assertTrue(stored.enriched().isEmpty());
+        assertNull(stored.enrichment());
+        assertNull(index.indexed.get(1).metadata().get("yoe"));
     }
 }

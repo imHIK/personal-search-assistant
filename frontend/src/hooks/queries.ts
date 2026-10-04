@@ -4,6 +4,7 @@ import { channelsApi } from '@/api/channels'
 import { connectionsApi } from '@/api/connections'
 import { deliveriesApi } from '@/api/deliveries'
 import { digestsApi } from '@/api/digests'
+import { entitiesApi } from '@/api/entities'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
 import { tasksApi } from '@/api/tasks'
@@ -13,9 +14,13 @@ import type {
   CreateConnectionBody,
   CreateDigestBody,
   CreateKnowledgeBody,
+  Blob,
   CursorInfo,
   DeliveryStatus,
+  EntityList,
+  EntityQueryBody,
   EntityStatus,
+  EntityType,
   Knowledge,
   PatchChannelBody,
   PatchConnectionBody,
@@ -29,25 +34,24 @@ import {
   POLL_INTERVAL_MS,
 } from '@/config/constants'
 
-/**
- * Query keys in one place, so a mutation can invalidate precisely what it affected.
- */
 export const keys = {
   knowledge: ['knowledge'] as const,
   knowledgeOne: (id: string) => ['knowledge', id] as const,
-  entities: (id: string, status: EntityStatus | null, offset: number, limit: number) =>
-    ['knowledge', id, 'entities', status ?? 'all', offset, limit] as const,
+  entities: (id: string, filters: Record<string, string>, offset: number, limit: number) =>
+    ['knowledge', id, 'entities', filters, offset, limit] as const,
   cursors: (id: string) => ['knowledge', id, 'cursors'] as const,
   digests: ['digests'] as const,
   digestOne: (id: string) => ['digests', id] as const,
   digestRuns: (id: string, limit: number, offset: number) =>
     ['digests', id, 'runs', limit, offset] as const,
-  /** Everything under one digest's runs, for invalidating every page at once. */
   digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
+  entityQueryAll: ['entity-query'] as const,
+  entityQuery: (body: EntityQueryBody) => ['entity-query', body] as const,
+  entityFacets: (types: EntityType[], knowledgeIds: string[], fields: string[]) =>
+    ['entity-facets', types, knowledgeIds, fields] as const,
   tasks: ['tasks'] as const,
   taskOne: (id: string) => ['tasks', id] as const,
   llmProfiles: ['llm-profiles'] as const,
-  entity: (id: string) => ['entities', id] as const,
   connections: ['connections'] as const,
   connectionsOfType: (type?: string) => ['connections', type ?? 'all'] as const,
   health: ['health'] as const,
@@ -59,14 +63,6 @@ export const keys = {
   runDeliveries: (runId: string) => ['deliveries', 'run', runId] as const,
 }
 
-/**
- * The backend does all real work on background pollers and exposes no job status or SSE, so the
- * only way to show progress is to re-read. Polling every 5s forever would be wasteful, so each
- * live query decides for itself whether work is still in flight.
- *
- * `hasWorkInFlight` is deliberately generous: a mutation also arms polling for a short window,
- * because a freshly-triggered sync hasn't produced any observable "in flight" signal yet.
- */
 function knowledgeHasWork(knowledge: Knowledge): boolean {
   if (knowledge.status === 'DRAFT') return true
   if (knowledge.status !== 'ACTIVE') return false
@@ -83,10 +79,6 @@ function cursorsHaveWork(cursors: CursorInfo[]): boolean {
   )
 }
 
-/**
- * Arms polling for a fixed window after a mutation, so server-side effects that take a tick or
- * two to appear (a sync arming cursors, an entity being re-claimed) show up without a refresh.
- */
 function useRecentlyMutated() {
   const [until, setUntil] = useState(0)
   const arm = useCallback(() => setUntil(Date.now() + POLL_AFTER_MUTATION_MS), [])
@@ -99,8 +91,6 @@ function useRecentlyMutated() {
   }, [until])
   return { armed: Date.now() < until, arm }
 }
-
-// ---- Knowledge ------------------------------------------------------------------------------
 
 export function useKnowledgeList() {
   const { armed, arm } = useRecentlyMutated()
@@ -133,15 +123,22 @@ export function useKnowledge(id: string | undefined) {
 
 export function useEntities(
   id: string | undefined,
-  status: EntityStatus | null,
+  filters: Record<string, string>,
   offset: number,
   limit: number,
 ) {
   return useQuery({
-    queryKey: keys.entities(id!, status, offset, limit),
-    queryFn: () => knowledgeApi.entities(id!, { status, offset, limit }),
+    queryKey: keys.entities(id!, filters, offset, limit),
+    queryFn: () =>
+      knowledgeApi.entities(id!, {
+        status: filters.status ? (filters.status.split(',') as EntityStatus[]) : null,
+        q: filters.q || null,
+        iterableId: filters.group || null,
+        offset,
+        limit,
+      }),
     enabled: Boolean(id),
-    placeholderData: (previous) => previous, // keeps the table steady while paging
+    placeholderData: (previous) => previous,
     refetchInterval: (q) => {
       const data = q.state.data
       if (!data) return false
@@ -160,7 +157,6 @@ export function useCursors(id: string | undefined, enabled = true) {
   })
 }
 
-/** Every knowledge mutation invalidates the same set, so callers never have to remember. */
 function useKnowledgeInvalidation() {
   const client = useQueryClient()
   return useCallback(
@@ -218,8 +214,6 @@ export function useKnowledgeLifecycle(id: string) {
   return { pause, resume, remove, sync }
 }
 
-// ---- Entities -------------------------------------------------------------------------------
-
 export function useEntityActions(knowledgeId: string) {
   const client = useQueryClient()
   const invalidateEntities = useCallback(() => {
@@ -238,8 +232,6 @@ export function useEntityActions(knowledgeId: string) {
 
   return { reindex, remove }
 }
-
-// ---- Connections ----------------------------------------------------------------------------
 
 export function useConnections(type?: string) {
   return useQuery({
@@ -293,15 +285,12 @@ export function useConnectionMutations() {
   return { create, patch, makeDefault, test, remove }
 }
 
-/** Connections indexed by id, for showing an account name next to a source. */
 export function useConnectionsById(): Map<string, Connection> {
   const { data } = useConnections()
   const map = useRef(new Map<string, Connection>())
   map.current = new Map((data ?? []).map((connection) => [connection.id, connection]))
   return map.current
 }
-
-// ---- Publishing channels ----------------------------------------------------------------------
 
 export function useChannels() {
   return useQuery({ queryKey: keys.channels, queryFn: channelsApi.list })
@@ -341,10 +330,6 @@ export function useChannelMutations() {
   return { create, patch, test, remove }
 }
 
-/**
- * A channel's recent deliveries. Polls while anything is still queued, since the worker sends in the
- * background and there is no push channel to say it has.
- */
 export function useDeliveries(channelId: string | undefined, limit = 20) {
   return useQuery({
     queryKey: keys.deliveries(channelId!, null, limit, 0),
@@ -363,7 +348,6 @@ export function useRetryDelivery() {
   })
 }
 
-/** What a digest run was sent to. Polls while any of it is still queued. */
 export function useRunDeliveries(runId: string | undefined) {
   return useQuery({
     queryKey: keys.runDeliveries(runId!),
@@ -374,8 +358,6 @@ export function useRunDeliveries(runId: string | undefined) {
   })
 }
 
-// ---- Health ---------------------------------------------------------------------------------
-
 export function useHealth() {
   return useQuery({
     queryKey: keys.health,
@@ -385,8 +367,6 @@ export function useHealth() {
     staleTime: 0,
   })
 }
-
-// ---- Digests --------------------------------------------------------------------------------
 
 export function useDigests() {
   return useQuery({ queryKey: keys.digests, queryFn: digestsApi.list })
@@ -405,15 +385,10 @@ export function useDigestRuns(id: string | undefined, limit = 20, offset = 0) {
     queryKey: keys.digestRuns(id!, limit, offset),
     queryFn: () => digestsApi.runs(id!, limit, offset),
     enabled: Boolean(id),
-    // A page of history stays valid while paging back and forth; only a run makes it stale.
     placeholderData: (previous) => previous,
   })
 }
 
-/**
- * The task library. Rarely changes and is read on the digest form as well as its own page, so it is
- * worth keeping around between visits.
- */
 export function useTasks() {
   return useQuery({ queryKey: keys.tasks, queryFn: tasksApi.list, staleTime: 60_000 })
 }
@@ -426,24 +401,8 @@ export function useTask(id: string | undefined) {
   })
 }
 
-/** Configured models. Fixed for the life of the process, so it never needs refetching. */
 export function useLlmProfiles() {
   return useQuery({ queryKey: keys.llmProfiles, queryFn: tasksApi.llmProfiles, staleTime: Infinity })
-}
-
-/**
- * One indexed item, for showing a title where only an entity id is held — a digest that searches by
- * a document, say. Failures are not retried: a deleted document is a normal outcome here, and the
- * caller falls back to showing the id.
- */
-export function useEntity(id: string | null | undefined) {
-  return useQuery({
-    queryKey: keys.entity(id!),
-    queryFn: () => tasksApi.entity(id!),
-    enabled: Boolean(id),
-    retry: false,
-    staleTime: 300_000,
-  })
 }
 
 export function useTaskActions() {
@@ -469,7 +428,6 @@ export function useTaskActions() {
   return { create, update, remove }
 }
 
-/** Create / enable / delete / run-now, each invalidating exactly what it affected. */
 export function useDigestActions() {
   const client = useQueryClient()
   const invalidate = () => void client.invalidateQueries({ queryKey: keys.digests })
@@ -507,7 +465,6 @@ export function useDigestActions() {
       invalidate()
     },
   })
-  /** Clears the seen-set only — the runs stay, so the history view is unaffected. */
   const resetHistory = useMutation({
     mutationFn: (id: string) => digestsApi.resetHistory(id),
     onSuccess: (_data, id) => {
@@ -517,4 +474,38 @@ export function useDigestActions() {
   })
 
   return { create, setEnabled, remove, run, update, resetHistory }
+}
+
+export function useEntityQuery(body: EntityQueryBody, enabled = true) {
+  return useQuery({
+    queryKey: keys.entityQuery(body),
+    queryFn: () => entitiesApi.query(body),
+    enabled,
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useEntityFacets(types: EntityType[], knowledgeIds: string[], fields: string[]) {
+  return useQuery({
+    queryKey: keys.entityFacets(types, knowledgeIds, fields),
+    queryFn: () => entitiesApi.facets({ entityTypes: types, knowledgeIds, fields, limit: 200 }),
+    enabled: fields.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** Patches the row in every cached page at once, so a mark shows before the refetch lands. */
+export function useEntityCustom() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, values }: { id: string; values: Blob }) => entitiesApi.mergeCustom(id, values),
+    onSuccess: (updated) => {
+      client.setQueriesData<EntityList>({ queryKey: keys.entityQueryAll }, (page) =>
+        page
+          ? { ...page, items: page.items.map((item) => (item.id === updated.id ? updated : item)) }
+          : page,
+      )
+      void client.invalidateQueries({ queryKey: keys.entityQueryAll })
+    },
+  })
 }

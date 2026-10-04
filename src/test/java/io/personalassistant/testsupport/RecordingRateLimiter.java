@@ -10,17 +10,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * A {@link RateLimiter} that admits everything and remembers what it was asked, so a test can assert on
- * the quota a call was charged to — and, by setting {@link #failWith}, on how a caller reacts to being
- * throttled without needing a real bucket to run dry.
- */
 public class RecordingRateLimiter implements RateLimiter {
 
     public final List<RateLimit> acquired = new ArrayList<>();
     public final Map<String, Instant> penalties = new LinkedHashMap<>();
 
-    /** When set, every {@code acquire} throws this instead of admitting the call. */
     public RateLimitedException failWith;
 
     @Override
@@ -32,7 +26,8 @@ public class RecordingRateLimiter implements RateLimiter {
     }
 
     @Override
-    public void penalize(RateLimitKey key, Instant until) {
+    public Instant penalize(RateLimitKey key, Instant until) {
         penalties.put(key.value(), until);
+        return until;
     }
 }

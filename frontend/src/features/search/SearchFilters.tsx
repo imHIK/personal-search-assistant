@@ -6,20 +6,12 @@ import { labels } from '@/config/labels'
 import type { SearchFilterSpec } from '@/config/searchFilters'
 
 interface Props {
-  /** Which filters to offer — already narrowed to the current scope by the caller. */
   specs: SearchFilterSpec[]
   values: Record<string, string>
   onChange: (id: string, value: string | null) => void
   onClear: () => void
 }
 
-/**
- * Renders whatever `searchFilters.ts` offers for the current scope. Every control is derived from a
- * spec's `kind`, so adding a filter is a descriptor edit and this file never changes.
- *
- * Nothing renders when no spec applies — an empty "Narrow by" panel would suggest the search is
- * missing something rather than that the scope has no facets to narrow on.
- */
 export function SearchFilters({ specs, values, onChange, onClear }: Props) {
   if (specs.length === 0) return null
 

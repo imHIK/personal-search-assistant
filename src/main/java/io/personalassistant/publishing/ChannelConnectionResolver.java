@@ -10,10 +10,8 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 
 /**
- * Which account a channel sends through: its own {@code connectionId}, or the default connection of the
- * type its publisher declares. The publishing counterpart of {@code ConnectionResolver} on the knowledge
- * side, with the same two rules — an explicit id wins, and a connection of the wrong type is refused
- * rather than used.
+ * The channel's own connectionId, else the default connection of the type its publisher declares; one of the
+ * wrong type is refused rather than used.
  */
 @ApplicationScoped
 public class ChannelConnectionResolver {
@@ -26,9 +24,8 @@ public class ChannelConnectionResolver {
     }
 
     /**
-     * @return the account to send through, or null when the publisher needs none
-     * @throws NoSuchElementException if it needs one and none resolves, or the named one is of another
-     *                                type — a configuration problem a person has to fix
+     * @return null when the publisher needs no account
+     * @throws NoSuchElementException if it needs one and none resolves, or the named one is of another type
      */
     public Connection resolve(Channel channel, Publisher publisher) {
         Optional<String> type = publisher.connectionType();
@@ -48,10 +45,7 @@ public class ChannelConnectionResolver {
         return connection;
     }
 
-    /**
-     * Whether a resolved account can be used right now. An {@code ERROR} account is waiting for a
-     * reconnect and a {@code DISABLED} one for an operator; either way sending would only fail.
-     */
+    /** ERROR waits for a reconnect and DISABLED for an operator; either way sending would fail. */
     public static boolean usable(Connection connection) {
         return connection == null || connection.status() == ConnectionStatus.ACTIVE;
     }

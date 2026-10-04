@@ -9,17 +9,7 @@ import java.util.List;
 import java.util.zip.CRC32;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/**
- * A real, fully-offline embedding provider using the hashing-trick: each token is hashed to a
- * dimension and accumulated with a sign derived from a second hash, then the vector is
- * L2-normalized. It is deterministic and dependency-free, so indexing and querying stay
- * consistent and the hybrid pipeline is exercisable end-to-end without external services.
- *
- * <p>This is a baseline suitable for development, tests, and small corpora — <em>not</em> a
- * semantic model. Swap in an ONNX sentence-transformer or a hosted embedding API by providing a
- * different {@link EmbeddingProvider} bean; nothing else changes. Keep {@code app.embedding.*}
- * (model + dimension) pinned to whatever the OpenSearch {@code knn_vector} mapping expects.
- */
+/** Offline hashing-trick embeddings: deterministic and dependency-free, but not semantic. */
 @ApplicationScoped
 @ProviderImpl
 public class LocalHashingEmbeddingProvider implements EmbeddingProvider {

@@ -1,21 +1,10 @@
-/**
- * The single fetch seam. Everything that talks to the backend goes through `http()`, so the
- * quirks of this particular API are handled in exactly one place:
- *
- *  - Several endpoints return **204 with no body** (pause/resume/delete/reindex). Parsing those
- *    as JSON throws, so a no-content response resolves to `null`.
- *  - There are **no exception mappers** server-side, so a non-4xx failure surfaces as a raw 500
- *    with a Quarkus HTML or JSON error body. `ApiError` normalises both into a message.
- */
 
-/** Base path for the API. Same-origin by default — dev proxies it, prod serves it from Quarkus. */
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    /** Raw response body, kept for the "technical details" disclosure. */
     readonly body?: string,
   ) {
     super(message)
@@ -35,7 +24,6 @@ export class ApiError extends Error {
   }
 }
 
-/** Thrown when the request never reached the server at all (backend down, DNS, offline). */
 export class NetworkError extends Error {
   constructor(cause: unknown) {
     super('Could not reach the server')
@@ -80,9 +68,8 @@ export async function http<T>(path: string, options: Options = {}): Promise<T> {
 }
 
 /**
- * Pull something human out of an error response. Quarkus returns JSON for the exceptions the
- * resources throw explicitly, but an unmapped 500 comes back as an HTML error page — in that case
- * the status line is more useful than a wall of markup.
+ * Quarkus answers explicitly thrown exceptions with JSON; an unmapped 500 is an HTML or plain-text
+ * error page.
  */
 async function extractMessage(response: Response): Promise<string> {
   const text = await response.text().catch(() => '')
@@ -111,17 +98,8 @@ async function extractMessage(response: Response): Promise<string> {
 }
 
 /**
- * Dig the one useful line out of Quarkus' plain-text error page. It arrives as ~3 KB of stack trace
- * shaped like:
- *
- *     500 - Internal Server Error
- *     Details:
- *     \tError id 0a469814-…-3, java.lang.IllegalStateException: ArC container not initialized: …
- *     Stack:
- *
- * which is well past the length cap below, so without this every unmapped 500 collapsed to the
- * useless "500 Internal Server Error". The error id and the package prefix are dropped — neither
- * survives being read aloud, and the exception's own message is the part that says what happened.
+ * Quarkus' plain-text 500 page is ~3 KB of stack trace. The line after `Details:` reads
+ * `Error id <id>, <package>.<Exception>: <message>`; the id and the package are dropped.
  */
 function quarkusDetail(text: string): string | undefined {
   const line = /^[ \t]*Details:[ \t]*\r?\n[ \t]*(.+)$/m.exec(text)?.[1]?.trim()
@@ -132,7 +110,6 @@ function quarkusDetail(text: string): string | undefined {
     .slice(0, 400)
 }
 
-/** Build a query string, omitting undefined/null/empty values. */
 export function query(params: Record<string, string | number | boolean | null | undefined>) {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {

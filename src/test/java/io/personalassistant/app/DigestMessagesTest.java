@@ -10,12 +10,11 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/** What a digest run says when published, and whether it says anything at all. */
 class DigestMessagesTest {
 
     private static Digest digest(boolean onlyNew) {
         Instant now = Instant.now();
-        return new Digest("dig_1", "New roles", "roles", null, List.of(), Map.of(), null, SyncSchedule.NONE, null,
+        return new Digest("dig_1", "New roles", "roles", List.of(), Map.of(), null, SyncSchedule.NONE, null,
                 10, false, 1, onlyNew, true, null, now, now);
     }
 
@@ -64,6 +63,18 @@ class DigestMessagesTest {
                 run(List.of(item("a", Map.of())), "Two **strong** fits [1].", null), null);
 
         Assertions.assertEquals("Two **strong** fits [1].", message.summary());
+    }
+
+    @Test
+    void aFailedTaskIsExplainedAboveTheResults() {
+        DigestRun run = new DigestRun("run_1", "dig_1", Instant.now(), List.of(item("a", Map.of())), null,
+                1, 0, 0, null, "LLM API 429: quota exhausted");
+
+        PublishMessage message = DigestMessages.forRun(digest(true), run, null);
+
+        Assertions.assertEquals("New roles — 1 new result", message.title());
+        Assertions.assertTrue(message.intro().contains("LLM API 429: quota exhausted"), message.intro());
+        Assertions.assertEquals(1, message.items().size());
     }
 
     @Test

@@ -2,26 +2,22 @@ package io.personalassistant.ingestion.connector.ats.oraclehcm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/**
- * Port for Oracle Recruiting Cloud's public candidate-experience API, so the platform can be tested
- * without network access.
- *
- * <p>Two calls, the same shape as SmartRecruiters and Workday: the search returns metadata and an id,
- * and the description lives behind a per-requisition fetch.
- */
+/** The search returns metadata and an id; the description needs a per-requisition fetch. */
 public interface OracleHcmApi {
 
     /**
-     * One page of a site's requisitions.
-     *
-     * @param keyword Oracle's free-text query, or blank for the whole site. The same cost control
-     *                Workday's {@code searchText} provides — BNY's site answers 1,386 requisitions for
-     *                a blank query and 138 for {@code "Pune"} — and it is needed at least as badly
-     *                here, because the listing carries no description and every kept requisition
-     *                therefore costs a second call.
+     * @param keyword    free-text query, blank for none. It reads titles and descriptions far more than
+     *                   locations, so it is only the fallback for placing a requisition
+     * @param locationId a {@link #locationSuggestions} id, null for none; exact, unlike a keyword
      */
-    JsonNode searchRequisitions(OracleHcmSite site, String keyword, int limit, int offset);
+    JsonNode searchRequisitions(OracleHcmSite site, String keyword, String locationId, int limit, int offset);
 
-    /** One requisition in full, addressed by the {@code Id} the search returned. */
+    /**
+     * The careers page's place typeahead: {@code items} of {@code {Id, Level, City, State, Country}}, from the
+     * pod's geography rather than the site's postings. The site's own location facet would do, but it is
+     * capped at the ten busiest places on some sites.
+     */
+    JsonNode locationSuggestions(OracleHcmSite site, String term);
+
     JsonNode requisition(OracleHcmSite site, String id);
 }

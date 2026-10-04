@@ -12,20 +12,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Every connection type something is installed to use, from two sources:
- *
- * <ul>
- *   <li><strong>connectors</strong> — each {@link SourceConnector} that {@code requiresConnection()} is a
- *       kind named after its {@code SourceType}, verified by the connector's own
- *       {@code verifyConnection}. Derived rather than declared, so a connector still needs nothing
- *       beyond its bean and its enum constant, and existing {@code GMAIL} / {@code GOOGLE_DRIVE}
- *       connections keep resolving exactly as before;</li>
- *   <li><strong>{@link ConnectionKind} beans</strong> — for accounts that nothing in the knowledge flow
- *       uses, such as the email publisher's send-only Gmail account.</li>
- * </ul>
- *
- * Two claimants for one type is a startup failure: which one verified a connection would otherwise
- * depend on bean iteration order.
+ * Kinds come from connectors that require a connection (named after their SourceType) and from ConnectionKind
+ * beans such as GMAIL_SEND. Two claimants for one type fail startup.
  */
 @ApplicationScoped
 public class CdiConnectionKindRegistry implements ConnectionKindRegistry {
@@ -37,7 +25,6 @@ public class CdiConnectionKindRegistry implements ConnectionKindRegistry {
         this((Iterable<ConnectionKind>) kinds, connectors);
     }
 
-    /** Hand-wired form, for tests. */
     public CdiConnectionKindRegistry(Iterable<ConnectionKind> kinds, ConnectorRegistry connectors) {
         for (SourceType type : SourceType.values()) {
             if (connectors.supports(type) && connectors.get(type).requiresConnection()) {
@@ -75,7 +62,6 @@ public class CdiConnectionKindRegistry implements ConnectionKindRegistry {
         return Set.copyOf(byType.keySet());
     }
 
-    /** A connector's account, verified by the connector itself. */
     private record ConnectorKind(String id, SourceConnector connector) implements ConnectionKind {
 
         @Override

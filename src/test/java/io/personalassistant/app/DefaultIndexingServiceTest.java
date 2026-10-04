@@ -31,12 +31,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * B6 regression. Before this, {@code FAILED} was a one-way door: {@code armForwardCursors} matches
- * only {@code IDLE}, {@code resumeByKnowledge} only {@code SUSPENDED}, and the claim filter excludes
- * {@code FAILED} entirely — so a transient outage that burned a cursor's retries stranded that
- * cursor's work until someone edited Mongo by hand.
- */
 class DefaultIndexingServiceTest {
 
     private InMemoryCursorRepository cursors;
@@ -61,7 +55,6 @@ class DefaultIndexingServiceTest {
                 knowledge, registry, refetchPolicy);
     }
 
-    /** Drive a cursor to FAILED through the real failure path rather than constructing the state. */
     private Cursor failedCursor(String knowledgeId, String iterableId, CursorDirection direction) {
         Cursor cursor = TestData.cursor(knowledgeId, iterableId, direction, SourceType.LOCAL_FS);
         cursors.insertIfAbsent(cursor);
@@ -101,12 +94,10 @@ class DefaultIndexingServiceTest {
         assertEquals(0, revivedEntity.retry().count());
         assertNull(revivedEntity.index().error());
 
-        // The point of the exercise: both are back in their work queues.
         assertEquals(1, cursors.findClaimable(List.of("kn_1"), 10).size());
         assertEquals(1, entities.claimForIndexing(10, "w", Duration.ofMinutes(5)).size());
     }
 
-    /** A backward cursor is exactly what {@code /sync} could never revive — hence the separate endpoint. */
     @Test
     void revivesBackwardCursorsThatAForwardSyncCouldNotReach() {
         Cursor backward = failedCursor("kn_1", "root", CursorDirection.BACKWARD);
@@ -136,8 +127,6 @@ class DefaultIndexingServiceTest {
 
     @Test
     void bulkReindexQueuesAKnowledgesEntitiesWithoutRefetching() {
-        // The reason this exists: switching embedding model leaves the corpus half old-model vectors
-        // and half new, which same-dimension does nothing to fix.
         entities.seed(TestData.ingestedText("ent_a", "kn_1", "a", "one"));
         entities.seed(TestData.ingestedText("ent_b", "kn_1", "b", "two"));
         entities.seed(TestData.ingestedText("ent_other", "kn_2", "c", "three"));
@@ -155,16 +144,12 @@ class DefaultIndexingServiceTest {
 
     @Test
     void bulkReindexSkipsAnEntityAWorkerIsMidRunOn() {
-        // Flagging it would race the worker's own terminal write; a later call picks it up.
         entities.seed(TestData.ingestedText("ent_busy", "kn_1", "busy", "text"));
         entities.claimForIndexing(1, "worker-1", java.time.Duration.ofMinutes(10));
 
         assertEquals(0, service.reindexKnowledge("kn_1").queued());
     }
 
-    // ---- L11: re-index of a connector whose content is a staged copy -------------------------
-
-    /** A file-backed RawItem shaped as the connector's own walk would shape it. */
     private static RawItem refreshed(String externalId, String fileRef) {
         return RawItem.file(externalId, "text/plain", externalId, "file://" + externalId,
                 "sha256:v2", Instant.now(), fileRef, Map.of("contentType", "text/plain"),
@@ -192,8 +177,6 @@ class DefaultIndexingServiceTest {
 
     @Test
     void singleEntityReindexOfInlineContentNeverFetches() {
-        // Even for a staging connector: text lives in Mongo, so a fetch would buy nothing. This is
-        // the Drive native-doc case — exported to text at ingest, stored, and safe.
         connector.withReindexMode(ReindexMode.FETCH_AND_REINDEX);
         entities.seed(TestData.ingestedText("ent_t", "kn_1", "inline", "body"));
 
@@ -237,7 +220,6 @@ class DefaultIndexingServiceTest {
 
     @Test
     void bulkReindexLeavesRetiredCursorsParked() {
-        // Their iterable is gone at the source; re-walking would fail, or resurrect parked data.
         connector.withReindexMode(ReindexMode.FETCH_AND_REINDEX);
         entities.seed(TestData.ingestedFile("ent_f2", "kn_1", "f2", "/scratch/b.txt", "text/plain"));
         Cursor gone = advanced(TestData.cursor("kn_1", "old", CursorDirection.FORWARD, SourceType.LOCAL_FS));
@@ -262,8 +244,6 @@ class DefaultIndexingServiceTest {
 
     @Test
     void bulkReindexRewindsADrainedBackfillEvenWithBackfillOff() {
-        // EXHAUSTED means it already covered its whole range, so replaying it adds no new history —
-        // it is just how the entities below the anchor are reached again.
         connector.withReindexMode(ReindexMode.FETCH_AND_REINDEX);
         knowledge.save(withBackfill(knowledge.findById("kn_1").orElseThrow(), false));
         entities.seed(TestData.ingestedFile("ent_f4", "kn_1", "f4", "/scratch/d.txt", "text/plain"));
@@ -289,7 +269,6 @@ class DefaultIndexingServiceTest {
         assertEquals(0, result.cursorsReset());
     }
 
-    /** Walk a cursor off its start position, so a rewind is observable. */
     private Cursor advanced(Cursor cursor) {
         return advanced(cursor, CursorStatus.IDLE);
     }

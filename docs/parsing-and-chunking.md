@@ -161,6 +161,6 @@ splitting. `CdiChunkingStrategyRegistry` picks it up; a knowledge selects it by 
 | `embedContext` / `promptLocator` field sets (`config/field-sets.json`) | `["title"]` / `["headingPath","rowRange","sheet","page"]` | Which chunk metadata is prefixed before embedding, and which locates a source in a grounded prompt. Scoped per connector. Only keys a strategy actually produces are useful: `headingPath` and `rowRange` come from `TableAwareChunkingStrategy`; `sheet`/`page` are reserved and currently emitted by nothing. See [`configuration.md`](./configuration.md) |
 | `app.chunking.mime-aware` | `true` | Let content type choose the strategy when the knowledge has **not** picked one explicitly, via `ChunkingStrategy.prefers(contentType)`. An explicit per-knowledge choice always wins. Without it, selection is keyed purely on a per-knowledge name, so a spreadsheet in a knowledge of mostly prose is chunked as prose. |
 | `app.chunking.size` / `.overlap` | `1000` / `150` | Character size/overlap for `recursive` / `character` / `fixed-size`. |
-| `app.chunking.token.size` / `.overlap` | `256` / `32` | Token size/overlap for the `token` strategy. |
+| `app.chunking.token.size` / `.overlap` | `512` / `64` | Token size/overlap for the `token` strategy. |
 | `app.chunking.token.tokenizer` | `bert-base-uncased` | HuggingFace tokenizer id used to measure tokens (lazy, with a fallback). |
 ```

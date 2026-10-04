@@ -6,7 +6,6 @@ import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import { useTechnicalDetails } from '@/components/TechnicalDetails'
 
-/** Skeleton rows. Preferred over a spinner for lists so the layout doesn't jump on load. */
 export function Skeleton({ className }: { className?: string }) {
   return (
     <div
@@ -33,7 +32,6 @@ export function SkeletonList({ rows = 3, className }: { rows?: number; className
   )
 }
 
-/** Empty state. Always says what to do next, never just "no data". */
 export function EmptyState({
   icon: Icon,
   title,
@@ -70,10 +68,6 @@ export function EmptyState({
   )
 }
 
-/**
- * Error display. Runs the failure through the translation table so the user reads a cause and a
- * fix; the original server message is kept but only shown under Technical details.
- */
 export function ErrorState({
   error,
   onRetry,
@@ -120,7 +114,6 @@ export function ErrorState({
   )
 }
 
-/** Horizontal progress bar for "N of M ready to search". */
 export function ProgressBar({
   value,
   max,

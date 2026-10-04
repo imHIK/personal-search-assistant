@@ -42,7 +42,6 @@ class InMemoryPermitServiceTest {
 
     @Test
     void compositeAcquireIsAllOrNothing() {
-        // Fill the connector scope so the composite acquire must fail without touching global.
         permits.tryAcquire("connector:SLACK", 1, "filler", TTL);
 
         List<ScopeLimit> limits = List.of(
@@ -67,13 +66,11 @@ class InMemoryPermitServiceTest {
 
     @Test
     void permitCarriesTheAcquiredTtl() {
-        // The caller's TTL is honoured per acquire and carried on the permit (so renew uses it),
-        // rather than the service imposing one shared value on every stage.
         Duration ingestionTtl = Duration.ofSeconds(900);
         Permit permit = permits.tryAcquire("global", 1, "w1", ingestionTtl).orElseThrow();
 
         assertEquals(ingestionTtl, permit.ttl());
-        assertEquals(permit.expiresAt(), permit.expiresAt()); // sanity: expiry set
+        assertEquals(permit.expiresAt(), permit.expiresAt());
         assertTrue(permit.expiresAt().isAfter(java.time.Instant.now().plusSeconds(800)),
                 "expiry reflects the acquired TTL, not a fixed default");
     }

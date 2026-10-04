@@ -1,24 +1,27 @@
 package io.personalassistant.testsupport;
 
 import io.personalassistant.domain.model.Chunk;
+import io.personalassistant.domain.model.Task;
 import io.personalassistant.domain.model.search.SearchHit;
 import io.personalassistant.domain.model.search.SearchQuery;
 import io.personalassistant.storage.search.SearchIndex;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
-/** A {@link SearchIndex} that records calls, for asserting indexing behaviour without OpenSearch. */
 public class RecordingSearchIndex implements SearchIndex {
 
     public final List<Chunk> indexed = new ArrayList<>();
     public final List<String> deletedEntities = new ArrayList<>();
     public final List<String> deletedKnowledge = new ArrayList<>();
-    /** Recorded as {@code "knowledgeId/iterableId"} for assertion convenience. */
+    /** As {@code "knowledgeId/iterableId"}. */
     public final List<String> deletedIterables = new ArrayList<>();
     public List<SearchHit> lexicalResult = List.of();
     public List<SearchHit> vectorResult = List.of();
-    /** When set, {@link #indexChunks} throws it — stands in for a rejected OpenSearch bulk. */
     public RuntimeException indexChunksFailure;
+    public final Map<String, Task.FieldType> mappedMetadata = new LinkedHashMap<>();
+    public RuntimeException mappingFailure;
 
     @Override
     public void indexChunks(List<Chunk> chunks) {
@@ -26,24 +29,6 @@ public class RecordingSearchIndex implements SearchIndex {
             throw indexChunksFailure;
         }
         indexed.addAll(chunks);
-    }
-
-    /** Chunk texts a test asked for explicitly, keyed by entity id; falls back to what was indexed. */
-    public final java.util.Map<String, List<String>> chunkTexts = new java.util.HashMap<>();
-
-    @Override
-    public List<String> chunkTextsByEntity(String entityId, int limit) {
-        List<String> scripted = chunkTexts.get(entityId);
-        if (scripted != null) {
-            return scripted.size() <= limit ? scripted : scripted.subList(0, limit);
-        }
-        return indexed.stream()
-                .filter(c -> entityId.equals(c.entityId()))
-                .sorted(java.util.Comparator.comparingInt(io.personalassistant.domain.model.Chunk::ordinal))
-                .map(io.personalassistant.domain.model.Chunk::text)
-                .filter(t -> t != null && !t.isBlank())
-                .limit(limit)
-                .toList();
     }
 
     @Override
@@ -69,5 +54,13 @@ public class RecordingSearchIndex implements SearchIndex {
     @Override
     public void deleteByIterable(String knowledgeId, String iterableId) {
         deletedIterables.add(knowledgeId + "/" + iterableId);
+    }
+
+    @Override
+    public void ensureMetadataFields(Map<String, Task.FieldType> fields) {
+        if (mappingFailure != null) {
+            throw mappingFailure;
+        }
+        mappedMetadata.putAll(fields);
     }
 }

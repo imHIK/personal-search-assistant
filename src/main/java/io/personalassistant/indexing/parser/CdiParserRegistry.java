@@ -6,10 +6,6 @@ import jakarta.inject.Inject;
 import java.util.Comparator;
 import java.util.List;
 
-/**
- * Discovers all {@link ContentParser} beans via CDI and selects one by MIME type, honouring
- * {@link ContentParser#priority()} so a specific parser is tried before the general fallback.
- */
 @ApplicationScoped
 public class CdiParserRegistry implements ParserRegistry {
 

@@ -9,7 +9,6 @@ import io.personalassistant.indexing.chunking.ChunkingStrategy;
 import java.util.List;
 import java.util.Map;
 
-/** Trivial chunker: one chunk holding the whole text (used to keep indexing tests focused). */
 public class WholeTextChunkingStrategy implements ChunkingStrategy {
 
     @Override
@@ -24,6 +23,6 @@ public class WholeTextChunkingStrategy implements ChunkingStrategy {
         }
         return List.of(new Chunk(Ids.chunk(entity.id(), 0), entity.id(), entity.knowledgeId(),
                 entity.iterableId(), sourceType, 0, text, Math.max(1, text.length() / 4), null,
-                entity.title(), entity.uri(), Map.of()));
+                entity.title(), entity.uri(), entity.metadata() == null ? Map.of() : entity.metadata()));
     }
 }

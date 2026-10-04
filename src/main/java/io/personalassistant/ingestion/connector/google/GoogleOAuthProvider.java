@@ -10,25 +10,15 @@ import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Google as an OAuth provider, covering both connectors that authenticate through a Google account
- * and the send-only account the email publisher uses.
- * Almost all of it is inherited — what is actually Google-specific is the two endpoints, the
- * scopes, and the three authorize parameters below.
- *
- * <p><strong>Operational note that no code can substitute for:</strong> a refresh token issued by a
- * client whose consent screen is still in <em>Testing</em> publishing status is revoked by Google after
- * seven days, no matter what this application does — refresh tokens are neither rotated nor extended by
- * use. The consent screen must be published ("In production") for a connection to survive. Unverified
- * is fine for a personal deployment; the user clicks through one "Google hasn't verified this app"
- * interstitial. See {@code docs/oauth.md}.
+ * A refresh token issued while the consent screen is still in Testing is revoked by Google after seven days,
+ * whatever this app does: the consent screen must be published. See docs/oauth.md.
  */
 @ApplicationScoped
 public class GoogleOAuthProvider extends AbstractOAuth2Provider {
 
-    /** URL segment under {@code /api/connections/oauth/…}; part of the contract once shipped. */
+    /** Part of the URL contract once shipped. */
     public static final String ID = "google";
 
-    /** Send mail as the account, and nothing else — no reading, no deleting. */
     public static final String GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 
     private static final Map<String, Set<String>> SCOPES = new LinkedHashMap<>();
@@ -36,8 +26,6 @@ public class GoogleOAuthProvider extends AbstractOAuth2Provider {
     static {
         SCOPES.put(GoogleConnectionTypes.GMAIL, Set.of("https://www.googleapis.com/auth/gmail.readonly"));
         SCOPES.put(GoogleConnectionTypes.GOOGLE_DRIVE, Set.of("https://www.googleapis.com/auth/drive.readonly"));
-        // Its own connection type rather than a second scope on GMAIL: the account that is read for
-        // ingestion never gains the right to send, and the sending account never gains the right to read.
         SCOPES.put(GoogleConnectionTypes.GMAIL_SEND, Set.of(GMAIL_SEND_SCOPE));
     }
 
@@ -84,10 +72,8 @@ public class GoogleOAuthProvider extends AbstractOAuth2Provider {
     }
 
     /**
-     * {@code access_type=offline} is what asks for a refresh token at all, and {@code prompt=consent}
-     * is what makes Google return one <em>again</em> on a re-consent — without it a user reconnecting a
-     * broken account gets an access token and no refresh token, and is back where they started an hour
-     * later. {@code include_granted_scopes} keeps a second connector's consent from silently dropping
+     * {@code access_type=offline} asks for a refresh token; {@code prompt=consent} makes Google return one
+     * again on a re-consent; {@code include_granted_scopes} keeps a second connector's consent from dropping
      * the first one's grant.
      */
     @Override

@@ -1,14 +1,8 @@
 package io.personalassistant.ingestion.connector.oauth;
 
 /**
- * The provider has refused the grant permanently: the refresh token is revoked, expired or belongs to
- * another client. Distinct from an ordinary {@code 5xx} or {@code 429} because the distinction is the
- * whole point — a transient failure should be retried, while this one will fail identically forever
- * and needs a human to re-consent.
- *
- * <p>{@link OAuthTokenService} reacts to it by dropping the cached token and marking the connection
- * {@code ERROR} immediately, rather than leaving the 30-minute health sweep to notice. That is what
- * turns "my data quietly stopped updating" into a visible prompt to reconnect.
+ * The grant is permanently refused (revoked, expired or foreign): unlike a transient failure, it needs a
+ * human to re-consent. OAuthTokenService marks the connection ERROR at once.
  */
 public class CredentialsRejectedException extends RuntimeException {
 

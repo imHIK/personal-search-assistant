@@ -8,27 +8,23 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Fixed-dimension fake embeddings for indexing tests (no real model). */
 public class FakeEmbeddingProvider implements EmbeddingProvider {
 
-    /** How a misbehaving provider breaks its {@code embedAll} contract. */
     public enum Defect {
         NONE,
-        /** Returns the right count but with a null in the middle — what a duplicated API index does. */
         HOLE,
-        /** Returns fewer vectors than texts. */
         SHORT
     }
 
-    /**
-     * Calls to {@link #embed}, including the ones {@link #embedAll} makes internally. Lets the read path
-     * prove it skips the query embedding for a purely lexical search instead of paying for one.
-     */
+    /** Includes the calls {@link #embedAll} makes internally. */
     public int embedCalls;
 
+    /** Refused calls included. */
+    public int queryCalls;
+
     /**
-     * When set, {@link #embedAll} throws {@link RateLimitedException} with this as its {@code retryAt} —
-     * how a caller is shown to defer rather than fail, without standing up a real bucket.
+     * When set, {@link #embedAll} and {@link #embedQuery} throw {@link RateLimitedException} with this
+     * {@code retryAt}.
      */
     public Instant rateLimitedUntil;
 
@@ -39,7 +35,6 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
         this.dim = dim;
     }
 
-    /** Make this provider violate the {@code embedAll} contract, to prove callers notice. */
     public FakeEmbeddingProvider breaking(Defect howItBreaks) {
         this.defect = howItBreaks;
         return this;
@@ -68,6 +63,15 @@ public class FakeEmbeddingProvider implements EmbeddingProvider {
             v[Math.floorMod(text.hashCode(), dim)] = 1.0f;
         }
         return new Embedding(model(), dim, v);
+    }
+
+    @Override
+    public Embedding embedQuery(String text) {
+        queryCalls++;
+        if (rateLimitedUntil != null) {
+            throw new RateLimitedException(RateLimitKey.embedding(providerId()), rateLimitedUntil);
+        }
+        return embed(text);
     }
 
     @Override

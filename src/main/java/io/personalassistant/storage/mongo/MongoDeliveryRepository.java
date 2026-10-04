@@ -33,7 +33,6 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-/** MongoDB adapter for {@link DeliveryRepository} over the {@code deliveries} collection. */
 @ApplicationScoped
 public class MongoDeliveryRepository implements DeliveryRepository {
 
@@ -60,8 +59,8 @@ public class MongoDeliveryRepository implements DeliveryRepository {
             collection().insertOne(toDoc(delivery));
             return delivery;
         } catch (MongoWriteException e) {
-            // The unique partial index on dedupeKey is the arbiter, so a concurrent enqueue of the same
-            // key loses here rather than in a read-then-write race.
+            // The unique partial index on dedupeKey is the arbiter, so a concurrent enqueue of the same key
+            // loses here, not in a read-then-write race.
             if (delivery.dedupeKey() != null
                     && ErrorCategory.fromErrorCode(e.getCode()) == ErrorCategory.DUPLICATE_KEY) {
                 Document existing = collection().find(eq("dedupeKey", delivery.dedupeKey())).first();
@@ -122,7 +121,7 @@ public class MongoDeliveryRepository implements DeliveryRepository {
                 Updates.set("status", DeliveryStatus.SENT.name()),
                 Updates.set("providerMessageId", providerMessageId),
                 Updates.set("sentAt", BsonSupport.date(sentAt)),
-                // Success ends the streak: attempts are consecutive failures (invariant 9).
+                // Success ends the streak: attempts are consecutive failures.
                 Updates.set("attempts", 0),
                 Updates.set("lastError", null),
                 Updates.set("nextAttemptAt", null),
@@ -169,7 +168,7 @@ public class MongoDeliveryRepository implements DeliveryRepository {
         collection().deleteMany(eq("channelId", channelId));
     }
 
-    /** Lease fence: the delivery, only while {@code owner} still holds a live lease on it. */
+    /** Only while {@code owner} holds a live lease. */
     private static Bson ownedBy(String id, String owner) {
         return and(eq("_id", id), eq("lease.owner", owner),
                 gt("lease.expiresAt", BsonSupport.date(Instant.now())));

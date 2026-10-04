@@ -8,16 +8,9 @@ import jakarta.enterprise.event.Observes;
 import java.util.logging.Logger;
 
 /**
- * Serves {@code index.html} for the web console's client-side routes.
- *
- * <p>The console is a single-page app: React Router owns paths like {@code /knowledge/kn_123}, but
- * nothing on the server does. Without this, opening such a URL directly — or simply refreshing the
- * page — 404s, because Quarkus' static-resource handler only knows about files that exist on disk.
- *
- * <p>The rule is deliberately narrow: only {@code GET}/{@code HEAD} requests that the browser is
- * navigating with (an {@code Accept} that includes {@code text/html}) and that are not API,
- * management or asset paths get rewritten. Anything else must keep its real status, or a mistyped
- * API call would silently return an HTML page instead of a 404 and be far harder to debug.
+ * Serves index.html for the console's client-side routes: only a browser navigation (GET/HEAD accepting
+ * text/html) outside API, management and asset paths. Anything else keeps its real status, so a mistyped API
+ * call is still a 404.
  */
 @ApplicationScoped
 public class SpaRoutingConfigurator {
@@ -26,13 +19,10 @@ public class SpaRoutingConfigurator {
 
     private static final String INDEX = "/index.html";
 
-    /** Prefixes the server owns; never rewritten. {@code /q} covers health and other management endpoints. */
     private static final String[] SERVER_PREFIXES = {"/api/", "/q/", "/assets/"};
 
     void configure(@Observes Router router) {
-        // Registered last so it only ever sees requests no static resource or resource method
-        // matched. Vert.x runs same-order routes in registration order, and the platform's static
-        // handler is installed during startup before this observer fires.
+        // Last, so it only sees requests that no static file or resource method matched.
         router.route().order(Integer.MAX_VALUE).handler(spaFallback());
         LOG.fine("SPA fallback route registered for the web console");
     }
@@ -43,8 +33,7 @@ public class SpaRoutingConfigurator {
                 context.next();
                 return;
             }
-            // reroute rather than redirect: the address bar keeps the deep link, and the router
-            // in the browser picks it up from there.
+            // Reroute, not redirect: the address bar keeps the deep link.
             context.reroute(INDEX);
         };
     }
@@ -67,8 +56,7 @@ public class SpaRoutingConfigurator {
                 return true;
             }
         }
-        // A path with a file extension is a real asset request (favicon.ico, a .woff2, a source
-        // map). Rewriting those to index.html would mask genuinely missing files.
+        // A path with a file extension is an asset request; rewriting it would mask a missing file.
         int lastSlash = path.lastIndexOf('/');
         return path.indexOf('.', lastSlash + 1) > -1;
     }

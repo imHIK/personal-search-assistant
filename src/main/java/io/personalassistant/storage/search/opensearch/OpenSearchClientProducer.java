@@ -9,12 +9,6 @@ import org.apache.http.HttpHost;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.opensearch.client.RestClient;
 
-/**
- * Produces the OpenSearch low-level {@link RestClient} as an application-scoped bean from
- * {@code opensearch.*} config. The low-level client is used deliberately: its API is extremely
- * stable and lets the adapter speak the documented query DSL directly as JSON, keeping the
- * mapping to OpenSearch transparent and easy to evolve.
- */
 @ApplicationScoped
 public class OpenSearchClientProducer {
 

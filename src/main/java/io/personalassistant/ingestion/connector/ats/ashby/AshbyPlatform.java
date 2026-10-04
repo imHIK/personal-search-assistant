@@ -15,15 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Ashby job-board connector. One iterable per board name (the {@code <name>} in
- * {@code jobs.ashbyhq.com/<name>}); the posting API returns the whole board in one call.
- *
- * <p>Ashby is the richest of the three sources: it states {@code isRemote} structurally rather than
- * leaving it to prose, and with {@code includeCompensation=true} it publishes real pay bands. Both are
- * preferred over the inferred values from {@code AtsNormalization} whenever present — a stated fact
- * always beats a guess.
- */
 @ApplicationScoped
 public class AshbyPlatform implements BoardPlatform {
 
@@ -45,10 +36,10 @@ public class AshbyPlatform implements BoardPlatform {
     public OptionalInt countPostings(String handle) {
         try {
             JsonNode response = api.listJobs(handle);
-            if (response == null || !response.has("jobs")) {
-                return OptionalInt.empty();
-            }
-            return OptionalInt.of(response.path("jobs").size());
+            int jobs = response == null ? 0 : response.path("jobs").size();
+            // An empty board is a miss: a dormant one would otherwise shadow the company's live board
+            // on a platform probed later.
+            return jobs > 0 ? OptionalInt.of(jobs) : OptionalInt.empty();
         } catch (RuntimeException e) {
             // A miss is the normal outcome for all but one platform, so it must not propagate.
             return OptionalInt.empty();
@@ -56,13 +47,12 @@ public class AshbyPlatform implements BoardPlatform {
     }
 
     @Override
-    public List<RawItem> fetch(String boardId, BoardFilter filter) {
-        // Hint ignored: one request returns the whole board either way, so filtering
-        // early would save nothing. The connector filters what comes back.
+    public List<RawItem> fetch(String boardId, String company, BoardFilter filter) {
+        // Hint ignored: one request returns the whole board either way.
         JsonNode jobs = api.listJobs(boardId).path("jobs");
         List<RawItem> items = new ArrayList<>();
         for (JsonNode job : jobs) {
-            RawItem item = toItem(boardId, job);
+            RawItem item = toItem(boardId, company, job);
             if (item != null) {
                 items.add(item);
             }
@@ -70,7 +60,7 @@ public class AshbyPlatform implements BoardPlatform {
         return items;
     }
 
-    private RawItem toItem(String boardId, JsonNode job) {
+    private RawItem toItem(String boardId, String label, JsonNode job) {
         String id = job.path("id").asText(null);
         String title = job.path("title").asText(null);
         if (id == null || title == null) {
@@ -82,29 +72,28 @@ public class AshbyPlatform implements BoardPlatform {
         String plain = job.path("descriptionPlain").asText("");
         String body = html.isBlank() ? plain : html;
         String descriptionText = html.isBlank() ? plain : AtsNormalization.plainText(html);
-        // publishedAt is the only timestamp Ashby publishes — there is no updatedAt on this API, and
-        // reading the absent one used to yield a constant that made every posting look unchanged.
+        // publishedAt is the only timestamp this API has; there is no updatedAt.
         String publishedAt = job.path("publishedAt").asText(null);
+        String company = AtsNormalization.company(label, boardId);
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
         metadata.put("uri", applyUrl);
-        metadata.put("company", boardId);
+        metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
         metadata.put("board", boardId);
         metadata.put("platform", id());
         metadata.put("sourceRank", SOURCE_RANK);
-        // Stated beats inferred: Ashby publishes isRemote as a real field.
+        // Stated beats inferred.
         metadata.put("remote", job.has("isRemote")
                 ? job.path("isRemote").asBoolean(false)
                 : AtsNormalization.isRemote(location, descriptionText));
         putIfPresent(metadata, "seniority", AtsNormalization.seniority(title));
         putIfPresent(metadata, "team", nullableText(job.path("team")));
-        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(boardId, title, location));
+        putIfPresent(metadata, "dedupeKey", AtsNormalization.dedupeKey(company, title, location));
         Instant postedAt = AtsNormalization.instantOrNull(publishedAt);
         putIfPresent(metadata, "postedAt", postedAt);
-        applyCompensation(metadata, job, descriptionText);
 
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("id", id);
@@ -117,40 +106,17 @@ public class AshbyPlatform implements BoardPlatform {
                 html.isBlank() ? "text/plain" : "text/html",
                 title,
                 applyUrl,
-                "ashby:" + id + ";v:" + AtsNormalization.changeStamp(title, location, body),
+                AtsNormalization.withCompany(
+                        "ashby:" + id + ";v:" + AtsNormalization.changeStamp(title, location, body),
+                        company, boardId),
                 AtsNormalization.instantOrNull(publishedAt),
                 raw,
                 body,
                 null,
                 metadata,
-                // Ashby is the one board of the three that can state a close date. When it does, this
-                // beats the knowledge-level window entirely (see RetentionSweeper).
+                // Ashby can state a close date, which beats the retention window.
                 AtsNormalization.instantOrNull(job.path("closedAt").asText(null)),
                 false);
-    }
-
-    /** Structured pay bands when Ashby publishes them, else the conservative text scrape. */
-    private static void applyCompensation(Map<String, Object> metadata, JsonNode job, String descriptionText) {
-        JsonNode summary = job.path("compensation").path("summaryComponents");
-        for (JsonNode component : summary) {
-            if (!"Salary".equalsIgnoreCase(component.path("compensationType").asText(""))) {
-                continue;
-            }
-            JsonNode min = component.path("minValue");
-            JsonNode max = component.path("maxValue");
-            if (min.isNumber() && max.isNumber()) {
-                metadata.put("compMin", min.asLong());
-                metadata.put("compMax", max.asLong());
-                putIfPresent(metadata, "compCurrency", nullableText(component.path("currencyCode")));
-                return;
-            }
-        }
-        AtsNormalization.CompRange comp = AtsNormalization.compRange(descriptionText);
-        if (comp != null) {
-            metadata.put("compMin", comp.min());
-            metadata.put("compMax", comp.max());
-            putIfPresent(metadata, "compCurrency", comp.currency());
-        }
     }
 
     private static String firstNonBlank(String a, String b) {

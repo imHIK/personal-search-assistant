@@ -36,9 +36,6 @@ class LeverPlatformTest {
 
     @Test
     void checksumChangesWhenTheBodyChangesBecauseLeverPublishesNoUpdateStamp() {
-        // Lever exposes only createdAt, which never moves. Without hashing the body an edited
-        // posting would keep its checksum forever and change detection would skip it permanently —
-        // a direct invariant-3 violation.
         String before = grabOne("<p>Own the platform.</p>").checksum();
         String after = grabOne("<p>Own the platform. Now with Kubernetes.</p>").checksum();
 

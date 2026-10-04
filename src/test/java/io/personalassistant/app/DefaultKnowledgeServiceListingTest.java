@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.personalassistant.domain.model.Cursor;
 import io.personalassistant.domain.model.Entity;
+import io.personalassistant.domain.model.EntityQuery;
 import io.personalassistant.domain.model.EntitySummary;
 import io.personalassistant.domain.model.Knowledge;
 import io.personalassistant.domain.model.enums.CursorDirection;
@@ -20,6 +21,7 @@ import io.personalassistant.testsupport.InMemoryCursorRepository;
 import io.personalassistant.testsupport.InMemoryDiscoveryStatusRepository;
 import io.personalassistant.testsupport.InMemoryEntityRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.InMemoryTaskRepository;
 import io.personalassistant.testsupport.RecordingSearchIndex;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
@@ -31,11 +33,6 @@ import java.util.NoSuchElementException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/**
- * The read-only listing endpoints that back the console's entity browser and sync-progress view.
- * Split from {@link DefaultKnowledgeServiceTest} (lifecycle) and {@code ...EditTest} (patching) so
- * each class stays about one concern.
- */
 class DefaultKnowledgeServiceListingTest {
 
     private InMemoryKnowledgeRepository knowledge;
@@ -55,26 +52,32 @@ class DefaultKnowledgeServiceListingTest {
         io.personalassistant.ingestion.connector.ConnectionResolver connections = kn -> null;
         SingleConnectorRegistry registry = new SingleConnectorRegistry(connector);
         service = new DefaultKnowledgeService(knowledge, cursors, entities,
-                registry, connections, index, discovery, new RefetchPolicy(registry));
+                registry, connections, index, discovery, new RefetchPolicy(registry),
+                new InMemoryTaskRepository());
     }
 
-    /** Persist a knowledge directly — these tests exercise reads, not the activation path. */
     private Knowledge storedKnowledge(String id) {
         Knowledge kn = TestData.knowledge(id, SourceType.SLACK, Instant.now(), Map.of());
         knowledge.save(kn);
         return kn;
     }
 
-    /** An entity with an explicit updatedAt, so ordering assertions are deterministic. */
     private Entity entity(String id, String knowledgeId, EntityStatus status, Instant updatedAt) {
-        return new Entity(id, knowledgeId, "chan_a", EntityType.MESSAGE, "ext_" + id,
+        return entity(id, knowledgeId, "chan_a", status, updatedAt);
+    }
+
+    private Entity entity(String id, String knowledgeId, String iterableId, Instant updatedAt) {
+        return entity(id, knowledgeId, iterableId, EntityStatus.INDEXED, updatedAt);
+    }
+
+    private Entity entity(String id, String knowledgeId, String iterableId, EntityStatus status,
+                          Instant updatedAt) {
+        return new Entity(id, knowledgeId, iterableId, EntityType.MESSAGE, "ext_" + id,
                 Map.of(), Entity.Content.ofText("body"),
                 Map.of("title", "Title " + id, "uri", "test://" + id),
                 "sha256:" + id, status, false, false, Entity.IndexInfo.empty(), null,
                 Entity.Retry.zero(), updatedAt, updatedAt, null, 0L);
     }
-
-    // ---- entity listing ----------------------------------------------------------------------
 
     @Test
     void listsEntitiesNewestFirstWithTitleAndUri() {
@@ -84,7 +87,7 @@ class DefaultKnowledgeServiceListingTest {
         entities.seed(entity("ent_mid", kn.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
         entities.seed(entity("ent_new", kn.id(), EntityStatus.INGESTED, t0.plusSeconds(120)));
 
-        List<EntitySummary> items = service.listEntities(kn.id(), null, 50, 0).items();
+        List<EntitySummary> items = service.listEntities(kn.id(), EntityQuery.all(), 50, 0).items();
 
         assertEquals(List.of("ent_new", "ent_mid", "ent_old"),
                 items.stream().map(EntitySummary::id).toList(), "newest updatedAt first");
@@ -100,8 +103,8 @@ class DefaultKnowledgeServiceListingTest {
             entities.seed(entity("ent_" + i, kn.id(), EntityStatus.INDEXED, t0.plusSeconds(i * 60L)));
         }
 
-        KnowledgeService.EntityPage first = service.listEntities(kn.id(), null, 2, 0);
-        KnowledgeService.EntityPage second = service.listEntities(kn.id(), null, 2, 2);
+        KnowledgeService.EntityPage first = service.listEntities(kn.id(), EntityQuery.all(), 2, 0);
+        KnowledgeService.EntityPage second = service.listEntities(kn.id(), EntityQuery.all(), 2, 2);
 
         assertEquals(2, first.items().size());
         assertEquals(1, second.items().size());
@@ -120,7 +123,8 @@ class DefaultKnowledgeServiceListingTest {
         entities.seed(entity("ent_b", kn.id(), EntityStatus.FAILED, t0.plusSeconds(60)));
         entities.seed(entity("ent_c", kn.id(), EntityStatus.FAILED, t0.plusSeconds(120)));
 
-        KnowledgeService.EntityPage page = service.listEntities(kn.id(), EntityStatus.FAILED, 50, 0);
+        KnowledgeService.EntityPage page =
+                service.listEntities(kn.id(), EntityQuery.ofStatuses(EntityStatus.FAILED), 50, 0);
 
         assertEquals(2, page.items().size());
         assertEquals(2, page.total(), "total reflects the status filter, not the whole knowledge");
@@ -131,9 +135,9 @@ class DefaultKnowledgeServiceListingTest {
     void clampsLimitAndRejectsNegativeOffset() {
         Knowledge kn = storedKnowledge("kn_1");
 
-        assertEquals(50, service.listEntities(kn.id(), null, 0, 0).limit(), "limit <= 0 falls back to 50");
-        assertEquals(200, service.listEntities(kn.id(), null, 9999, 0).limit(), "limit is capped at 200");
-        assertThrows(IllegalArgumentException.class, () -> service.listEntities(kn.id(), null, 50, -1));
+        assertEquals(50, service.listEntities(kn.id(), EntityQuery.all(), 0, 0).limit(), "limit <= 0 falls back to 50");
+        assertEquals(200, service.listEntities(kn.id(), EntityQuery.all(), 9999, 0).limit(), "limit is capped at 200");
+        assertThrows(IllegalArgumentException.class, () -> service.listEntities(kn.id(), EntityQuery.all(), 50, -1));
     }
 
     @Test
@@ -144,7 +148,7 @@ class DefaultKnowledgeServiceListingTest {
         entities.seed(entity("ent_mine", mine.id(), EntityStatus.INDEXED, t0));
         entities.seed(entity("ent_other", other.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
 
-        KnowledgeService.EntityPage page = service.listEntities(mine.id(), null, 50, 0);
+        KnowledgeService.EntityPage page = service.listEntities(mine.id(), EntityQuery.all(), 50, 0);
 
         assertEquals(1, page.total());
         assertEquals("ent_mine", page.items().get(0).id());
@@ -157,7 +161,7 @@ class DefaultKnowledgeServiceListingTest {
         entities.seed(entity("ent_a", kn.id(), EntityStatus.INGESTED, now));
         entities.seedIndexed("ent_a", 7, "bge-base-en-v1.5", now);
 
-        EntitySummary summary = service.listEntities(kn.id(), null, 50, 0).items().get(0);
+        EntitySummary summary = service.listEntities(kn.id(), EntityQuery.all(), 50, 0).items().get(0);
 
         assertEquals(7, summary.index().chunkCount());
         assertEquals("bge-base-en-v1.5", summary.index().embeddingModel());
@@ -168,10 +172,108 @@ class DefaultKnowledgeServiceListingTest {
 
     @Test
     void listEntitiesOnUnknownKnowledgeThrows() {
-        assertThrows(NoSuchElementException.class, () -> service.listEntities("kn_missing", null, 50, 0));
+        assertThrows(NoSuchElementException.class, () -> service.listEntities("kn_missing", EntityQuery.all(), 50, 0));
     }
 
-    // ---- cursor listing ----------------------------------------------------------------------
+    @Test
+    void hidesDeletedEntitiesUntilAskedForByName() {
+        Knowledge kn = storedKnowledge("kn_1");
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        entities.seed(entity("ent_live", kn.id(), EntityStatus.INDEXED, t0));
+        entities.seed(entity("ent_gone", kn.id(), EntityStatus.DELETED, t0.plusSeconds(60)));
+
+        KnowledgeService.EntityPage byDefault = service.listEntities(kn.id(), EntityQuery.all(), 50, 0);
+
+        assertEquals(List.of("ent_live"), byDefault.items().stream().map(EntitySummary::id).toList(),
+                "a tombstoned entity is not a row the user can act on");
+        assertEquals(1, byDefault.total(), "the total hides it too, or the last page renders empty");
+
+        KnowledgeService.EntityPage asked =
+                service.listEntities(kn.id(), EntityQuery.ofStatuses(EntityStatus.DELETED), 50, 0);
+
+        assertEquals(List.of("ent_gone"), asked.items().stream().map(EntitySummary::id).toList(),
+                "naming the status explicitly still returns it");
+    }
+
+    @Test
+    void filtersBySeveralStatusesAtOnce() {
+        Knowledge kn = storedKnowledge("kn_1");
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        entities.seed(entity("ent_ingested", kn.id(), EntityStatus.INGESTED, t0));
+        entities.seed(entity("ent_indexing", kn.id(), EntityStatus.INDEXING, t0.plusSeconds(60)));
+        entities.seed(entity("ent_indexed", kn.id(), EntityStatus.INDEXED, t0.plusSeconds(120)));
+
+        KnowledgeService.EntityPage page = service.listEntities(kn.id(),
+                EntityQuery.ofStatuses(EntityStatus.INGESTED, EntityStatus.INDEXING), 50, 0);
+
+        assertEquals(List.of("ent_indexing", "ent_ingested"),
+                page.items().stream().map(EntitySummary::id).toList(),
+                "one chip can cover both in-flight states");
+        assertEquals(2, page.total());
+    }
+
+    @Test
+    void filtersByTitleSubstringIgnoringCase() {
+        Knowledge kn = storedKnowledge("kn_1");
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INDEXED, t0));
+        entities.seed(entity("ent_b", kn.id(), EntityStatus.INDEXED, t0.plusSeconds(60)));
+
+        KnowledgeService.EntityPage page =
+                service.listEntities(kn.id(), EntityQuery.all().withTitleContains("title ENT_A"), 50, 0);
+
+        assertEquals(List.of("ent_a"), page.items().stream().map(EntitySummary::id).toList());
+        assertEquals(1, page.total(), "total reflects the text filter, not the whole knowledge");
+    }
+
+    @Test
+    void matchesTheExternalIdToo() {
+        Knowledge kn = storedKnowledge("kn_1");
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INDEXED, Instant.parse("2026-01-01T00:00:00Z")));
+
+        KnowledgeService.EntityPage page =
+                service.listEntities(kn.id(), EntityQuery.all().withTitleContains("ext_ent_a"), 50, 0);
+
+        assertEquals(1, page.total(), "the console shows the external id when an item has no title");
+    }
+
+    @Test
+    void carriesTheIterableTheEntityWasWalkedFrom() {
+        Knowledge kn = storedKnowledge("kn_1");
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INDEXED, Instant.parse("2026-01-01T00:00:00Z")));
+
+        EntitySummary summary = service.listEntities(kn.id(), EntityQuery.all(), 50, 0).items().get(0);
+
+        assertEquals("chan_a", summary.iterableId(),
+                "the console names the group by joining this with the cursors");
+    }
+
+    @Test
+    void filtersByOneOrSeveralIterables() {
+        Knowledge kn = storedKnowledge("kn_1");
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        entities.seed(entity("ent_a", kn.id(), "chan_a", t0));
+        entities.seed(entity("ent_b", kn.id(), "chan_b", t0.plusSeconds(60)));
+        entities.seed(entity("ent_c", kn.id(), "chan_c", t0.plusSeconds(120)));
+
+        KnowledgeService.EntityPage one =
+                service.listEntities(kn.id(), EntityQuery.all().withIterableIds("chan_b"), 50, 0);
+        KnowledgeService.EntityPage two =
+                service.listEntities(kn.id(), EntityQuery.all().withIterableIds("chan_a", "chan_c"), 50, 0);
+
+        assertEquals(List.of("ent_b"), one.items().stream().map(EntitySummary::id).toList());
+        assertEquals(1, one.total(), "total follows the group filter");
+        assertEquals(List.of("ent_c", "ent_a"), two.items().stream().map(EntitySummary::id).toList());
+        assertEquals(2, two.total());
+    }
+
+    @Test
+    void blankTextFilterIsNoFilter() {
+        Knowledge kn = storedKnowledge("kn_1");
+        entities.seed(entity("ent_a", kn.id(), EntityStatus.INDEXED, Instant.parse("2026-01-01T00:00:00Z")));
+
+        assertEquals(1, service.listEntities(kn.id(), EntityQuery.all().withTitleContains("   "), 50, 0).total());
+    }
 
     @Test
     void listsCursorsForThatKnowledgeOnlyOrderedByIterableThenDirection() {

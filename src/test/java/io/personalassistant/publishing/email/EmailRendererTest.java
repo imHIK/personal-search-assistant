@@ -6,10 +6,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-/**
- * Email rendering: untrusted text stays text, only web links become links, the subject stays one line, and
- * raw extracted excerpts are tidied before anyone has to read them.
- */
 class EmailRendererTest {
 
     private final EmailRenderer renderer = new EmailRenderer();
