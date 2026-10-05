@@ -449,6 +449,10 @@ Two things keep it bounded:
 Expect it to be slow: 47 sequential detail calls took ~14s. That is fine behind a lease and a 3-hour
 poll, but it is an order of magnitude slower than the single-call platforms.
 
+The detail carries two links: `postingUrl`, the posting page, which is what `uri` links, and `applyUrl`,
+the same address with `?oga=true` appended. The link is not in the checksum, so a stored posting
+picks up a changed link only when the posting itself changes.
+
 Two API quirks worth knowing:
 
 - **An unknown company returns 200 with `totalFound: 0`**, not a 404 — so `hasBoard` reads the field.
