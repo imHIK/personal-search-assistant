@@ -571,9 +571,12 @@ network call, and a schemeless `host/path` is left to Workday and Oracle. `GET h
 returns the whole posting, description included, 100 a page, so it costs one request per hundred and
 ignores the hint. Two quirks: dates are written `+0000`, which neither ISO parser accepts, so
 `JibePlatform.instant` inserts the colon; and the remote marker lives in `location_name`
-(`US-WA-Remote (SEA Area)`) while `full_location` drops it, so both feed `isRemote`. The posting link is
-`https://<host>/jobs/<slug>`, which every site redirects to its own job page whatever path prefix it
-uses; `apply_url` is iCIMS's login-gated apply form.
+(`US-WA-Remote (SEA Area)`) while `full_location` drops it, so both feed `isRemote`. `apply_url` is
+iCIMS's login-gated apply form (`https://<portal>.icims.com/jobs/<id>/login`); the same path ending
+`/job` is the posting, readable without a login, and is what `uri` links. An `apply_url` of any other
+shape falls back to `https://<host>/jobs/<slug>`, which every site redirects to its own job page
+whatever path prefix it uses. The link is not in the checksum, so a stored posting picks up a changed
+link only when the posting itself changes.
 
 Avature (Delta, Bloomberg) was looked at in the same pass and not built: tenants expose an RSS feed with
 only title, link and date, so details would mean scraping HTML, and Delta's tenant answers every request

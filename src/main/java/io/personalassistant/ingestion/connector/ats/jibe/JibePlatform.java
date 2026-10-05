@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -36,6 +37,10 @@ public class JibePlatform implements BoardPlatform {
 
     /** Jibe writes {@code +0000}, which neither ISO parser accepts. */
     private static final Pattern COMPACT_OFFSET = Pattern.compile("([+-]\\d{2})(\\d{2})$");
+
+    /** iCIMS's apply form; the same path ending {@code /job} is the posting, readable without a login. */
+    private static final Pattern ICIMS_APPLY =
+            Pattern.compile("^(https://[^/]+\\.icims\\.com/jobs/[^/]+)/login$");
 
     private final JibeApi api;
 
@@ -101,8 +106,9 @@ public class JibePlatform implements BoardPlatform {
             return null;
         }
         String slug = firstNonBlank(text(job, "slug"), id);
-        String uri = site.jobUrl(slug);
-        String applyUrl = firstNonBlank(text(job, "apply_url"), uri);
+        String applyUrl = text(job, "apply_url");
+        String uri = postingUrl(applyUrl).orElseGet(() -> site.jobUrl(slug));
+        applyUrl = firstNonBlank(applyUrl, uri);
         String location = firstNonBlank(text(job, "full_location"), text(job, "location_name"));
         // location_name is the requisition's own label and is where "Remote" is stated.
         String locationName = text(job, "location_name");
@@ -153,6 +159,14 @@ public class JibePlatform implements BoardPlatform {
                 // No close date is published, so the retention window governs.
                 null,
                 false);
+    }
+
+    static Optional<String> postingUrl(String applyUrl) {
+        if (applyUrl == null) {
+            return Optional.empty();
+        }
+        Matcher matcher = ICIMS_APPLY.matcher(applyUrl);
+        return matcher.matches() ? Optional.of(matcher.group(1) + "/job") : Optional.empty();
     }
 
     /** Kept as HTML: the parser strips it at index time, and headings survive into chunking. */

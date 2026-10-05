@@ -45,7 +45,8 @@ export function JobRow({
   pending: boolean
   onMark: (values: Blob) => void
 }) {
-  const href = text(item.metadata.applyUrl) ?? item.uri ?? undefined
+  // Not applyUrl first: iCIMS (Jibe) hands out its login-gated apply form there, not the posting.
+  const href = item.uri ?? text(item.metadata.applyUrl) ?? undefined
   const rawCompany = text(item.metadata.company)
   const company = companyFor(rawCompany)?.label ?? rawCompany
   const location = text(item.metadata.location)
