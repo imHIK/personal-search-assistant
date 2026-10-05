@@ -171,6 +171,7 @@ export const labels = {
     any: 'Any',
     min: 'Min',
     max: 'Max',
+    searchOptions: (label: string) => `Search ${label.toLowerCase()}`,
     source: 'Source',
     status: 'Status',
     noStatus: 'No status',

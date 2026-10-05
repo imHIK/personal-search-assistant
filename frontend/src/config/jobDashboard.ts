@@ -66,6 +66,8 @@ export const jobDashboard = {
     locations: { as: 'hidden' },
   } as Record<string, EnrichedDisplay>,
   tagLimit: 6,
+  /** A `multi` filter with at least this many chips gets a box that narrows them as you type. */
+  chipSearchFrom: 10,
   /** Browser-only conveniences; nothing here is shared or sent to the backend. */
   storage: { lastVisit: 'jobs.lastVisit', since: 'jobs.since', mySkills: 'jobs.mySkills' },
   /** One per posting, in `custom.status`; `tone` names a `--tone-*` CSS variable pair. */
@@ -82,6 +84,7 @@ export const jobDashboard = {
       label: 'Company',
       kind: 'multi',
       path: 'metadata.company',
+      placeholder: 'Search companies',
       labelFor: (value: string) => companyFor(value)?.label ?? value,
     },
     { id: 'location', label: 'Location', kind: 'contains', path: 'metadata.location', placeholder: 'e.g. Bengaluru' },
