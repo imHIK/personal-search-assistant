@@ -1,5 +1,6 @@
-import { Check, ExternalLink, EyeOff, Eye, MapPin } from 'lucide-react'
+import { Check, Copy, ExternalLink, EyeOff, Eye, MapPin } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import type { Blob, EntityRecord } from '@/api/types'
 import { CompanyIcon } from '@/components/CompanyIcon'
 import { Technical, TechnicalPanel } from '@/components/TechnicalDetails'
@@ -10,7 +11,7 @@ import { connectorFor } from '@/config/connectors'
 import { jobDashboard, statusFor, type EnrichedDisplay, type JobFilterSpec } from '@/config/jobDashboard'
 import { labels } from '@/config/labels'
 import { resultFacts } from '@/lib/resultFacts'
-import { absoluteTime, cn, relativeTime } from '@/lib/utils'
+import { absoluteTime, cn, copyToClipboard, relativeTime } from '@/lib/utils'
 import { skillKey } from './jobPrefs'
 import { StatusMenu } from './StatusMenu'
 
@@ -110,6 +111,21 @@ export function JobRow({
                 disabled={pending}
                 onChange={(next) => onMark({ [STATUS]: next, [STATUS_AT]: next ? new Date().toISOString() : null })}
               />
+              {href && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  title={labels.jobs.copyLink}
+                  aria-label={labels.jobs.copyLink}
+                  onClick={() =>
+                    void copyToClipboard(href).then((ok) =>
+                      ok ? toast.success(labels.common.copied) : toast.error(labels.jobs.copyFailed),
+                    )
+                  }
+                >
+                  <Copy />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="iconSm"

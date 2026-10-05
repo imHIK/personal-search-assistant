@@ -182,6 +182,8 @@ export const labels = {
     unhide: 'Unhide',
     firstSeen: (when: string) => `Added ${when}`,
     open: 'Open posting',
+    copyLink: 'Copy link',
+    copyFailed: "Couldn't copy",
     yoe: (years: string) => `${years}+ yrs`,
     isNew: 'New',
     newHint: 'Added since your last visit',
