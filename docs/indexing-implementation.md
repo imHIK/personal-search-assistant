@@ -151,10 +151,15 @@ the pass runs it on the parsed text before chunking:
   the first document decide). It runs when a knowledge is pointed at the task or a task in use is edited
   — a type clash with an existing field is a **400** there — and again, memoised per task version, on
   the first enrichment after a restart.
-- **Failure never fails the pass.** A rate limit past the wait cap throws `RateLimitedException` and
-  the whole pass defers, as for embeddings. Anything else (bad JSON, a required field missing, the task
-  gone) indexes the entity anyway with its previous values, if any, and records `enrichment.error`; the
-  next re-index retries it. The error shows on the entity listing (`enrichmentError`).
+- **An unreachable LLM fails the pass; an unusable reply does not.** A rate limit, local past the wait
+  cap or a vendor `429`, throws `RateLimitedException` and the whole pass defers, as for embeddings. A
+  vendor `5xx` or no response (`LlmUnavailableException`) fails the pass like any other indexing error:
+  `INGESTED` with `app.indexing.backoff-seconds`, `FAILED` after `app.indexing.retry-limit` in a row, and
+  nothing is indexed meanwhile. Anything else (bad JSON, a required field missing, no LLM connection, the
+  task gone) would fail the same way on every retry, so it indexes the entity anyway with its previous
+  values, if any, and records `enrichment.error`. Nothing re-queues it automatically. The next re-index
+  retries it, and an error stamp is never current. The error shows on the entity listing
+  (`enrichmentError`).
 - **Removing the task** (`enrichTaskId: null`) clears `enriched`/`enrichment` on each entity's next
   pass (`CLEAR`). Like chunking, setting or changing the task is a direct config update: existing
   entities pick it up only when re-indexed (`POST /api/index/knowledge/{id}/reindex`).

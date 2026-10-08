@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.personalassistant.agent.llm.LlmUnavailableException;
 import io.personalassistant.common.fields.FieldSets;
 import io.personalassistant.common.ratelimit.RateLimitKey;
 import io.personalassistant.common.ratelimit.RateLimitedException;
@@ -382,6 +383,22 @@ class IndexingRunnerTest {
         assertEquals(EntityStatus.INGESTED, stored.status());
         assertEquals(reopensAt, stored.retry().nextAttemptAt());
         assertTrue(index.indexed.isEmpty(), "nothing is indexed half-enriched");
+    }
+
+    @Test
+    void anUnreachableLlmFailsThePassForABackoffRetryInsteadOfIndexingBare() {
+        enrichWith(metadataTask("task_meta").id());
+        enricher.failure = new LlmUnavailableException("LLM API 503: high demand", null);
+        entities.upsert(TestData.ingestedText("ent_e5", "kn_1", "doc", "text"));
+
+        runner.indexEntity(claim("ent_e5"), WORKER);
+
+        Entity stored = entities.findById("ent_e5").orElseThrow();
+        assertEquals(EntityStatus.INGESTED, stored.status());
+        assertEquals(1, stored.retry().count());
+        assertNotNull(stored.retry().nextAttemptAt());
+        assertNull(stored.enrichment(), "no error stamp: the enrichment was never attempted to completion");
+        assertTrue(index.indexed.isEmpty(), "nothing is indexed without its metadata");
     }
 
     @Test

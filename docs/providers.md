@@ -121,6 +121,13 @@ already have separate entry points:
 The mode belongs to the *call*, not the account: `LlmProfile.rateLimitMode` is empty (fail fast) unless
 the caller sets it, and enrichment is the one that does (`withDefaultMode(WAIT)`).
 
+`OpenAiCompatibleLlmProvider` sorts the vendor's own errors the same way for every caller. A vendor `429`
+(its `Retry-After` already paused the connection's window) throws `RateLimitedException` at that
+instant, exactly like a local breach. A `5xx`, or no response at all, throws `LlmUnavailableException`, an
+`IllegalStateException`, so answers and digests still report it as an ordinary error. Enrichment fails the
+indexing pass on it rather than indexing the entity bare (see `indexing-implementation.md`). Any other
+status is a plain `IllegalStateException`.
+
 `app.embedding.dimension` deliberately has **no `defaultValue`** at any of its injection points. It
 is the one config key that silently corrupts the index if guessed — a missing property would
 otherwise build a `knn_vector` mapping of some arbitrary width that the configured model's vectors
