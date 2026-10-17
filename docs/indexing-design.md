@@ -152,7 +152,8 @@ Runs continuously / on a tick:
    - `hasMore = false`, backward → **`EXHAUSTED`** (history drained; terminal).
    - `hasMore = false`, forward → **`IDLE`** (caught up; the scheduler will re-arm it).
 6. On error: persist progress so far, increment `retry.count`, release the lease, and set
-   **`AVAILABLE`** to retry (optionally after a short backoff); past the retry limit → set
+   **`AVAILABLE`** with `retry.nextAttemptAt` = now + a doubling backoff (`app.ingestion.backoff-seconds`,
+   capped at `max-backoff-seconds`, stretched by up to 25% jitter); past the retry limit → set
    **`FAILED`** (dead-letter; needs intervention).
 
 ### Forward scheduling

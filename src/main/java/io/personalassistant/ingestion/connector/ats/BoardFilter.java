@@ -97,11 +97,11 @@ public record BoardFilter(List<String> locations, List<String> titleInclude,
      * boards none.
      */
     private boolean matchesAge(RawItem item) {
-        if (maxAge == null) {
-            return true;
-        }
-        Instant posted = postedAt(item);
-        return posted == null || !posted.isBefore(Instant.now().minus(maxAge));
+        return matchesAge(postedAt(item));
+    }
+
+    public boolean matchesAge(Instant posted) {
+        return maxAge == null || posted == null || !posted.isBefore(Instant.now().minus(maxAge));
     }
 
     private static Instant postedAt(RawItem item) {

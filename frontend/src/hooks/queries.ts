@@ -8,6 +8,7 @@ import { entitiesApi } from '@/api/entities'
 import { healthApi, indexingApi } from '@/api/indexing'
 import { knowledgeApi } from '@/api/knowledge'
 import { tasksApi } from '@/api/tasks'
+import { watchedCompaniesApi } from '@/api/watchedCompanies'
 import type {
   Connection,
   CreateChannelBody,
@@ -27,6 +28,8 @@ import type {
   PatchDigestBody,
   PatchKnowledgeBody,
   TaskBody,
+  WatchedCompany,
+  WatchedCompanyBody,
 } from '@/api/types'
 import {
   HEALTH_INTERVAL_MS,
@@ -47,8 +50,8 @@ export const keys = {
   digestRunsAll: (id: string) => ['digests', id, 'runs'] as const,
   entityQueryAll: ['entity-query'] as const,
   entityQuery: (body: EntityQueryBody) => ['entity-query', body] as const,
-  entityFacets: (types: EntityType[], knowledgeIds: string[], fields: string[]) =>
-    ['entity-facets', types, knowledgeIds, fields] as const,
+  entityFacets: (types: EntityType[], knowledgeIds: string[], fields: string[], includeDeleted: boolean) =>
+    ['entity-facets', types, knowledgeIds, fields, includeDeleted] as const,
   tasks: ['tasks'] as const,
   taskOne: (id: string) => ['tasks', id] as const,
   llmProfiles: ['llm-profiles'] as const,
@@ -61,6 +64,7 @@ export const keys = {
     ['deliveries', channelId, status ?? 'all', limit, offset] as const,
   deliveriesAll: ['deliveries'] as const,
   runDeliveries: (runId: string) => ['deliveries', 'run', runId] as const,
+  watchedCompanies: ['watched-companies'] as const,
 }
 
 function knowledgeHasWork(knowledge: Knowledge): boolean {
@@ -281,8 +285,12 @@ export function useConnectionMutations() {
     mutationFn: (id: string) => connectionsApi.remove(id),
     onSuccess: invalidate,
   })
+  // Nothing on the connection changes, so there is nothing to re-read.
+  const resetRateLimit = useMutation({
+    mutationFn: (id: string) => connectionsApi.resetRateLimit(id),
+  })
 
-  return { create, patch, makeDefault, test, remove }
+  return { create, patch, makeDefault, test, remove, resetRateLimit }
 }
 
 export function useConnectionsById(): Map<string, Connection> {
@@ -328,6 +336,48 @@ export function useChannelMutations() {
     onSuccess: invalidate,
   })
   return { create, patch, test, remove }
+}
+
+export function useWatchedCompanies() {
+  return useQuery({ queryKey: keys.watchedCompanies, queryFn: watchedCompaniesApi.list })
+}
+
+export function useWatchedCompanyMutations() {
+  const client = useQueryClient()
+  const invalidate = useCallback(
+    () => void client.invalidateQueries({ queryKey: keys.watchedCompanies }),
+    [client],
+  )
+  // Swapped in place so the row does not jump while the list refetches.
+  const replace = useCallback(
+    (updated: WatchedCompany) =>
+      client.setQueryData<WatchedCompany[]>(keys.watchedCompanies, (list) =>
+        list?.map((c) => (c.id === updated.id ? updated : c)),
+      ),
+    [client],
+  )
+
+  const create = useMutation({
+    mutationFn: (body: WatchedCompanyBody) => watchedCompaniesApi.create(body),
+    onSuccess: invalidate,
+  })
+  const patch = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WatchedCompanyBody }) => watchedCompaniesApi.patch(id, body),
+    onSuccess: invalidate,
+  })
+  const markChecked = useMutation({
+    mutationFn: (id: string) => watchedCompaniesApi.markChecked(id),
+    onSuccess: replace,
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => watchedCompaniesApi.remove(id),
+    onSuccess: invalidate,
+  })
+  const importBundled = useMutation({
+    mutationFn: () => watchedCompaniesApi.importBundled(),
+    onSuccess: invalidate,
+  })
+  return { create, patch, markChecked, remove, importBundled }
 }
 
 export function useDeliveries(channelId: string | undefined, limit = 20) {
@@ -485,10 +535,15 @@ export function useEntityQuery(body: EntityQueryBody, enabled = true) {
   })
 }
 
-export function useEntityFacets(types: EntityType[], knowledgeIds: string[], fields: string[]) {
+export function useEntityFacets(
+  types: EntityType[],
+  knowledgeIds: string[],
+  fields: string[],
+  includeDeleted = false,
+) {
   return useQuery({
-    queryKey: keys.entityFacets(types, knowledgeIds, fields),
-    queryFn: () => entitiesApi.facets({ entityTypes: types, knowledgeIds, fields, limit: 200 }),
+    queryKey: keys.entityFacets(types, knowledgeIds, fields, includeDeleted),
+    queryFn: () => entitiesApi.facets({ entityTypes: types, knowledgeIds, fields, limit: 200, includeDeleted }),
     enabled: fields.length > 0,
     staleTime: 60_000,
   })

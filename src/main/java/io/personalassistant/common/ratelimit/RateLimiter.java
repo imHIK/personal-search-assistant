@@ -15,4 +15,10 @@ public interface RateLimiter {
      * @return the instant actually applied, after any clamping; {@code until} when there is no key
      */
     Instant penalize(RateLimitKey key, Instant until);
+
+    /**
+     * Drops every window on {@code key}, whatever rule widths recorded it, and any pause. Idempotent. Only
+     * the local count: a provider that has not reset its own will answer with a 429 and pause the key again.
+     */
+    void reset(RateLimitKey key);
 }

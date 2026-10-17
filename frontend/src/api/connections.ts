@@ -27,6 +27,10 @@ export const connectionsApi = {
   makeDefault: (id: string) =>
     http<Connection>(`/api/connections/${encodeURIComponent(id)}/default`, { method: 'POST' }),
 
+  /** 204. Clears only the local counters and any server-imposed pause, not the provider's quota. */
+  resetRateLimit: (id: string) =>
+    http<null>(`/api/connections/${encodeURIComponent(id)}/rate-limit/reset`, { method: 'POST' }),
+
   /** 409 while any knowledge still binds this connection. */
   remove: (id: string) =>
     http<null>(`/api/connections/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -24,6 +24,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.DoubleSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -53,8 +55,17 @@ public class IngestionRunner {
     @ConfigProperty(name = "app.ingestion.retry-limit", defaultValue = "5")
     public int retryLimit;
 
+    @ConfigProperty(name = "app.ingestion.backoff-seconds", defaultValue = "120")
+    public long backoffSeconds;
+
+    @ConfigProperty(name = "app.ingestion.max-backoff-seconds", defaultValue = "3600")
+    public long maxBackoffSeconds;
+
     @ConfigProperty(name = "app.ratelimit.max-deferrals", defaultValue = "20")
     public int maxDeferrals;
+
+    /** In [0, 1); a field so tests can pin it. */
+    public DoubleSupplier jitter = () -> ThreadLocalRandom.current().nextDouble();
 
     @Inject
     public IngestionRunner(ConnectorRegistry connectors, EntityRepository entities,
@@ -105,11 +116,28 @@ public class IngestionRunner {
             defer(cursor, worker, e);
         } catch (RuntimeException e) {
             int retryCount = cursor.retry().count() + 1;
-            CursorStatus resting = retryCount > retryLimit ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
+            boolean dead = retryCount > retryLimit;
+            CursorStatus resting = dead ? CursorStatus.FAILED : CursorStatus.AVAILABLE;
+            Instant nextAttempt = dead ? null : Instant.now().plus(backoff(retryCount));
             LOG.log(Level.WARNING, "Ingestion failed for cursor " + cursor.id()
-                    + " (attempt " + retryCount + ", resting " + resting + ")", e);
-            cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e), null);
+                    + " (attempt " + retryCount + ", resting " + resting
+                    + (dead ? "" : " until " + nextAttempt) + ")", e);
+            cursors.recordFailure(cursor.id(), worker, resting, retryCount, Errors.summary(e), nextAttempt);
         }
+    }
+
+    /**
+     * Doubling from backoff-seconds, capped, then stretched by up to a quarter. The jitter only lengthens, so
+     * the retry limit still spans an outage of about an hour; it spreads boards that failed together on one
+     * host.
+     */
+    Duration backoff(int attempts) {
+        long seconds = Math.max(backoffSeconds, 1);
+        for (int i = 1; i < attempts && seconds < maxBackoffSeconds; i++) {
+            seconds *= 2;
+        }
+        long capped = Math.min(seconds, Math.max(maxBackoffSeconds, 1));
+        return Duration.ofMillis(Math.round(capped * 1000 * (1 + 0.25 * jitter.getAsDouble())));
     }
 
     /**

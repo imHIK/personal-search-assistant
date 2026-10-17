@@ -14,8 +14,8 @@ public interface EightfoldApi {
     JsonNode position(EightfoldSite site, String id);
 
     /**
-     * Ten positions a page under {@code data}. {@code location} is matched server-side and case-insensitively;
-     * blank lists everything. A v2 tenant answers 403 "PCSX is not enabled".
+     * Ten positions a page under {@code data}, newest {@code postedTs} first. {@code location} is matched
+     * server-side and case-insensitively; blank lists everything. A v2 tenant answers 403 "PCSX is not enabled".
      */
     JsonNode search(EightfoldSite site, String location, int start);
 

@@ -82,6 +82,12 @@ export function JobFilters({
         label={labels.jobs.showHidden}
       />
 
+      <Toggle
+        checked={values.showDeleted === '1'}
+        onCheckedChange={(checked) => onChange('showDeleted', checked ? '1' : '')}
+        label={labels.jobs.showDeleted}
+      />
+
       <div className="space-y-1.5 border-t border-[var(--border)] pt-4">
         <p className="text-xs font-medium text-[var(--text-muted)]">{labels.jobs.mySkills}</p>
         <DebouncedInput
@@ -191,7 +197,7 @@ function FilterControl({
   }
 }
 
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
+export function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-[var(--text-muted)]">{label}</p>
@@ -201,7 +207,7 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /** `values` set: one chip standing for several stored spellings of the same thing. */
-interface ChipOption {
+export interface ChipOption {
   value: string
   label: string
   count?: number
@@ -225,7 +231,7 @@ function groupFacets(facets: FacetValue[], labelFor?: (value: string) => string)
 }
 
 /** `searchPlaceholder` adds a box that narrows the chips; selected chips stay visible regardless. */
-function Chips({
+export function Chips({
   options,
   selected,
   onChange,

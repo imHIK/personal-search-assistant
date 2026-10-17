@@ -364,7 +364,7 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     private static boolean matches(Entity e, EntityFilter filter) {
-        if (e.status() == EntityStatus.DELETED) {
+        if (e.status() == EntityStatus.DELETED && !filter.includeDeleted()) {
             return false;
         }
         if (!filter.entityTypes().isEmpty() && !filter.entityTypes().contains(e.entityType())) {
@@ -385,6 +385,9 @@ public class InMemoryEntityRepository implements EntityRepository {
     }
 
     private static boolean holds(Object actual, EntityFilter.Condition c) {
+        if (c.orMissing() && actual == null) {
+            return true;
+        }
         List<?> values = actual instanceof List<?> list ? list : java.util.Collections.singletonList(actual);
         return switch (c.op()) {
             case EQ -> values.stream().anyMatch(v -> java.util.Objects.equals(v, c.value()));

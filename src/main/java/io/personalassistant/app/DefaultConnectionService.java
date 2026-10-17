@@ -1,6 +1,8 @@
 package io.personalassistant.app;
 
 import io.personalassistant.common.id.Ids;
+import io.personalassistant.common.ratelimit.RateLimitKey;
+import io.personalassistant.common.ratelimit.RateLimiter;
 import io.personalassistant.connection.ConnectionKind;
 import io.personalassistant.connection.ConnectionKindRegistry;
 import io.personalassistant.domain.model.Connection;
@@ -28,14 +30,17 @@ public class DefaultConnectionService implements ConnectionService {
     private final KnowledgeRepository knowledge;
     private final ChannelRepository channels;
     private final ConnectionKindRegistry kinds;
+    private final RateLimiter rateLimiter;
 
     @Inject
     public DefaultConnectionService(ConnectionRepository connections, KnowledgeRepository knowledge,
-                                    ChannelRepository channels, ConnectionKindRegistry kinds) {
+                                    ChannelRepository channels, ConnectionKindRegistry kinds,
+                                    RateLimiter rateLimiter) {
         this.connections = connections;
         this.knowledge = knowledge;
         this.channels = channels;
         this.kinds = kinds;
+        this.rateLimiter = rateLimiter;
     }
 
     @Override
@@ -121,6 +126,13 @@ public class DefaultConnectionService implements ConnectionService {
         Connection current = require(id);
         connections.clearDefault(current.type());
         return connections.save(current.asDefault(true));
+    }
+
+    @Override
+    public void resetRateLimit(String id) {
+        require(id);
+        rateLimiter.reset(RateLimitKey.connection(id));
+        LOG.info("Reset rate-limit counters for connection " + id);
     }
 
     @Override

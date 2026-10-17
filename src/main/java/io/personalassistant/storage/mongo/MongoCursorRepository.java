@@ -249,11 +249,13 @@ public class MongoCursorRepository implements CursorRepository {
     /**
      * The persisted instant alone lifts a rate-limit hold, so nothing can strand a cursor. Unlike the entity
      * indexing filter, a missing nextAttemptAt matches nothing here: a RATE_LIMITED row without one stays out
-     * rather than being re-picked every tick.
+     * rather than being re-picked every tick. An AVAILABLE row reads it the entity way: missing means now,
+     * set means a failure backoff.
      */
     private static Bson claimableFilter(Instant now) {
         return or(
-                eq("status", CursorStatus.AVAILABLE.name()),
+                and(eq("status", CursorStatus.AVAILABLE.name()),
+                        or(eq("retry.nextAttemptAt", null), lte("retry.nextAttemptAt", BsonSupport.date(now)))),
                 and(eq("status", CursorStatus.RATE_LIMITED.name()),
                         lte("retry.nextAttemptAt", BsonSupport.date(now))),
                 and(eq("status", CursorStatus.IN_PROGRESS.name()),

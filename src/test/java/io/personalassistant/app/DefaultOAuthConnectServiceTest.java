@@ -13,6 +13,7 @@ import io.personalassistant.ingestion.connector.oauth.OAuthTokens;
 import io.personalassistant.testsupport.InMemoryChannelRepository;
 import io.personalassistant.testsupport.InMemoryConnectionRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.RecordingRateLimiter;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConfig;
 import io.personalassistant.testsupport.StubConnector;
@@ -51,7 +52,8 @@ class DefaultOAuthConnectServiceTest {
                 .withRequiresConnection(true);
         DefaultConnectionService connectionService = new DefaultConnectionService(
                 connections, new InMemoryKnowledgeRepository(), new InMemoryChannelRepository(),
-                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
+                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)),
+                new RecordingRateLimiter());
 
         service = new DefaultOAuthConnectService(
                 new StubOAuthProviderRegistry(provider), clients, states,

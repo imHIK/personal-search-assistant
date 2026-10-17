@@ -6,13 +6,14 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * A cross-knowledge entity query on stored fields. DELETED is always excluded. Paths are restricted to the
- * fields a caller may legitimately filter on, so a query cannot reach credentials, leases or raw payloads.
+ * A cross-knowledge entity query on stored fields. Paths are restricted to the fields a caller may
+ * legitimately filter on, so a query cannot reach credentials, leases or raw payloads.
  *
  * @param text case-insensitive substring of the title or external id; blank means none
+ * @param includeDeleted also match tombstones, which keep their metadata and custom marks
  */
 public record EntityFilter(Set<EntityType> entityTypes, Set<String> knowledgeIds, String text,
-                           List<Condition> conditions, Sort sort) {
+                           List<Condition> conditions, Sort sort, boolean includeDeleted) {
 
     private static final Pattern FILTERABLE =
             Pattern.compile("(metadata|enriched|custom)\\.[A-Za-z][A-Za-z0-9_]*|createdAt|updatedAt");
@@ -22,11 +23,16 @@ public record EntityFilter(Set<EntityType> entityTypes, Set<String> knowledgeIds
     /**
      * @param value a scalar for EQ/NE/ranges (an Instant for a date), a list for IN/NIN, text for CONTAINS,
      *              a Boolean for EXISTS. On a list-valued field EQ and IN match any element
+     * @param orMissing also match an entity where the field is absent or null
      */
-    public record Condition(String path, Op op, Object value) {
+    public record Condition(String path, Op op, Object value, boolean orMissing) {
 
         public Condition {
             requireFilterable(path);
+        }
+
+        public Condition(String path, Op op, Object value) {
+            this(path, op, value, false);
         }
     }
 
@@ -47,9 +53,14 @@ public record EntityFilter(Set<EntityType> entityTypes, Set<String> knowledgeIds
         sort = sort == null ? Sort.NEWEST_FIRST : sort;
     }
 
+    public EntityFilter(Set<EntityType> entityTypes, Set<String> knowledgeIds, String text,
+                        List<Condition> conditions, Sort sort) {
+        this(entityTypes, knowledgeIds, text, conditions, sort, false);
+    }
+
     /** The same scope without conditions, text or sort: what facet values are counted over. */
     public EntityFilter scopeOnly() {
-        return new EntityFilter(entityTypes, knowledgeIds, null, List.of(), null);
+        return new EntityFilter(entityTypes, knowledgeIds, null, List.of(), null, includeDeleted);
     }
 
     /** @throws IllegalArgumentException naming the path */

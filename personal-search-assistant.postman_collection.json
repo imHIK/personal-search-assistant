@@ -40,7 +40,8 @@
     { "key": "opensearchUrl", "value": "http://localhost:9200" },
     { "key": "chunksIndex", "value": "chunks" },
     { "key": "channelId", "value": "" },
-    { "key": "deliveryId", "value": "" }
+    { "key": "deliveryId", "value": "" },
+    { "key": "watchedCompanyId", "value": "" }
   ],
   "item": [
     {
@@ -249,6 +250,130 @@
               "path": ["api", "knowledge", ":id"],
               "variable": [{ "key": "id", "value": "{{knowledgeId}}" }]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Watched companies",
+      "description": "Companies no connector reaches, checked by hand on the jobs dashboard's Unsupported tab (/jobs/unsupported). See docs/mongodb-schema.md § watched_companies.",
+      "item": [
+        {
+          "name": "List watched companies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies"]
+            },
+            "description": "Every watched company, by name."
+          }
+        },
+        {
+          "name": "Import bundled list",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies/import-bundled",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies", "import-bundled"]
+            },
+            "description": "Adds every company in config/watched-companies.json whose name is not already watched. An existing row only gets its bundled tier, and only if it has none (counted in `tiered`); its notes, check date and a tier you chose are left alone, so it is safe to repeat. A row you deleted comes back."
+          }
+        },
+        {
+          "name": "Create watched company",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('watchedCompanyId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nutanix\",\n  \"domain\": \"nutanix.com\",\n  \"careersUrl\": \"https://jobs.jobvite.com/nutanix/search?q=India\",\n  \"platform\": \"Jobvite\",\n  \"tier\": \"HIGH\",\n  \"reason\": \"No connector; the listing is one server-rendered HTML page\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies"]
+            },
+            "description": "name is required and unique, ignoring case and extra spaces; a duplicate is a 409. careersUrl must be http(s), or the request is a 400. tier is HIGH, MEDIUM or LOW (anything else is a 400); left out, it is MEDIUM. Sets {{watchedCompanyId}}."
+          }
+        },
+        {
+          "name": "Get watched company",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies", ":id"],
+              "variable": [{ "key": "id", "value": "{{watchedCompanyId}}" }]
+            },
+            "description": "404 if no such id."
+          }
+        },
+        {
+          "name": "Update watched company (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Applied to SDE2 on 2026-10-13\",\n  \"tier\": \"MEDIUM\",\n  \"lookupHandle\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies", ":id"],
+              "variable": [{ "key": "id", "value": "{{watchedCompanyId}}" }]
+            },
+            "description": "A missing or null field is left unchanged, and \"\" clears it. The name and tier cannot be cleared, and lastCheckedAt is not editable here. A name another company has is a 409."
+          }
+        },
+        {
+          "name": "Mark checked",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies/:id/checked",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies", ":id", "checked"],
+              "variable": [{ "key": "id", "value": "{{watchedCompanyId}}" }]
+            },
+            "description": "Stamps lastCheckedAt with the server's clock. Does not move updatedAt."
+          }
+        },
+        {
+          "name": "Delete watched company",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/watched-companies/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "watched-companies", ":id"],
+              "variable": [{ "key": "id", "value": "{{watchedCompanyId}}" }]
+            },
+            "description": "404 if no such id."
           }
         }
       ]
@@ -473,6 +598,33 @@
           }
         },
         {
+          "name": "Reset connection rate-limit counters",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connections/:id/rate-limit/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connections",
+                ":id",
+                "rate-limit",
+                "reset"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{connectionId}}"
+                }
+              ]
+            },
+            "description": "204. Forgets the requests counted against connection:<id> in every window (Redis rl:w:connection:<id>#*) and any Retry-After pause (rl:p:connection:<id>). The configured rules are untouched \u2014 that is 'Clear connection rate limit'.\n\nFor when the provider has refilled its quota but the local rolling window has not: a 1d rule counts the trailing 24 h, while e.g. Gemini resets its daily count at midnight Pacific. Only the local count is cleared; if the provider has not reset, the next call is a 429 and the connection pauses again.\n\nWork already deferred (cursor / entity nextAttemptAt) still waits for its recorded instant.\n\n404 for an unknown id."
+          }
+        },
+        {
           "name": "Set connection as default",
           "request": {
             "method": "POST",
@@ -624,7 +776,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"entityTypes\": [\n    \"JOB_POSTING\"\n  ],\n  \"knowledgeIds\": [],\n  \"q\": null,\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.company\": [\n      \"Stripe\",\n      \"Cisco\"\n    ],\n    \"metadata.postedAt\": {\n      \"gte\": \"2026-09-24\"\n    },\n    \"enriched.yoe\": {\n      \"lte\": 5\n    },\n    \"custom.hidden\": {\n      \"ne\": true\n    }\n  },\n  \"sort\": {\n    \"path\": \"createdAt\",\n    \"descending\": true\n  },\n  \"limit\": 25,\n  \"offset\": 0\n}",
+              "raw": "{\n  \"entityTypes\": [\n    \"JOB_POSTING\"\n  ],\n  \"knowledgeIds\": [],\n  \"q\": null,\n  \"filters\": {\n    \"metadata.remote\": true,\n    \"metadata.company\": [\n      \"Stripe\",\n      \"Cisco\"\n    ],\n    \"metadata.postedAt\": {\n      \"gte\": \"2026-09-24\"\n    },\n    \"enriched.yoe\": {\n      \"lte\": 5,\n      \"orMissing\": true\n    },\n    \"custom.hidden\": {\n      \"ne\": true\n    }\n  },\n  \"sort\": {\n    \"path\": \"createdAt\",\n    \"descending\": true\n  },\n  \"limit\": 25,\n  \"offset\": 0,\n  \"includeDeleted\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -642,7 +794,7 @@
                 "query"
               ]
             },
-            "description": "Entities across knowledges from Mongo (not search): DELETED excluded, newest first seen by default. A filter value that is a scalar is equality, an array any-of, an object operators (eq ne in nin gte gt lte lt contains exists); ISO dates compare as dates. Paths are limited to metadata.*, enriched.*, custom.*, createdAt and updatedAt (anything else is a 400). Empty knowledgeIds means every knowledge. This is what the /jobs page calls."
+            "description": "Entities across knowledges from Mongo (not search): DELETED excluded unless includeDeleted is true (tombstones keep metadata and custom marks), newest first seen by default. A filter value that is a scalar is equality, an array any-of, an object operators (eq ne in nin gte gt lte lt contains exists), plus orMissing: true to let every operator in that object also match an absent or null field; ISO dates compare as dates. Paths are limited to metadata.*, enriched.*, custom.*, createdAt and updatedAt (anything else is a 400). Empty knowledgeIds means every knowledge. This is what the /jobs page calls."
           }
         },
         {
@@ -651,7 +803,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/entities/facets?entityTypes=JOB_POSTING&knowledgeIds=&fields=metadata.company,metadata.team,enriched.skills&limit=50",
+              "raw": "{{baseUrl}}/api/entities/facets?entityTypes=JOB_POSTING&knowledgeIds=&fields=metadata.company,metadata.team,enriched.skills&limit=50&includeDeleted=false",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -676,10 +828,14 @@
                 {
                   "key": "limit",
                   "value": "50"
+                },
+                {
+                  "key": "includeDeleted",
+                  "value": "false"
                 }
               ]
             },
-            "description": "Distinct values with counts per path, most common first; list-valued fields (enriched skills) count per element. Counted over entityTypes + knowledgeIds only. All params comma-separated."
+            "description": "Distinct values with counts per path, most common first; list-valued fields (enriched skills) count per element. Counted over entityTypes + knowledgeIds (and tombstones when includeDeleted=true) only. List params comma-separated."
           }
         },
         {

@@ -126,6 +126,27 @@ class WorkdayPlatformTest {
     }
 
     @Test
+    void aFrontEndBecomesTheLinkAndWorkdayStaysTheApplyUrl() {
+        RawItem item = new WorkdayPlatform(board())
+                .fetch(SITE + "@https://careers.acme.com/job/", BoardFilter.ofLocations(List.of("india"))).get(0);
+
+        Assertions.assertEquals("https://careers.acme.com/job/R1", item.uri());
+        Assertions.assertEquals("https://careers.acme.com/job/R1", item.metadata().get("uri"));
+        Assertions.assertTrue(((String) item.metadata().get("applyUrl")).contains("myworkdayjobs.com"));
+        Assertions.assertEquals(SITE, item.metadata().get("board"));
+    }
+
+    @Test
+    void addingAFrontEndChangesTheChecksumSoStoredPostingsAreRelinked() {
+        String plain = fetch(board(), List.of("india")).get(0).checksum();
+        String fronted = new WorkdayPlatform(board())
+                .fetch(SITE + "@https://careers.acme.com/job/", BoardFilter.ofLocations(List.of("india")))
+                .get(0).checksum();
+
+        Assertions.assertNotEquals(plain, fronted);
+    }
+
+    @Test
     void aBareCompanyNameResolvesToFalseWithoutAnyRequest() {
         FakeWorkdayApi api = board();
 

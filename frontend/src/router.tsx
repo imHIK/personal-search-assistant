@@ -8,6 +8,7 @@ import { ChannelsPage } from '@/features/channels/ChannelsPage'
 import { DigestDetailPage } from '@/features/digests/DigestDetailPage'
 import { DigestsPage } from '@/features/digests/DigestsPage'
 import { JobsDashboardPage } from '@/features/jobs/JobsDashboardPage'
+import { UnsupportedCompaniesPage } from '@/features/jobs/UnsupportedCompaniesPage'
 import { SearchPage } from '@/features/search/SearchPage'
 import { SourceDetailPage } from '@/features/sources/SourceDetailPage'
 import { SourcesPage } from '@/features/sources/SourcesPage'
@@ -44,4 +45,5 @@ export const router = createBrowserRouter([
   },
   // Outside the Layout route on purpose: a standalone page with no nav entry.
   { path: '/jobs', element: <JobsDashboardPage />, errorElement: <RouteError /> },
+  { path: '/jobs/unsupported', element: <UnsupportedCompaniesPage />, errorElement: <RouteError /> },
 ])

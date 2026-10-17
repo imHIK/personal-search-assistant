@@ -520,7 +520,9 @@ public class MongoEntityRepository implements EntityRepository {
     /** Shared by findMatching, countMatching and facets, so they cannot disagree. */
     static Bson matchingFilter(EntityFilter filter) {
         List<Bson> clauses = new ArrayList<>();
-        clauses.add(ne("status", EntityStatus.DELETED.name()));
+        if (!filter.includeDeleted()) {
+            clauses.add(ne("status", EntityStatus.DELETED.name()));
+        }
         if (!filter.entityTypes().isEmpty()) {
             clauses.add(in("entityType", filter.entityTypes().stream().map(Enum::name).toList()));
         }
@@ -538,6 +540,11 @@ public class MongoEntityRepository implements EntityRepository {
     }
 
     private static Bson condition(EntityFilter.Condition c) {
+        // eq(path, null) matches an absent field as well as an explicit null.
+        return c.orMissing() ? or(eq(c.path(), null), clause(c)) : clause(c);
+    }
+
+    private static Bson clause(EntityFilter.Condition c) {
         String path = c.path();
         Object value = bson(c.value());
         return switch (c.op()) {

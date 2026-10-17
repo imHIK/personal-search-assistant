@@ -154,6 +154,27 @@ class MongoEntityRepositoryBsonTest {
     }
 
     @Test
+    void orMissingAlsoMatchesAnAbsentOrNullField() {
+        EntityFilter filter = new EntityFilter(Set.of(EntityType.JOB_POSTING), null, null, List.of(
+                new EntityFilter.Condition("enriched.minYoe", EntityFilter.Op.LTE, 5L, true)), null);
+
+        String json = render(MongoEntityRepository.matchingFilter(filter)).toJson();
+
+        assertTrue(json.contains("{\"$or\": [{\"enriched.minYoe\": null}, {\"enriched.minYoe\": {\"$lte\": 5}}]}"),
+                json);
+    }
+
+    @Test
+    void includeDeletedDropsOnlyTheTombstoneClause() {
+        EntityFilter filter = new EntityFilter(Set.of(EntityType.JOB_POSTING), null, null, List.of(), null, true);
+
+        String json = render(MongoEntityRepository.matchingFilter(filter)).toJson();
+
+        assertFalse(json.contains("DELETED"), json);
+        assertTrue(json.contains("\"entityType\""), json);
+    }
+
+    @Test
     void successResetsTheRetryStreak() {
         BsonDocument set = render(repo.indexedUpdate(3, "model", Instant.now())).getDocument("$set");
 

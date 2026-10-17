@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { Toggle } from '@/components/ui/Toggle'
 import { ErrorState, SkeletonList } from '@/components/ui/States'
 import { accountFor, accountTypes, sectionOf } from '@/config/accounts'
+import { friendlyError } from '@/config/errors'
 import { initialValues, pruneEmpty, type FieldSpec } from '@/config/fields'
 import { labels } from '@/config/labels'
 import { useConnection, useConnectionMutations } from '@/hooks/queries'
@@ -25,7 +26,7 @@ export function AccountFormPage() {
   const navigate = useNavigate()
 
   const { data: existing, isLoading, error: loadError } = useConnection(id)
-  const { create, patch } = useConnectionMutations()
+  const { create, patch, resetRateLimit } = useConnectionMutations()
 
   const [params] = useSearchParams()
   const candidates = useMemo(() => accountTypes(), [])
@@ -61,6 +62,15 @@ export function AccountFormPage() {
 
   const pending = create.isPending || patch.isPending
   const saveError = create.error ?? patch.error
+
+  const resetLimit = () => {
+    if (!id) return
+    resetRateLimit.mutate(id, {
+      onSuccess: () => toast.success(labels.accounts.rateLimitResetDone),
+      onError: (cause) =>
+        toast.error(labels.accounts.rateLimitResetFailed, { description: friendlyError(cause).detail }),
+    })
+  }
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -229,6 +239,24 @@ export function AccountFormPage() {
                   ? labels.accounts.llmRateLimitWarning
                   : labels.accounts.rateLimitWarning}
               </p>
+            )}
+            {isEdit && (
+              <div className="flex items-start justify-between gap-4 border-t border-[var(--border)] pt-4">
+                <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                  {labels.accounts.rateLimitResetHint}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  loading={resetRateLimit.isPending}
+                  disabled={pending}
+                  onClick={resetLimit}
+                >
+                  {labels.accounts.rateLimitReset}
+                </Button>
+              </div>
             )}
           </CardBody>
         </Card>

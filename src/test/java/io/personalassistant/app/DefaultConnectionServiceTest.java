@@ -19,6 +19,7 @@ import io.personalassistant.domain.service.ConnectionService.NewConnection;
 import io.personalassistant.testsupport.InMemoryChannelRepository;
 import io.personalassistant.testsupport.InMemoryConnectionRepository;
 import io.personalassistant.testsupport.InMemoryKnowledgeRepository;
+import io.personalassistant.testsupport.RecordingRateLimiter;
 import io.personalassistant.testsupport.SingleConnectorRegistry;
 import io.personalassistant.testsupport.StubConnector;
 import io.personalassistant.testsupport.TestData;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
 class DefaultConnectionServiceTest {
 
     private final InMemoryChannelRepository channels = new InMemoryChannelRepository();
+    private final RecordingRateLimiter rateLimiter = new RecordingRateLimiter();
 
     private InMemoryConnectionRepository connections;
     private InMemoryKnowledgeRepository knowledge;
@@ -45,7 +47,7 @@ class DefaultConnectionServiceTest {
         knowledge = new InMemoryKnowledgeRepository();
         connector = new StubConnector(SourceType.SLACK, List.of()).withRequiresConnection(true);
         service = new DefaultConnectionService(connections, knowledge, channels,
-                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
+                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)), rateLimiter);
     }
 
     private Connection create(String name, boolean makeDefault) {
@@ -113,8 +115,21 @@ class DefaultConnectionServiceTest {
         connector.withRequiresConnection(false);
         // Connection kinds are read at construction, so the service is rebuilt over the changed stub.
         service = new DefaultConnectionService(connections, knowledge, channels,
-                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)));
+                new CdiConnectionKindRegistry(List.of(), new SingleConnectorRegistry(connector)), rateLimiter);
         assertThrows(IllegalArgumentException.class, () -> create("pointless", false));
+    }
+
+    @Test
+    void resetRateLimitClearsTheConnectionsOwnKey() {
+        Connection c = create("work", false);
+        service.resetRateLimit(c.id());
+        assertEquals(List.of("connection:" + c.id()), rateLimiter.resets);
+    }
+
+    @Test
+    void resetRateLimitOnUnknownConnectionIsNotFound() {
+        assertThrows(NoSuchElementException.class, () -> service.resetRateLimit("missing"));
+        assertTrue(rateLimiter.resets.isEmpty());
     }
 
     @Test

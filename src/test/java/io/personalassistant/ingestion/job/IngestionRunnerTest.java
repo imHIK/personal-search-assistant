@@ -358,6 +358,7 @@ class IngestionRunnerTest {
         Cursor cursor = seedCursor(CursorDirection.FORWARD);
         runner.runLease(kn, cursor, "w1", () -> {});
         assertEquals(1, cursors.store.get(cursor.id()).retry().count());
+        elapseHold(cursor);
 
         connector.enqueue(CursorDirection.FORWARD,
                 new GrabResult(List.of(textItem("x")), CursorPosition.of(Map.of("seq", 1L)), false));
@@ -370,5 +371,64 @@ class IngestionRunnerTest {
         Cursor after = cursors.store.get(cursor.id());
         assertEquals(1, after.retry().count(), "streak restarts rather than accumulating");
         assertEquals(CursorStatus.AVAILABLE, after.status(), "and it is nowhere near the dead-letter limit");
+    }
+
+    @Test
+    void aFailureHoldsTheCursorForADoublingJitteredBackoff() {
+        runner.backoffSeconds = 120;
+        runner.maxBackoffSeconds = 3600;
+        runner.jitter = () -> 0.0;
+        assertEquals(java.time.Duration.ofSeconds(120), runner.backoff(1));
+        assertEquals(java.time.Duration.ofSeconds(240), runner.backoff(2));
+        assertEquals(java.time.Duration.ofSeconds(1920), runner.backoff(5));
+        assertEquals(java.time.Duration.ofSeconds(3600), runner.backoff(9), "capped");
+
+        runner.jitter = () -> 1.0;
+        assertEquals(java.time.Duration.ofSeconds(150), runner.backoff(1), "jitter only lengthens, by up to 25%");
+        assertEquals(java.time.Duration.ofSeconds(4500), runner.backoff(9), "and applies after the cap");
+    }
+
+    @Test
+    void aBackingOffCursorIsNotClaimableUntilItsNextAttempt() {
+        runner.backoffSeconds = 120;
+        runner.maxBackoffSeconds = 3600;
+        runner.jitter = () -> 0.0;
+        connector.failNext(new RuntimeException("transient"));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        Instant before = Instant.now();
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(CursorStatus.AVAILABLE, after.status());
+        Instant next = after.retry().nextAttemptAt();
+        assertNotNull(next, "a failure is held, not re-picked on the next tick");
+        assertFalse(next.isBefore(before.plusSeconds(120)));
+        assertTrue(cursors.findClaimable(List.of(kn.id()), 100).isEmpty());
+        assertTrue(cursors.claim(cursor.id(), "w2", java.time.Duration.ofMinutes(5)).isEmpty());
+
+        elapseHold(cursor);
+        assertEquals(List.of(cursor.id()),
+                cursors.findClaimable(List.of(kn.id()), 100).stream().map(Cursor::id).toList(),
+                "an elapsed backoff makes it claimable again");
+    }
+
+    @Test
+    void deadLetteringAFailingCursorCarriesNoHold() {
+        runner.retryLimit = 0;
+        connector.failNext(new RuntimeException("down"));
+        Cursor cursor = seedCursor(CursorDirection.FORWARD);
+        runner.runLease(kn, cursor, "w1", () -> {});
+
+        Cursor after = cursors.store.get(cursor.id());
+        assertEquals(CursorStatus.FAILED, after.status());
+        assertNull(after.retry().nextAttemptAt());
+    }
+
+    private void elapseHold(Cursor cursor) {
+        Cursor c = cursors.store.get(cursor.id());
+        cursors.store.put(c.id(), new Cursor(c.id(), c.knowledgeId(), c.iterableId(), c.iterableName(),
+                c.attributes(), c.direction(), c.position(), c.status(), c.lease(),
+                new Cursor.Retry(c.retry().count(), c.retry().lastError(), Instant.now().minusSeconds(1)),
+                c.stats(), c.scope()));
     }
 }

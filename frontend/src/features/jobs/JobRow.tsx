@@ -6,10 +6,12 @@ import { CompanyIcon } from '@/components/CompanyIcon'
 import { Technical, TechnicalPanel } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { StateBadge } from '@/components/ui/StateBadge'
 import { companyFor } from '@/config/companies'
 import { connectorFor } from '@/config/connectors'
 import { jobDashboard, statusFor, type EnrichedDisplay, type JobFilterSpec } from '@/config/jobDashboard'
 import { labels } from '@/config/labels'
+import { presentDeletedRecord } from '@/config/presentation'
 import { resultFacts } from '@/lib/resultFacts'
 import { absoluteTime, cn, copyToClipboard, relativeTime } from '@/lib/utils'
 import { skillKey } from './jobPrefs'
@@ -54,6 +56,7 @@ export function JobRow({
   const posted = resultFacts(postedField, item.metadata)[0]
   const status = statusFor(item.custom[STATUS])
   const hidden = item.custom[HIDDEN] === true
+  const deleted = presentDeletedRecord(item)
   const added = relativeTime(item.createdAt)
   const isNew = newSince !== null && Date.parse(item.createdAt) > newSince
   const { facts, tags, descriptions } = placeEnriched(item.enriched, enrichedSpecs)
@@ -102,6 +105,7 @@ export function JobRow({
                     {labels.jobs.isNew}
                   </span>
                 )}
+                {deleted && <StateBadge state={deleted} size="sm" />}
               </p>
             </div>
 

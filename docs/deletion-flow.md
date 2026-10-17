@@ -166,3 +166,6 @@ Starting points to discuss, not decisions:
 - **One rule for references.** Refuse while referenced (as channel/connection/task do) or detach with
   a visible record — but the same rule for knowledge → digest (D4).
 - **An orphan sweep** as the safety net behind all of the above (D6).
+- **Tombstones are read.** The `/jobs` page's *Show deleted* lists `DELETED` entities with their
+  `custom` marks — the only record of past applications once retention has run. A tombstone purge
+  must keep entities that carry `custom`, or that history goes with it.

@@ -38,6 +38,14 @@ public interface ConnectionService {
     Connection setDefault(String id);
 
     /**
+     * Clears the local windows and any Retry-After pause on this connection's quota. The provider's own count
+     * is untouched, so if it has not reset either, the next call is a 429 and pauses again.
+     *
+     * @throws java.util.NoSuchElementException if no connection with {@code id} exists
+     */
+    void resetRateLimit(String id);
+
+    /**
      * @throws java.util.NoSuchElementException if no connection with {@code id} exists
      * @throws IllegalStateException if knowledges or channels still reference it
      */

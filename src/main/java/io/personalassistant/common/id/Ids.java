@@ -14,6 +14,7 @@ public final class Ids {
     public static final String TASK_PREFIX = "task_";
     public static final String CHANNEL_PREFIX = "chn_";
     public static final String DELIVERY_PREFIX = "dlv_";
+    public static final String WATCHED_COMPANY_PREFIX = "wco_";
 
     private Ids() {
     }
@@ -53,6 +54,10 @@ public final class Ids {
 
     public static String delivery() {
         return DELIVERY_PREFIX + token();
+    }
+
+    public static String watchedCompany() {
+        return WATCHED_COMPANY_PREFIX + token();
     }
 
     /** Deterministic, so the same logical cursor is never created twice. */

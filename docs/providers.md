@@ -107,6 +107,14 @@ after a restart are 429s. `app.ratelimit.store=memory` is for tests and setups w
 honest with short windows. There is no fallback between the two: if Redis is down, outbound calls fail
 rather than quietly counting in memory. See [L9](./limitations.md#l9--rate-limit-counters-are-per-process-and-lost-on-restart).
 
+**A rolling day is not the provider's day.** Gemini, for one, resets its daily count at midnight Pacific,
+while a `1d` window frees each slot 24 h after the call that took it — so the provider can have quota
+again while the limiter still refuses. `POST /api/connections/{id}/rate-limit/reset` (the *Reset rate
+limit* button on the account's edit page) drops every window counted against `connection:<id>`, whatever
+rule widths recorded them, plus any `Retry-After` pause. It clears only the local count: if the provider
+has not reset, the next call is a 429 and the connection pauses again. Work already deferred to a
+reopening instant (`nextAttemptAt`) keeps its instant. Embedding and board keys have no endpoint.
+
 What happens on a breach depends on which call it is, and the split is free because the two paths
 already have separate entry points:
 

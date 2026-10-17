@@ -14,6 +14,7 @@ public class RecordingRateLimiter implements RateLimiter {
 
     public final List<RateLimit> acquired = new ArrayList<>();
     public final Map<String, Instant> penalties = new LinkedHashMap<>();
+    public final List<String> resets = new ArrayList<>();
 
     public RateLimitedException failWith;
 
@@ -29,5 +30,10 @@ public class RecordingRateLimiter implements RateLimiter {
     public Instant penalize(RateLimitKey key, Instant until) {
         penalties.put(key.value(), until);
         return until;
+    }
+
+    @Override
+    public void reset(RateLimitKey key) {
+        resets.add(key.value());
     }
 }
