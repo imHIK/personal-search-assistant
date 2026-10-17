@@ -42,7 +42,7 @@ public class EntitiesResource {
     @Path("/query")
     public EntityListDto query(EntityQueryDto body) {
         EntityQueryDto request = body != null ? body
-                : new EntityQueryDto(null, null, null, null, null, null, null);
+                : new EntityQueryDto(null, null, null, null, null, null, null, null);
         try {
             return EntityListDto.from(entities.query(request.toFilter(), request.limitOrDefault(),
                     request.offsetOrDefault()));
@@ -57,12 +57,13 @@ public class EntitiesResource {
     public Map<String, List<FacetValue>> facets(@QueryParam("entityTypes") String entityTypes,
                                                 @QueryParam("knowledgeIds") String knowledgeIds,
                                                 @QueryParam("fields") String fields,
-                                                @QueryParam("limit") Integer limit) {
+                                                @QueryParam("limit") Integer limit,
+                                                @QueryParam("includeDeleted") boolean includeDeleted) {
         try {
             Set<EntityType> types = new LinkedHashSet<>();
             split(entityTypes).forEach(t -> types.add(EntityType.valueOf(t.toUpperCase(Locale.ROOT))));
             EntityFilter scope = new EntityFilter(types, new LinkedHashSet<>(split(knowledgeIds)), null, null,
-                    null);
+                    null, includeDeleted);
             return entities.facets(scope, split(fields), limit == null ? 100 : limit);
         } catch (IllegalArgumentException e) {
             throw ApiErrors.badRequest(e.getMessage());

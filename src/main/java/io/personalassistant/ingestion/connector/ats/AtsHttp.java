@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.personalassistant.common.Errors;
 import io.personalassistant.common.http.HttpCall;
 import io.personalassistant.common.http.OutboundHttp;
 import io.personalassistant.common.http.OutboundHttpException;
@@ -9,8 +10,10 @@ import io.personalassistant.common.ratelimit.RateLimitedException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.net.URLEncoder;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -64,6 +67,16 @@ public class AtsHttp {
                 .header("Content-Type", "application/x-www-form-urlencoded"));
     }
 
+    /** For Eightfold, whose Microsoft tenant throttles any call without the session its careers page sets. */
+    public List<String> setCookies(String url, long timeoutSeconds, RateLimit limit) {
+        HttpCall call = HttpCall.get(url, Duration.ofSeconds(timeoutSeconds), limit);
+        try {
+            return http.send(call, HttpResponse.BodyHandlers.discarding()).headers().allValues("Set-Cookie");
+        } catch (OutboundHttpException e) {
+            throw translate(e, call);
+        }
+    }
+
     /** For Keka, whose board id is only in the careers page. */
     public String getText(String url, long timeoutSeconds, RateLimit limit) {
         HttpCall call = HttpCall.get(url, Duration.ofSeconds(timeoutSeconds), limit);
@@ -95,7 +108,8 @@ public class AtsHttp {
             return new RateLimitedException(call.limit().key(), e.retryAt());
         }
         if (e.status() == 0) {
-            return new AtsApiException("ATS request failed for " + e.url(), e);
+            // The cause is the only thing that separates a timeout from a reset or a non-JSON 200.
+            return new AtsApiException("ATS request failed for " + e.url() + ": " + Errors.summary(e.getCause()), e);
         }
         return new AtsApiException(e.status(),
                 "ATS API " + e.status() + " for " + e.url() + ": " + e.bodySnippet());

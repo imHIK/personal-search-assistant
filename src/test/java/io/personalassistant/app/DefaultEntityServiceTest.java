@@ -73,6 +73,8 @@ class DefaultEntityServiceTest {
                 ids(service.query(jobs(new Condition("metadata.company", Op.EQ, "Acme")), 50, 0)));
         assertEquals(List.of("p1"), ids(service.query(jobs(new Condition("enriched.yoe", Op.LTE, 5L)), 50, 0)),
                 "an entity without the field does not satisfy an upper bound");
+        assertEquals(List.of("p3", "p1"),
+                ids(service.query(jobs(new Condition("enriched.yoe", Op.LTE, 5L, true)), 50, 0)), "orMissing lets it");
         assertEquals(List.of("p2", "p1"), ids(service.query(jobs(new Condition("enriched.skills", Op.IN,
                 List.of("Go"))), 50, 0)), "any element of a list matches");
     }
@@ -110,6 +112,22 @@ class DefaultEntityServiceTest {
         assertEquals(new FacetValue("Acme", 2), facets.get("metadata.company").get(0),
                 "counted over the whole scope: picking Beta must not hide Acme");
         assertEquals(new FacetValue("Go", 2), facets.get("enriched.skills").get(0));
+    }
+
+    @Test
+    void tombstonesAreHiddenUnlessAskedForAndKeepTheirMarks() {
+        service.mergeCustom("p2", Map.of("status", "APPLIED"));
+        entities.markDeleted("p2", Instant.now());
+        Condition applied = new Condition("custom.status", Op.EQ, "APPLIED");
+        EntityFilter withDeleted = new EntityFilter(Set.of(EntityType.JOB_POSTING), null, null,
+                List.of(applied), null, true);
+
+        assertEquals(List.of(), ids(service.query(jobs(applied), 50, 0)));
+        assertEquals(List.of("p2"), ids(service.query(withDeleted, 50, 0)));
+        assertEquals(List.of("Acme"), service.facets(jobs(), List.of("metadata.company"), 10)
+                .get("metadata.company").stream().map(FacetValue::value).toList());
+        assertEquals(new FacetValue("Beta", 1), service.facets(withDeleted, List.of("metadata.company"), 10)
+                .get("metadata.company").get(1), "facets follow the flag, or a removed company has no chip");
     }
 
     @Test

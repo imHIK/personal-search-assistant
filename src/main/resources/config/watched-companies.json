@@ -1,0 +1,671 @@
+{
+  "companies": [
+    {
+      "name": "Zepto",
+      "domain": "zeptonow.com",
+      "careersUrl": "https://zepto.darwinbox.in/ms/candidatev2/main/careers/allJobs",
+      "platform": "Darwinbox",
+      "tier": "HIGH",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Porter",
+      "domain": "porter.in",
+      "careersUrl": "https://porter.darwinbox.in/ms/candidate/careers",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "CarDekho",
+      "domain": "cardekho.com",
+      "careersUrl": "https://careers.cardekho.com/",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Tata 1mg",
+      "domain": "1mg.com",
+      "careersUrl": "https://1mg.darwinbox.in/jobs",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Perfios",
+      "domain": "perfios.ai",
+      "careersUrl": "https://perfios.ai/careers/",
+      "platform": "Darwinbox",
+      "tier": "LOW",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Digit Insurance",
+      "domain": "godigit.com",
+      "careersUrl": "https://godigit.darwinbox.in/ms/candidatev2/a651fdd75445d1/careers/home",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "BigBasket",
+      "domain": "bigbasket.com",
+      "careersUrl": "https://bigbasket.darwinbox.in/ms/candidate/careers",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "LeadSquared",
+      "domain": "leadsquared.com",
+      "careersUrl": "https://www.leadsquared.com/careers/",
+      "platform": "Darwinbox",
+      "tier": "LOW",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "M2P Fintech",
+      "domain": "m2pfintech.com",
+      "careersUrl": "https://careers.m2pfintech.com/",
+      "platform": "Darwinbox",
+      "tier": "LOW",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Rapido",
+      "domain": "rapido.bike",
+      "careersUrl": "https://rapido.darwinbox.in/ms/candidate/careers",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "upGrad",
+      "domain": "upgrad.com",
+      "careersUrl": "https://upgrad.darwinbox.in/ms/candidate/careers",
+      "platform": "Darwinbox",
+      "tier": "LOW",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Delhivery",
+      "domain": "delhivery.com",
+      "careersUrl": "https://www.delhivery.com/careers",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Spinny",
+      "domain": "spinny.com",
+      "careersUrl": "https://spinzone.darwinbox.in/ms/candidate/careers",
+      "platform": "Darwinbox",
+      "tier": "MEDIUM",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Airtel",
+      "domain": "airtel.in",
+      "careersUrl": "https://careers.airtel.com/",
+      "platform": "Darwinbox",
+      "tier": "LOW",
+      "reason": "Cloudflare refuses non-browser clients; no India filter in the URL"
+    },
+    {
+      "name": "Blinkit",
+      "domain": "blinkit.com",
+      "careersUrl": "https://blinkit.com/careers/jobs",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Serves a bot-block page to non-browsers; no India filter in the URL"
+    },
+    {
+      "name": "Delta Air Lines",
+      "domain": "delta.com",
+      "careersUrl": "https://delta.avature.net/en_US/careers",
+      "platform": "Avature",
+      "tier": "LOW",
+      "reason": "Tenant blocks non-browser requests (HTTP 202); no India filter in the URL"
+    },
+    {
+      "name": "Bloomberg",
+      "domain": "bloomberg.com",
+      "careersUrl": "https://bloomberg.avature.net/careers/SearchJobs/India",
+      "platform": "Avature",
+      "tier": "HIGH",
+      "reason": "No connector; the feed is 20 items with no paging or location"
+    },
+    {
+      "name": "Synopsys",
+      "domain": "synopsys.com",
+      "careersUrl": "https://careers.synopsys.com/search-jobs/India",
+      "platform": "Avature",
+      "tier": "MEDIUM",
+      "reason": "No connector; Radancy front end, keyword search"
+    },
+    {
+      "name": "Siemens",
+      "domain": "siemens.com",
+      "careersUrl": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/India",
+      "platform": "Avature",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "EA",
+      "domain": "ea.com",
+      "careersUrl": "https://jobs.ea.com/en_US/careers/SearchJobs/India",
+      "platform": "Avature",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "Tesco",
+      "domain": "tesco.com",
+      "careersUrl": "https://careers.tesco.com/en_GB/careers/SearchJobs/India",
+      "platform": "Avature",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "Lululemon",
+      "domain": "lululemon.com",
+      "careersUrl": "https://careers.lululemon.com/en_US/careers/SearchJobs/India",
+      "platform": "Avature",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "Nutanix",
+      "domain": "nutanix.com",
+      "careersUrl": "https://jobs.jobvite.com/nutanix/search?q=India",
+      "platform": "Jobvite",
+      "tier": "HIGH",
+      "reason": "No connector; the listing is one server-rendered HTML page"
+    },
+    {
+      "name": "MoEngage",
+      "domain": "moengage.com",
+      "careersUrl": "https://moengage.hire.trakstar.com/",
+      "platform": "Trakstar Hire",
+      "tier": "MEDIUM",
+      "reason": "No connector; server-rendered HTML only; no India filter in the URL"
+    },
+    {
+      "name": "Whatfix",
+      "domain": "whatfix.com",
+      "careersUrl": "https://whatfix.hire.trakstar.com/",
+      "platform": "Trakstar Hire",
+      "tier": "MEDIUM",
+      "reason": "No connector; server-rendered HTML only; no India filter in the URL"
+    },
+    {
+      "name": "Drip Capital",
+      "domain": "dripcapital.com",
+      "careersUrl": "https://dripcapital.hire.trakstar.com/",
+      "platform": "Trakstar Hire",
+      "tier": "LOW",
+      "reason": "No connector; server-rendered HTML only; no India filter in the URL"
+    },
+    {
+      "name": "Trusting Social",
+      "domain": "trustingsocial.com",
+      "careersUrl": "https://trustingsocial.hire.trakstar.com/",
+      "platform": "Trakstar Hire",
+      "tier": "LOW",
+      "reason": "No connector; server-rendered HTML only; no India filter in the URL"
+    },
+    {
+      "name": "Netcore",
+      "domain": "netcorecloud.com",
+      "careersUrl": "https://netcore.ai/careers/",
+      "platform": "Mynexthire",
+      "tier": "LOW",
+      "reason": "No connector; platform unverified; no India filter in the URL"
+    },
+    {
+      "name": "CoinDCX",
+      "domain": "coindcx.com",
+      "careersUrl": "https://coindcx.com/careers",
+      "platform": "Mynexthire",
+      "tier": "HIGH",
+      "reason": "No connector; platform unverified; no India filter in the URL"
+    },
+    {
+      "name": "SirionLabs",
+      "domain": "sirion.ai",
+      "careersUrl": "https://www.sirion.ai/careers/",
+      "platform": "Mynexthire",
+      "tier": "LOW",
+      "reason": "No connector; platform unverified; no India filter in the URL"
+    },
+    {
+      "name": "SAP Labs",
+      "domain": "sap.com",
+      "careersUrl": "https://jobs.sap.com/en/jobs/?country=India",
+      "platform": "SuccessFactors",
+      "tier": "MEDIUM",
+      "reason": "No connector; new careers site mid-rollout, some roles only on the old one"
+    },
+    {
+      "name": "Moody's",
+      "domain": "moodys.com",
+      "careersUrl": "https://careers.moodys.com/en/search-jobs/India",
+      "platform": "SuccessFactors",
+      "tier": "MEDIUM",
+      "reason": "No connector; Radancy front end"
+    },
+    {
+      "name": "Standard Chartered",
+      "domain": "sc.com",
+      "careersUrl": "https://jobs.standardchartered.com/search/?locationsearch=India",
+      "platform": "SuccessFactors",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "Nomura",
+      "domain": "nomura.com",
+      "careersUrl": "https://careers.nomura.com/search/?locationsearch=India",
+      "platform": "SuccessFactors",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "HCLTech",
+      "domain": "hcltech.com",
+      "careersUrl": "https://careers.hcltech.com/go/India/9553955/",
+      "platform": "SuccessFactors",
+      "tier": "LOW",
+      "reason": "No connector"
+    },
+    {
+      "name": "PayU India",
+      "domain": "payu.in",
+      "careersUrl": "https://payu.in/careers",
+      "platform": "SuccessFactors",
+      "tier": "MEDIUM",
+      "reason": "No connector; Lever board payugpo is EMEA-only; no India filter in the URL"
+    },
+    {
+      "name": "apna",
+      "domain": "apna.co",
+      "careersUrl": "https://careers.apna.co/",
+      "platform": "Workable",
+      "tier": "LOW",
+      "reason": "No connector; open widget API, cheap to add; no India filter in the URL"
+    },
+    {
+      "name": "Hugging Face",
+      "domain": "huggingface.co",
+      "careersUrl": "https://apply.workable.com/huggingface/",
+      "platform": "Workable",
+      "tier": "HIGH",
+      "reason": "No connector; open widget API, cheap to add; no India filter in the URL"
+    },
+    {
+      "name": "MSCI",
+      "domain": "msci.com",
+      "careersUrl": "https://globalcareers-msci.icims.com/jobs/search?ss=1&searchKeyword=India",
+      "platform": "iCIMS",
+      "tier": "MEDIUM",
+      "reason": "No connector for a raw iCIMS portal (no Jibe front)"
+    },
+    {
+      "name": "Arm",
+      "domain": "arm.com",
+      "careersUrl": "https://careers.arm.com/search-jobs/India",
+      "platform": "iCIMS",
+      "tier": "HIGH",
+      "reason": "No connector for a raw iCIMS portal (no Jibe front)"
+    },
+    {
+      "name": "7-Eleven",
+      "domain": "7-eleven.com",
+      "careersUrl": "https://www.7-eleven.com/careers",
+      "platform": "RippleHire",
+      "tier": "LOW",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "Intuit",
+      "domain": "intuit.com",
+      "careersUrl": "https://jobs.intuit.com/search-jobs/India",
+      "platform": "Radancy",
+      "tier": "HIGH",
+      "reason": "No connector"
+    },
+    {
+      "name": "Zoho",
+      "domain": "zoho.com",
+      "careersUrl": "https://www.zoho.com/careers/",
+      "platform": "Zoho Recruit",
+      "tier": "MEDIUM",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "DrinkPrime",
+      "domain": "drinkprime.in",
+      "careersUrl": "https://drinkprime.zohorecruit.in/careers",
+      "platform": "Zoho Recruit",
+      "tier": "LOW",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "Capillary",
+      "domain": "capillarytech.com",
+      "careersUrl": "https://www.capillarytech.com/careers/",
+      "platform": "SenseHQ",
+      "tier": "MEDIUM",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "Zetwerk",
+      "domain": "zetwerk.com",
+      "careersUrl": "https://zetwerk.sensehq.com/careers",
+      "platform": "SenseHQ",
+      "tier": "MEDIUM",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "UBS",
+      "domain": "ubs.com",
+      "careersUrl": "https://www.ubs.com/global/en/careers/search-jobs.html",
+      "platform": "BrassRing",
+      "tier": "MEDIUM",
+      "reason": "No connector; no India filter in the URL"
+    },
+    {
+      "name": "Société Générale",
+      "domain": "societegenerale.com",
+      "careersUrl": "https://careers.societegenerale.com/en/search?query=India",
+      "platform": "Taleo",
+      "tier": "MEDIUM",
+      "reason": "No connector"
+    },
+    {
+      "name": "Franklin Templeton",
+      "domain": "franklintempleton.com",
+      "careersUrl": "https://careers.franklintempleton.com/us/en/search-results?keywords=India",
+      "platform": "Phenom",
+      "tier": "MEDIUM",
+      "reason": "Its Workday site lists 0 through the public API"
+    },
+    {
+      "name": "Google",
+      "domain": "google.com",
+      "careersUrl": "https://www.google.com/about/careers/applications/jobs/results/?location=India",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "Amazon",
+      "domain": "amazon.com",
+      "careersUrl": "https://www.amazon.jobs/en/search?base_query=&loc_query=India&country=IND",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API (amazon.jobs/search.json); worth a connector"
+    },
+    {
+      "name": "Apple",
+      "domain": "apple.com",
+      "careersUrl": "https://jobs.apple.com/en-in/search?location=india-INDC",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "Meta",
+      "domain": "meta.com",
+      "careersUrl": "https://www.metacareers.com/jobsearch/?offices[0]=Bangalore%2C%20India&offices[1]=Hyderabad%2C%20India&offices[2]=Gurgaon%2C%20India&offices[3]=Mumbai%2C%20India&offices[4]=New%20Delhi%2C%20India",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "Atlassian",
+      "domain": "atlassian.com",
+      "careersUrl": "https://www.atlassian.com/company/careers/all-jobs?location=India",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "IBM",
+      "domain": "ibm.com",
+      "careersUrl": "https://www.ibm.com/careers/search?field_keyword_05[0]=India",
+      "platform": "Own site",
+      "tier": "LOW",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "MathWorks",
+      "domain": "mathworks.com",
+      "careersUrl": "https://www.mathworks.com/company/jobs/opportunities/search?location%5B%5D=IN",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "Teradata",
+      "domain": "teradata.com",
+      "careersUrl": "https://careers.teradata.com/jobs?location=India",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "MediaTek",
+      "domain": "mediatek.com",
+      "careersUrl": "https://careers.mediatek.com/en",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers API; no India filter in the URL"
+    },
+    {
+      "name": "D. E. Shaw",
+      "domain": "deshaw.com",
+      "careersUrl": "https://www.deshawindia.com/careers",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API; the India site lists India roles only"
+    },
+    {
+      "name": "Jio",
+      "domain": "jio.com",
+      "careersUrl": "https://careers.jio.com/",
+      "platform": "Own site",
+      "tier": "LOW",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "Myntra",
+      "domain": "myntra.com",
+      "careersUrl": "https://careers.myntra.com/",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "MakeMyTrip",
+      "domain": "makemytrip.com",
+      "careersUrl": "https://careers.makemytrip.com/",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "ShareChat",
+      "domain": "sharechat.com",
+      "careersUrl": "https://sharechat.com/careers",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API"
+    },
+    {
+      "name": "GoJek",
+      "domain": "gojek.com",
+      "careersUrl": "https://www.gojek.io/careers",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API; no India filter in the URL"
+    },
+    {
+      "name": "Moveworks",
+      "domain": "moveworks.com",
+      "careersUrl": "https://www.moveworks.com/us/en/company/careers",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API; no India filter in the URL"
+    },
+    {
+      "name": "Spotnana",
+      "domain": "spotnana.com",
+      "careersUrl": "https://www.spotnana.com/careers/",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers API; no India filter in the URL"
+    },
+    {
+      "name": "Kissflow",
+      "domain": "kissflow.com",
+      "careersUrl": "https://careers.kissflow.com/",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "Exotel",
+      "domain": "exotel.com",
+      "careersUrl": "https://exotel.com/about-us/careers/",
+      "platform": "Own site",
+      "tier": "LOW",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "Deel",
+      "domain": "deel.com",
+      "careersUrl": "https://www.deel.com/careers/",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers site; no India filter in the URL"
+    },
+    {
+      "name": "Revolut",
+      "domain": "revolut.com",
+      "careersUrl": "https://www.revolut.com/careers/",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Own careers site; no India filter in the URL"
+    },
+    {
+      "name": "Ather Energy",
+      "domain": "atherenergy.com",
+      "careersUrl": "https://www.atherenergy.com/careers",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "Zerodha",
+      "domain": "zerodha.com",
+      "careersUrl": "https://careers.zerodha.com/",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "Pine Labs",
+      "domain": "pinelabs.com",
+      "careersUrl": "https://www.pinelabs.com/careers",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "Nykaa",
+      "domain": "nykaa.com",
+      "careersUrl": "https://careers.nykaa.com/",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site"
+    },
+    {
+      "name": "OYO",
+      "domain": "oyorooms.com",
+      "platform": "Own site",
+      "tier": "LOW",
+      "reason": "Own careers site; the old careers URL now redirects to the home page"
+    },
+    {
+      "name": "Krutrim",
+      "domain": "olakrutrim.com",
+      "platform": "Own site",
+      "tier": "MEDIUM",
+      "reason": "Own careers site; no stable careers URL found"
+    },
+    {
+      "name": "Juspay",
+      "domain": "juspay.io",
+      "careersUrl": "https://juspay.io/careers",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Open JSON endpoint (/api/careerJobOpening, about 10 jobs); no connector built"
+    },
+    {
+      "name": "Snapdeal",
+      "domain": "snapdeal.com",
+      "platform": "None",
+      "tier": "LOW",
+      "reason": "No careers board; posts only on LinkedIn and Instahyre"
+    },
+    {
+      "name": "Commotion",
+      "platform": "None",
+      "tier": "LOW",
+      "reason": "No careers board; posts only on LinkedIn and Instahyre"
+    },
+    {
+      "name": "Digii",
+      "domain": "digii.in",
+      "platform": "None",
+      "tier": "LOW",
+      "reason": "Openings are plain WordPress pages with no ATS"
+    },
+    {
+      "name": "Indeed",
+      "domain": "indeed.com",
+      "careersUrl": "https://in.indeed.com/cmp/Indeed/jobs",
+      "platform": "Own site",
+      "tier": "HIGH",
+      "reason": "Indeed's own job site; reading it breaches its terms"
+    },
+    {
+      "name": "Traceable",
+      "domain": "traceable.ai",
+      "platform": "Greenhouse",
+      "tier": "HIGH",
+      "reason": "Greenhouse board traceableinc no longer exists"
+    },
+    {
+      "name": "Ola",
+      "domain": "olacabs.com",
+      "careersUrl": "https://olacareers.turbohire.co/",
+      "platform": "TurboHire",
+      "tier": "MEDIUM",
+      "reason": "Supported platform, 0 public jobs when checked; the lookup cannot verify it yet",
+      "lookupHandle": "olacareers.turbohire.co"
+    },
+    {
+      "name": "Setu",
+      "domain": "setu.co",
+      "careersUrl": "https://pinelabsgroup.turbohire.co/",
+      "platform": "TurboHire",
+      "tier": "MEDIUM",
+      "reason": "Supported platform, 0 public jobs when checked; the lookup cannot verify it yet",
+      "lookupHandle": "pinelabsgroup.turbohire.co"
+    }
+  ]
+}

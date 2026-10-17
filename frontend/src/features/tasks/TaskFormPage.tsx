@@ -14,7 +14,6 @@ import { ErrorState, SkeletonList } from '@/components/ui/States'
 import { friendlyError } from '@/config/errors'
 import { labels } from '@/config/labels'
 import {
-  llmProfileLabel,
   suggestedScoringFields,
   taskFieldTypes,
   taskOutputFor,
@@ -364,15 +363,10 @@ function Editor({
             >
               {(profiles ?? [llmProfile]).map((profile) => (
                 <option key={profile} value={profile}>
-                  {llmProfileLabel(profile)}
+                  {profile}
                 </option>
               ))}
             </Select>
-            <Technical>
-              <span className="mt-1 block text-[11px] text-[var(--text-subtle)]">
-                llmProfile: {llmProfile}
-              </span>
-            </Technical>
           </Field>
 
           <p className="rounded-lg bg-[var(--surface-sunken)] p-3 text-[11px] leading-relaxed text-[var(--text-muted)]">

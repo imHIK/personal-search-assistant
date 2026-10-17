@@ -1,6 +1,7 @@
 package io.personalassistant.indexing.enrichment;
 
 import io.personalassistant.agent.MetadataEnricher;
+import io.personalassistant.agent.llm.LlmUnavailableException;
 import io.personalassistant.common.Errors;
 import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.EnrichmentOutcome;
@@ -20,8 +21,9 @@ import java.util.logging.Logger;
 
 /**
  * Decides, per indexing pass, whether an entity's enriched fields are current, and runs the knowledge's
- * metadata task when they are not. An LLM failure never fails the pass: the entity is indexed without fresh
- * values and the error is recorded for the next re-index to retry.
+ * metadata task when they are not. An unusable reply does not fail the pass: the entity is indexed without
+ * fresh values and the error is recorded for the next re-index to retry. An unreachable LLM does fail it, so
+ * the indexer's backoff retries rather than indexing the entity bare.
  */
 @ApplicationScoped
 public class EntityEnrichment {
@@ -45,7 +47,10 @@ public class EntityEnrichment {
         this.index = index;
     }
 
-    /** @throws RateLimitedException so the runner defers the whole pass rather than recording an error */
+    /**
+     * @throws RateLimitedException so the runner defers the whole pass rather than recording an error
+     * @throws LlmUnavailableException so the runner fails the pass and retries it after its backoff
+     */
     public Result resolve(Knowledge knowledge, Entity entity, String text) {
         String taskId = knowledge.config().enrichment().taskId();
         if (taskId == null) {
@@ -68,7 +73,7 @@ public class EntityEnrichment {
             ensureMapped(task);
             return new Result(EnrichmentOutcome.set(values, stamp(task.id(), task.updatedAt(), entity, null)),
                     values);
-        } catch (RateLimitedException e) {
+        } catch (RateLimitedException | LlmUnavailableException e) {
             throw e;
         } catch (RuntimeException e) {
             return failed(entity, task.id(), task.updatedAt(), Errors.summary(e));

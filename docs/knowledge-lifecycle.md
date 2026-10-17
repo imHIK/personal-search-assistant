@@ -123,8 +123,8 @@ into entities.
 ### Per tick
 1. **Decide which knowledges are eligible** — `ACTIVE` ones whose connection is not `ERROR`, plus
    `PAUSED` ones (so the backstop below can still park their stragglers).
-2. **Find claimable cursors of those knowledges** — `AVAILABLE`, `RATE_LIMITED` whose
-   `retry.nextAttemptAt` has passed, or `IN_PROGRESS` whose lease has expired (crash recovery), ordered
+2. **Find claimable cursors of those knowledges** — `AVAILABLE` with no `retry.nextAttemptAt` or one
+   that has passed (a failure backoff), `RATE_LIMITED` whose `retry.nextAttemptAt` has passed, or `IN_PROGRESS` whose lease has expired (crash recovery), ordered
    **least-recently-run first** (`stats.lastRunAt` ascending, never-run first) so no active knowledge
    can monopolise the bounded batch. Direction is irrelevant; backward and forward are treated
    identically.
@@ -215,7 +215,7 @@ repeat up to batchesPerLease times:
 | `hasMore = false`, backward cursor | `EXHAUSTED` | history fully drained (terminal) |
 | `hasMore = false`, forward cursor | `IDLE` | caught up; waits for the scheduler to re-arm |
 | Hit the batch cap, more pages remain | `AVAILABLE` | re-picked next tick to keep going |
-| Exception, retries left | `AVAILABLE` (retry++) | retried next tick |
+| Exception, retries left | `AVAILABLE` (retry++, `nextAttemptAt` set) | retried after a doubling, jittered backoff — the retry limit spans about an hour |
 | Exception, past `retry-limit` | `FAILED` | dead-letter; needs intervention |
 | `RateLimitedException`, budget left | `RATE_LIMITED` (retry++) | held out of the batch until `retry.nextAttemptAt` |
 | `RateLimitedException`, past `max-deferrals` | `FAILED` (hold cleared) | the limit is unsatisfiable; needs intervention |

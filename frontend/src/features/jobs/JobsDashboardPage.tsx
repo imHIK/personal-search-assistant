@@ -1,10 +1,9 @@
-import { Briefcase, Wrench } from 'lucide-react'
+import { Briefcase } from 'lucide-react'
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useTechnicalDetailsToggle } from '@/components/TechnicalDetails'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { Button } from '@/components/ui/Button'
+import { Select } from '@/components/ui/Input'
 import { EmptyState, ErrorState, SkeletonList } from '@/components/ui/States'
 import { friendlyError } from '@/config/errors'
 import {
@@ -13,6 +12,7 @@ import {
   facetPaths,
   jobDashboard,
   jobKnowledges,
+  sortFor,
   type JobParams,
 } from '@/config/jobDashboard'
 import { labels } from '@/config/labels'
@@ -25,6 +25,7 @@ import {
 } from '@/hooks/queries'
 import { JobFilters } from './JobFilters'
 import { JobRow } from './JobRow'
+import { JobsHeader } from './JobsHeader'
 import { useMySkills, useNewSince } from './jobPrefs'
 
 /** Standalone: no console chrome and no nav entry; reached at /jobs. */
@@ -49,7 +50,12 @@ export function JobsDashboardPage() {
     [specs, values, sourceIds, page, minute],
   )
   const result = useEntityQuery(body, sourceIds.length > 0)
-  const facets = useEntityFacets([jobDashboard.entityType], sourceIds, facetPaths(specs))
+  const facets = useEntityFacets(
+    [jobDashboard.entityType],
+    sourceIds,
+    facetPaths(specs),
+    values.showDeleted === '1',
+  )
   const mark = useEntityCustom()
   const newSince = useNewSince()
   const mySkills = useMySkills()
@@ -75,7 +81,7 @@ export function JobsDashboardPage() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
-      <Header total={data?.total} />
+      <JobsHeader count={data ? labels.jobs.count(data.total) : undefined} />
 
       <main className="mx-auto grid max-w-[1400px] gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:px-10">
         <aside className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
@@ -85,13 +91,35 @@ export function JobsDashboardPage() {
             facets={facets.data}
             sources={sources}
             onChange={setValue}
-            onClear={() => setParams(new URLSearchParams(), { replace: true })}
+            onClear={() =>
+              setParams(new URLSearchParams(values.sort ? { sort: values.sort } : {}), { replace: true })
+            }
             mySkills={mySkills.raw}
             onMySkillsChange={mySkills.setRaw}
           />
         </aside>
 
         <section className="min-w-0 space-y-3">
+          {sources.length > 0 && (
+            <div className="flex justify-end">
+              <label className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                {labels.jobs.sortBy}
+                <Select
+                  className="h-8 w-auto"
+                  value={sortFor(values.sort).value}
+                  onChange={(e) =>
+                    setValue('sort', e.target.value === jobDashboard.sorts[0].value ? '' : e.target.value)
+                  }
+                >
+                  {jobDashboard.sorts.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+          )}
           {sourcesLoading ? (
             <SkeletonList rows={4} />
           ) : sources.length === 0 ? (
@@ -154,33 +182,5 @@ export function JobsDashboardPage() {
         </section>
       </main>
     </div>
-  )
-}
-
-function Header({ total }: { total: number | undefined }) {
-  const { enabled, toggle } = useTechnicalDetailsToggle()
-  return (
-    <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg)]/85 px-4 backdrop-blur sm:px-6 lg:px-10">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <Briefcase className="size-4 text-[var(--accent)]" aria-hidden />
-        <h1 className="truncate text-sm font-semibold">{labels.jobs.title}</h1>
-        {total !== undefined && (
-          <span className="text-xs tabular-nums text-[var(--text-muted)]">{labels.jobs.count(total)}</span>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Button
-          variant={enabled ? 'secondary' : 'ghost'}
-          size="sm"
-          onClick={toggle}
-          aria-pressed={enabled}
-          title={labels.nav.technicalDetailsHint}
-        >
-          <Wrench />
-          <span className="hidden md:inline">{labels.nav.technicalDetails}</span>
-        </Button>
-        <ThemeToggle />
-      </div>
-    </header>
   )
 }

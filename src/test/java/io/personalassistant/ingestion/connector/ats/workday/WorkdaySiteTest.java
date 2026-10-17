@@ -39,6 +39,39 @@ class WorkdaySiteTest {
     }
 
     @Test
+    void aFrontEndSuffixIsKeptApartFromTheSite() {
+        WorkdaySite site = WorkdaySite.parse("cisco/Cisco_Careers/wd5@https://careers.cisco.com/global/en/job/")
+                .orElseThrow();
+
+        Assertions.assertEquals(new WorkdaySite("cisco", "Cisco_Careers", "wd5",
+                "https://careers.cisco.com/global/en/job/"), site);
+        Assertions.assertEquals("cisco/Cisco_Careers/wd5", site.toString());
+        Assertions.assertEquals("https://cisco.wd5.myworkdayjobs.com/wday/cxs/cisco/Cisco_Careers", site.apiRoot());
+        Assertions.assertEquals(Optional.of("https://careers.cisco.com/global/en/job/2019628"),
+                site.jobUrl("2019628"));
+    }
+
+    @Test
+    void aPastedUrlTakesAFrontEndToo() {
+        Assertions.assertEquals(new WorkdaySite("cisco", "Cisco_Careers", "wd5", "https://careers.cisco.com/job/"),
+                WorkdaySite.parse("https://cisco.wd5.myworkdayjobs.com/Cisco_Careers@https://careers.cisco.com/job/")
+                        .orElseThrow());
+    }
+
+    @Test
+    void withoutAFrontEndThereIsNoJobUrl() {
+        Assertions.assertEquals(Optional.empty(),
+                WorkdaySite.parse("cisco/Cisco_Careers/wd5").orElseThrow().jobUrl("2019628"));
+    }
+
+    @Test
+    void aFrontEndThatIsNotAUrlIsRejected() {
+        Assertions.assertEquals(Optional.empty(), WorkdaySite.parse("cisco/Cisco_Careers/wd5@careers.cisco.com"));
+        Assertions.assertEquals(Optional.empty(), WorkdaySite.parse("cisco/Cisco_Careers/wd5@"));
+        Assertions.assertEquals(Optional.empty(), WorkdaySite.parse("paytm@https://careers.paytm.com/"));
+    }
+
+    @Test
     void rejectsABareCompanyName() {
         Assertions.assertEquals(Optional.empty(), WorkdaySite.parse("paytm"));
         Assertions.assertEquals(Optional.empty(), WorkdaySite.parse("adobe/external_experienced"));

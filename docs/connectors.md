@@ -140,9 +140,13 @@ Two consequences worth knowing:
 - **A server's `Retry-After` is clamped** to `app.ratelimit.max-penalty-seconds` (6 h) before it
   becomes a pause. The header is remote input and the instant it produces is load-bearing; if the
   server really meant longer, the next call earns another `429` and another pause.
+- **`POST /api/connections/{id}/rate-limit/reset` forgets an account's counters and pause** without
+  touching its rules — for a provider that refilled its quota before the rolling window did. Deferred
+  work keeps its `nextAttemptAt`; see [`providers.md`](./providers.md) § Rate limiting the model endpoints.
 
-Boards have no `Connection`, so their bucket is the platform and their rules come from
-`app.ratelimit.job-boards.rules`. **A board's own 429 defers too.** `OutboundHttp` penalises the
+Boards have no `Connection`, so their bucket is the platform (`board:<platform>`) and their rules come
+from `app.ratelimit.job-boards.rules`. Eightfold is the exception: each tenant is its own host with its
+own throttle, so its bucket is `board:eightfold:<host>`, and one tenant's 429 does not pause the others. **A board's own 429 defers too.** `OutboundHttp` penalises the
 bucket and puts the instant the limiter actually applied (after the 6 h clamp; the 60 s default when
 there is no `Retry-After`) on the exception; `AtsHttp` turns that into a `RateLimitedException` on the
 board's bucket, so the runner rests the company's cursor `RATE_LIMITED` until then instead of counting a
@@ -155,7 +159,9 @@ failure. This is scoped to boards — other `OutboundHttp` callers still get a p
 - **Eightfold's PCSX probe** rethrows it, since reading a 429 as "not a PCSX tenant" falls back to v2,
   which a PCSX tenant answers with an empty board.
 
-Resolution (`countPostings`) still reads a 429 as a miss, like any outage — see `BoardPlatform`.
+Resolution (`countPostings`) still reads a 429 as a miss, like any outage — see `BoardPlatform`. Eightfold's
+`hasBoard` does not: a 429 from a parseable `host/domain` proves the site exists, and reading it as a
+miss let a knowledge edit's `discover` drop a throttled company and retire its cursor.
 
 > **Setting a board limit also slows the company lookup.** `POST /api/connectors/job-boards/lookup` is
 > a synchronous, user-facing call, and it shares the `board:<platform>` bucket with ingestion. Because
@@ -449,6 +455,10 @@ Two things keep it bounded:
 Expect it to be slow: 47 sequential detail calls took ~14s. That is fine behind a lease and a 3-hour
 poll, but it is an order of magnitude slower than the single-call platforms.
 
+The detail carries two links: `postingUrl`, the posting page, which is what `uri` links, and `applyUrl`,
+the same address with `?oga=true` appended. The link is not in the checksum, so a stored posting
+picks up a changed link only when the posting itself changes.
+
 Two API quirks worth knowing:
 
 - **An unknown company returns 200 with `totalFound: 0`**, not a 404 — so `hasBoard` reads the field.
@@ -571,9 +581,12 @@ network call, and a schemeless `host/path` is left to Workday and Oracle. `GET h
 returns the whole posting, description included, 100 a page, so it costs one request per hundred and
 ignores the hint. Two quirks: dates are written `+0000`, which neither ISO parser accepts, so
 `JibePlatform.instant` inserts the colon; and the remote marker lives in `location_name`
-(`US-WA-Remote (SEA Area)`) while `full_location` drops it, so both feed `isRemote`. The posting link is
-`https://<host>/jobs/<slug>`, which every site redirects to its own job page whatever path prefix it
-uses; `apply_url` is iCIMS's login-gated apply form.
+(`US-WA-Remote (SEA Area)`) while `full_location` drops it, so both feed `isRemote`. `apply_url` is
+iCIMS's login-gated apply form (`https://<portal>.icims.com/jobs/<id>/login`); the same path ending
+`/job` is the posting, readable without a login, and is what `uri` links. An `apply_url` of any other
+shape falls back to `https://<host>/jobs/<slug>`, which every site redirects to its own job page
+whatever path prefix it uses. The link is not in the checksum, so a stored posting picks up a changed
+link only when the posting itself changes.
 
 Avature (Delta, Bloomberg) was looked at in the same pass and not built: tenants expose an RSS feed with
 only title, link and date, so details would mean scraping HTML, and Delta's tenant answers every request
@@ -604,26 +617,43 @@ own client), not just a browser.
 - **Eightfold** (`eightfold`) — a `host/domain` pair (`explore.jobs.netflix.net/netflix.com`) or a pasted
   careers URL, which always carries `domain=`. **A tenant answers exactly one of two APIs**, so every
   poll asks PCSX first and falls back:
-  - `GET /api/pcsx/search?domain=&location=&start=` — PayPal, Qualcomm, Morgan Stanley. `location` is
-    matched server-side and case-insensitively, so the location terms go out as one query per term,
-    unioned by id, as with Oracle. Checked against a full walk of Morgan Stanley's 1,347 positions:
+  - `GET /api/pcsx/search?domain=&location=&start=&sort_by=timestamp` — PayPal, Qualcomm, Morgan
+    Stanley. `location` is matched server-side and case-insensitively, so the location terms go out as
+    one query per term, unioned by id, as with Oracle. Repeating `location=` does not union (only the
+    first counts), and `query=` is full-text over the description, not the title (`software` matches
+    479 of Qualcomm's 601 India roles), so titles are filtered locally on the listing.
+    Checked against a full walk of Morgan Stanley's 1,347 positions:
     `bengaluru` + `bangalore` and `mumbai` returned exactly the positions a local match finds, and
     `India` returned 118 where a substring match found 125 — the 7 were Indianapolis. Detail is
     `GET /api/pcsx/position_details`. A v2 tenant answers 403 "PCSX is not enabled".
+    A term whose page-0 count is the whole board narrows nothing — PCSX matches `work from home`
+    against all 2,079 of Qualcomm's positions — so it costs that one page and is not walked; if no term
+    narrows, the board is walked once. `sort_by=timestamp` lists newest `postedTs` first, so with
+    `maxAgeDays` set a term's walk stops at the first page posted wholly before the limit: the age
+    filter reads `postedAt`, filed from `creationTs`, which is never later than `postedTs`. A reposted
+    position (old `creationTs`, fresh `postedTs`) keeps the walk going but is then dropped by the age
+    filter, before its detail call.
   - `GET /api/apply/v2/jobs?domain=&start=` — Netflix, Millennium. No server-side location, so the whole
     listing is walked and filtered locally. Detail is `GET /api/apply/v2/jobs/<id>`. A PCSX tenant
     answers it 200 with no `count`.
 
   Both page **ten positions at a time whatever is asked for**, and both need a detail call per position
   kept, at ~1.2s a page and ~0.6s a detail, sequential. The whole board is one grab, which must finish
-  inside the 900s lease: Morgan Stanley for six Indian cities is ~140s, Qualcomm for India ~7 minutes,
-  and **Qualcomm with no locations (2,054 positions) ~25 minutes — it can never finish, so it needs
-  locations, and a title filter helps.** Eightfold also answers **429 "Please try again later", with no
-  Retry-After**, to a tenant that has been walked repeatedly; 200 sequential requests in 200s did not
+  inside the 900s lease. Title, location and age are checked on the listing row, so only matches cost a
+  detail call: Morgan Stanley for six Indian cities is ~140s, Qualcomm for `india` 61 pages (23 within
+  20 days of `postedTs`). A whole-board walk with no filter at all — 2,079 Qualcomm detail calls, ~25
+  minutes — cannot finish. Before the whole-board-term skip, a 16-term India filter that included
+  `work from home` cost Qualcomm ~400 pages and tripped the 429 on every retry. Eightfold also answers
+  **429 "Please try again later", with no Retry-After**, to a tenant that has been walked repeatedly; 200 sequential requests in 200s did not
   trip it, so it is volume over a longer window, not burst rate. A 429 defers that company's cursor —
   see the note on a board's own 429 under rate limits. With no `Retry-After` that is the 60 s default,
   shorter than Eightfold's window, so a tenant that stays throttled spends deferrals; past
-  `app.ratelimit.max-deferrals` (20) it parks `FAILED`.
+  `app.ratelimit.max-deferrals` (20) it parks `FAILED`. Microsoft (`apply.careers.microsoft.com`) is different:
+  it throttles calls that carry no session as one shared bucket. On 2026-10-14, 3 in 10 got a 429 with no
+  cookie, and a made-up cookie fared exactly the same. Calls carrying the `_vs` cookie that
+  `/careers?domain=` sets went 18 for 18. So `HttpEightfoldApi` loads that page once per host, reuses its
+  cookies, and drops them on a 429 so the next grab fetches a fresh session. If the page fails, calls go out
+  without a cookie. The other tenants ignore the cookie.
 
 **Darwinbox** (Zepto) was examined in the same pass and is not reachable: `candidateapi/job/alljobs`
 answers the browser but returns a Cloudflare 403 to any non-browser client, Java's included.
@@ -669,6 +699,17 @@ and Franklin Templeton run Phenom career sites whose `POST /widgets` search answ
 job's `applyUrl` is a Workday posting — `gehc/GEHC_ExternalSite/wd5`, `fis/SearchJobs/wd5` — so they are
 catalogued by their Workday triple. Franklin Templeton's triple (`franklintempleton/Primary-External-1/wd5`)
 lists 0 jobs through Workday's public API, so it is reachable only through Phenom and is deferred.
+
+**A Phenom front end can still be the link.** Phenom does not hand off to Workday to apply
+(`externalApply: false`): it has its own Apply Studio and its own candidate login, so applying on
+`careers.cisco.com` and applying on `cisco.wd5.myworkdayjobs.com` are separate accounts, and referral links
+point at the Phenom page. A Workday handle may therefore end in `@<job-page prefix>`, as in
+`cisco/Cisco_Careers/wd5@https://careers.cisco.com/global/en/job/`. Postings are still fetched from Workday,
+but `uri` becomes the prefix plus `jobReqId` (Phenom's `reqId` is the same number), and `applyUrl` stays the
+Workday page. `board` remains the bare triple. The prefix is part of the checksum, so adding one relinks
+postings that are already stored. Changing the handle on an existing knowledge, though, changes the
+iterable, so its postings, and their `custom` marks, are retired and re-ingested (see
+`deletion-flow.md`).
 
 **Consider** (the job board behind VC portfolio sites such as `careers.peakxv.com`) is a discovery
 source, not a platform: `POST /api-boards/search-jobs` needs the page's session cookie and its

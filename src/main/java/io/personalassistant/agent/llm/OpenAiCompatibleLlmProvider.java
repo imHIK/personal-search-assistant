@@ -80,8 +80,16 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         } catch (RateLimitedException e) {
             throw e;
         } catch (OutboundHttpException e) {
-            throw new IllegalStateException("LLM API " + e.status() + ": " + e.bodySnippet() + " ["
-                    + callSummary(profile, key != null) + "]", e);
+            // OutboundHttp has already paused the connection's quota until retryAt; callers defer on it.
+            if (e.retryAt() != null) {
+                throw new RateLimitedException(rateLimit(profile).key(), e.retryAt());
+            }
+            String message = "LLM API " + e.status() + ": " + e.bodySnippet() + " ["
+                    + callSummary(profile, key != null) + "]";
+            if (e.status() == 0 || e.status() >= 500) {
+                throw new LlmUnavailableException(message, e);
+            }
+            throw new IllegalStateException(message, e);
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {

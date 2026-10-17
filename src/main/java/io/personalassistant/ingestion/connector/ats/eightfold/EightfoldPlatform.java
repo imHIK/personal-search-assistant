@@ -1,6 +1,7 @@
 package io.personalassistant.ingestion.connector.ats.eightfold;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.domain.model.enums.EntityType;
@@ -68,17 +69,35 @@ public class EightfoldPlatform implements BoardPlatform {
         }
     }
 
+    /** A throttled site is a real one: reading the 429 as a miss would retire the company on the next edit. */
+    @Override
+    public boolean hasBoard(String handle) {
+        Optional<EightfoldSite> site = EightfoldSite.parse(handle);
+        if (site.isEmpty()) {
+            return false;
+        }
+        try {
+            return pcsxCount(site.get()) > 0 || api.listPositions(site.get(), 0).path("count").asInt(0) > 0;
+        } catch (RateLimitedException e) {
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     @Override
     public List<RawItem> fetch(String handle, String company, BoardFilter filter) {
         EightfoldSite site = EightfoldSite.parse(handle).orElseThrow(
                 () -> new IllegalArgumentException("Not an Eightfold site: '" + handle
                         + "'. Expected host/domain (e.g. explore.jobs.netflix.net/netflix.com) or the careers"
                         + " URL with its domain= parameter."));
-        boolean pcsx = pcsxCount(site) > 0;
+        JsonNode probe = pcsxProbe(site);
+        boolean pcsx = probe.path("count").asInt(0) > 0;
         List<RawItem> items = new ArrayList<>();
-        for (Listed listed : pcsx ? searchPcsx(site, filter) : listV2(site)) {
+        for (Listed listed : pcsx ? searchPcsx(site, probe, filter) : listV2(site)) {
             // Filtered before the detail call: a position passes when any of its locations does.
-            if (!filter.matchesTitle(listed.title()) || !matchesAnyLocation(listed, filter)) {
+            if (!filter.matchesTitle(listed.title()) || !matchesAnyLocation(listed, filter)
+                    || !filter.matchesAge(instant(listed.created()))) {
                 continue;
             }
             RawItem item = toItem(site, company, listed, pcsx);
@@ -94,12 +113,17 @@ public class EightfoldPlatform implements BoardPlatform {
      * PCSX" it would fall back to v2, which a PCSX tenant answers with no positions.
      */
     private int pcsxCount(EightfoldSite site) {
+        return pcsxProbe(site).path("count").asInt(0);
+    }
+
+    /** The first page of the unfiltered search, or a missing node when the site does not speak PCSX. */
+    private JsonNode pcsxProbe(EightfoldSite site) {
         try {
-            return api.search(site, "", 0).path("data").path("count").asInt(0);
+            return api.search(site, "", 0).path("data");
         } catch (RateLimitedException e) {
             throw e;
         } catch (RuntimeException e) {
-            return 0;
+            return MissingNode.getInstance();
         }
     }
 
@@ -107,35 +131,59 @@ public class EightfoldPlatform implements BoardPlatform {
     private record Listed(String id, String title, List<String> locations, String department,
                           String workOption, Long created, Long updated, String url) {}
 
-    private List<Listed> searchPcsx(EightfoldSite site, BoardFilter filter) {
-        List<String> queries = filter.locations().isEmpty()
-                ? List.of("")
-                : List.copyOf(new LinkedHashSet<>(filter.locations()));
+    /**
+     * A term whose count is the whole board (PCSX matches "work from home" against everything) narrows nothing,
+     * so it is not walked; if no term narrows, the board is walked once.
+     */
+    private List<Listed> searchPcsx(EightfoldSite site, JsonNode probe, BoardFilter filter) {
+        int boardSize = probe.path("count").asInt(0);
         // Keyed by id: a position matched by two terms costs one detail call.
         Map<String, Listed> found = new LinkedHashMap<>();
-        for (String query : queries) {
-            int start = 0;
-            for (int page = 0; page < MAX_PAGES; page++) {
-                JsonNode data = api.search(site, query, start).path("data");
-                JsonNode positions = data.path("positions");
-                if (!positions.isArray() || positions.isEmpty()) {
-                    break;
-                }
-                for (JsonNode p : positions) {
-                    String id = text(p, "id");
-                    if (id != null) {
-                        found.putIfAbsent(id, new Listed(id, text(p, "name"), locations(p, "locations", "location"),
-                                text(p, "department"), text(p, "workLocationOption"), seconds(p, "creationTs"),
-                                seconds(p, "postedTs"), absolute(site, text(p, "positionUrl"))));
-                    }
-                }
-                start += positions.size();
-                if (start >= data.path("count").asInt(start)) {
-                    break;
-                }
+        boolean narrowed = false;
+        for (String term : new LinkedHashSet<>(filter.locations())) {
+            JsonNode first = api.search(site, term, 0).path("data");
+            if (first.path("count").asInt(0) < boardSize) {
+                narrowed = true;
+                walkPcsx(site, term, first, filter, found);
             }
         }
+        if (!narrowed) {
+            walkPcsx(site, "", probe, filter, found);
+        }
         return List.copyOf(found.values());
+    }
+
+    /**
+     * Pages arrive newest {@code postedTs} first, so the walk stops at a page posted wholly before the age
+     * limit: {@code creationTs}, which the age filter reads, is never later than {@code postedTs}.
+     */
+    private void walkPcsx(EightfoldSite site, String term, JsonNode data, BoardFilter filter,
+                          Map<String, Listed> found) {
+        int start = 0;
+        for (int page = 0; page < MAX_PAGES; page++) {
+            JsonNode positions = data.path("positions");
+            if (!positions.isArray() || positions.isEmpty()) {
+                return;
+            }
+            boolean allTooOld = true;
+            for (JsonNode p : positions) {
+                Long posted = seconds(p, "postedTs");
+                if (posted == null || filter.matchesAge(instant(posted))) {
+                    allTooOld = false;
+                }
+                String id = text(p, "id");
+                if (id != null) {
+                    found.putIfAbsent(id, new Listed(id, text(p, "name"), locations(p, "locations", "location"),
+                            text(p, "department"), text(p, "workLocationOption"), seconds(p, "creationTs"),
+                            posted, absolute(site, text(p, "positionUrl"))));
+                }
+            }
+            start += positions.size();
+            if (allTooOld || start >= data.path("count").asInt(start)) {
+                return;
+            }
+            data = api.search(site, term, start).path("data");
+        }
     }
 
     private List<Listed> listV2(EightfoldSite site) {

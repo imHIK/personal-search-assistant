@@ -109,8 +109,10 @@ public class SmartRecruitersPlatform implements BoardPlatform {
         }
 
         String location = location(summary);
-        String applyUrl = firstNonBlank(detail.path("applyUrl").asText(null),
-                detail.path("postingUrl").asText(null));
+        // applyUrl is postingUrl with ?oga=true appended; only the bare postingUrl is the posting page.
+        String postingUrl = detail.path("postingUrl").asText(null);
+        String applyUrl = firstNonBlank(detail.path("applyUrl").asText(null), postingUrl);
+        String uri = firstNonBlank(postingUrl, applyUrl);
         // The board's own name outranks the label, which only replaces the bare handle.
         String stated = detail.path("company").path("name").asText(null);
         String companyName = firstNonBlank(stated, AtsNormalization.company(label, company));
@@ -120,7 +122,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
-        metadata.put("uri", applyUrl);
+        metadata.put("uri", uri);
         metadata.put("company", companyName);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
@@ -145,7 +147,7 @@ public class SmartRecruitersPlatform implements BoardPlatform {
                 EntityType.JOB_POSTING,
                 "text/html",
                 title,
-                applyUrl,
+                uri,
                 // releasedDate does not move on an edit, so the body is hashed.
                 AtsNormalization.withCompany(
                         "sr:" + id + ";rel:" + releasedDate + ";body:" + content.hashCode(),

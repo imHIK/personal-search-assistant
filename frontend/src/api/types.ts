@@ -175,7 +175,8 @@ export interface EntityList {
 
 /**
  * A scalar is equality, an array any-of, an object operators. Paths are `metadata.*`, `enriched.*`,
- * `custom.*`, `createdAt` or `updatedAt`; ISO dates in a range compare as dates.
+ * `custom.*`, `createdAt` or `updatedAt`; ISO dates in a range compare as dates. `orMissing` lets every
+ * operator in its object also match an absent or null field.
  */
 export type EntityFilterValue =
   | string
@@ -184,7 +185,11 @@ export type EntityFilterValue =
   | (string | number | boolean)[]
   | Partial<
       Record<'eq' | 'ne' | 'gte' | 'gt' | 'lte' | 'lt', string | number | boolean> &
-        Record<'in' | 'nin', (string | number | boolean)[]> & { contains: string; exists: boolean }
+        Record<'in' | 'nin', (string | number | boolean)[]> & {
+          contains: string
+          exists: boolean
+          orMissing: boolean
+        }
     >
 
 export interface EntityQueryBody {
@@ -196,6 +201,8 @@ export interface EntityQueryBody {
   sort?: { path: string; descending?: boolean }
   limit?: number
   offset?: number
+  /** Also return tombstones (retention or source removal); they keep their metadata and marks. */
+  includeDeleted?: boolean
 }
 
 export interface FacetValue {
@@ -528,4 +535,37 @@ export interface Delivery {
   providerMessageId: string | null
   createdAt: string
   sentAt: string | null
+}
+
+export type CompanyTier = 'HIGH' | 'MEDIUM' | 'LOW'
+
+export interface WatchedCompany {
+  id: string
+  name: string
+  /** The company's own site, for its logo. */
+  domain: string | null
+  careersUrl: string | null
+  platform: string | null
+  /** Null only on a row stored before tiers existed, until an import fills it. */
+  tier: CompanyTier | null
+  reason: string | null
+  note: string | null
+  /** Set when the company is on a supported board the lookup cannot verify yet. */
+  lookupHandle: string | null
+  lastCheckedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** On PATCH a missing field is left unchanged and `""` clears it. */
+export type WatchedCompanyBody = Partial<
+  Pick<WatchedCompany, 'name' | 'domain' | 'careersUrl' | 'platform' | 'tier' | 'reason' | 'note' | 'lookupHandle'>
+>
+
+export interface WatchedCompanyImport {
+  added: number
+  skipped: number
+  /** Existing companies that had no tier and got the bundled one. */
+  tiered: number
+  addedNames: string[]
 }

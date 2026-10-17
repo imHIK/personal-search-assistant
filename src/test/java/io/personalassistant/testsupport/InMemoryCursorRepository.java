@@ -212,12 +212,12 @@ public class InMemoryCursorRepository implements CursorRepository {
     }
 
     private static boolean isClaimable(Cursor c, Instant now) {
+        Instant until = c.retry() == null ? null : c.retry().nextAttemptAt();
         if (c.status() == CursorStatus.AVAILABLE) {
-            return true;
+            return until == null || !until.isAfter(now);
         }
         if (c.status() == CursorStatus.RATE_LIMITED) {
             // As in the Mongo filter, a RATE_LIMITED row with no nextAttemptAt is never claimable.
-            Instant until = c.retry() == null ? null : c.retry().nextAttemptAt();
             return until != null && !until.isAfter(now);
         }
         return c.status() == CursorStatus.IN_PROGRESS && !c.hasLiveLease(now);

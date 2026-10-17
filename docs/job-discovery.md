@@ -110,7 +110,8 @@ Anything posted only to Naukri, Instahyre, Hirist, Wellfound or LinkedIn, compan
 Trakstar Hire, Mynexthire, SenseHQ or
 Zoho Recruit, and bespoke careers pages — so most services
 companies and smaller Indian firms. Also, for now, the other hosted ATSs a real watchlist turns up:
-Avature (Delta, Bloomberg), SuccessFactors (HCL), Radancy (Intuit) and RippleHire (7-Eleven). Each is
+Avature (Delta, Bloomberg), SuccessFactors (HCL), Radancy (Intuit), RippleHire (7-Eleven) and
+Jobvite (Nutanix). Each is
 one more `BoardPlatform` bean; none is reachable today. iCIMS, Rippling, Keka, Zwayam, AInterviews,
 Eightfold, Kula, Freshteam and TurboHire were on this list
 and now are — see [`connectors.md`](./connectors.md#rippling-and-icims-jibe), which also says why
@@ -160,7 +161,10 @@ across every `JOB_BOARDS` source, so the boards need not be checked one by one. 
 deep link.
 
 - **It lists stored entities, not search hits.** `POST /api/entities/query` reads Mongo directly:
-  every `JOB_POSTING` that is not `DELETED`, newest **first seen** (`createdAt`) first, 25 a page.
+  every `JOB_POSTING` that is not `DELETED` (unless *Show deleted* is on), 25 a page. *Sort by* orders
+  them by first seen (`createdAt`, the default, newest first) or posting date (`metadata.postedAt`), either
+  direction; a posting with no posting date sorts last when newest-first. The choice is the URL's `sort`
+  param, and *Clear* keeps it.
   There is no query text to rank by and no top-K cut-off, which is why this is not built on
   `/api/search`.
 - **Each posting is a card**: logo, title (linking to the posting), then company and posting date;
@@ -174,7 +178,7 @@ deep link.
   them into one chip.
 - **Filters** are declared in `frontend/src/config/jobDashboard.ts`: title, company / team / platform /
   source (options from `GET /api/entities/facets`, with counts), location (substring), remote,
-  seniority, posted within, first seen within, status, and show hidden. The state lives in the URL,
+  seniority, posted within, first seen within, status, show hidden and show deleted. The state lives in the URL,
   so a filtered view can be bookmarked.
 - **Enriched fields become filters by themselves.** The page reads the sources' `enrichTaskId`, and
   each field of that task is a filter — `NUMBER` a min/max, `BOOLEAN` yes/no, `TEXT`/`LIST` chips from
@@ -193,15 +197,20 @@ deep link.
   `null` removes a key). The status filter's *No status* option is a `$nin` over the other statuses,
   which also matches a posting that has none. `custom` is a third owner on the entity — the user — so neither ingestion nor
   the indexer touches it, and it survives re-ingest and re-index. Hidden postings are filtered out
-  (`custom.hidden {ne: true}`) unless *Show hidden* is on. A posting removed by retention takes its
-  marks with it.
+  (`custom.hidden {ne: true}`) unless *Show hidden* is on.
+- **Retention does not lose your marks.** It only tombstones (`status: DELETED`); the document keeps
+  its `metadata`, `enriched` and `custom`, and only its chunks leave OpenSearch. *Show deleted* sends
+  `includeDeleted: true` to both endpoints, and those cards carry a *Deleted* badge — so status =
+  Applied + *Show deleted* is every application, open or not. Facets follow the flag too, or a
+  company whose postings have all aged out would have no chip. The marks are lost only when the
+  entity itself is: deleting the knowledge, or removing its iterable (`deletion-flow.md`).
 
 The endpoints are generic — any entity type, any `metadata.*` / `enriched.*` / `custom.*` path:
 
 | Endpoint | Effect |
 |---|---|
-| `POST /api/entities/query` | `{entityTypes, knowledgeIds, q, filters, sort, limit, offset}` → `{items, total, limit, offset}`. A filter value that is a scalar is equality, an array any-of, an object operators (`eq ne in nin gte gt lte lt contains exists`); an ISO date compares as a date. Paths outside `metadata.* enriched.* custom.* createdAt updatedAt` are a 400. Items carry `metadata`, `enriched`, `custom` and `enrichmentError`, never `raw` or content |
-| `GET /api/entities/facets?entityTypes=&knowledgeIds=&fields=a,b&limit=` | distinct values with counts per path, list elements counted one by one; counted over the type and sources only, so picking a value never hides the others |
+| `POST /api/entities/query` | `{entityTypes, knowledgeIds, q, filters, sort, limit, offset, includeDeleted}` → `{items, total, limit, offset}`. Tombstones are excluded unless `includeDeleted` is true. A filter value that is a scalar is equality, an array any-of, an object operators (`eq ne in nin gte gt lte lt contains exists`), plus `orMissing: true` to let every operator in that object also match an absent or null field (the `/jobs` range filters send it, so a posting with no `minYoe` stays listed); an ISO date compares as a date. Paths outside `metadata.* enriched.* custom.* createdAt updatedAt` are a 400. Items carry `metadata`, `enriched`, `custom` and `enrichmentError`, never `raw` or content |
+| `GET /api/entities/facets?entityTypes=&knowledgeIds=&fields=a,b&limit=&includeDeleted=` | distinct values with counts per path, list elements counted one by one; counted over the type and sources (and tombstones, with `includeDeleted=true`) only, so picking a value never hides the others |
 | `PATCH /api/entities/{id}/custom` | merges keys into `custom`; values are text, numbers or booleans, `null` removes |
 
 ## Not built

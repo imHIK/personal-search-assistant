@@ -134,6 +134,40 @@ class OpenAiCompatibleLlmProviderTest {
     }
 
     @Test
+    void aVendor429BecomesARateLimitAtTheRetryAfterInstant() {
+        status = 429;
+        responseJson = "{\"error\":{\"code\":429,\"message\":\"quota\"}}";
+
+        RateLimitedException e = assertThrows(RateLimitedException.class,
+                () -> provider().complete(profile(), "s", List.of(new Message("user", "hi"))));
+
+        assertEquals(RateLimitKey.connection("conn_1"), e.key());
+        assertEquals(limiter.penalties.get(RateLimitKey.connection("conn_1").value()), e.retryAt());
+    }
+
+    @Test
+    void aVendor5xxIsUnavailableButA4xxIsNot() {
+        status = 503;
+        responseJson = "{\"error\":\"high demand\"}";
+        assertThrows(LlmUnavailableException.class,
+                () -> provider().complete(profile(), "s", List.of(new Message("user", "hi"))));
+
+        status = 400;
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> provider().complete(profile(), "s", List.of(new Message("user", "hi"))));
+        assertFalse(e instanceof LlmUnavailableException, "a bad request is not worth retrying");
+    }
+
+    @Test
+    void anUnreachableVendorIsUnavailable() {
+        LlmProfile nowhere = new LlmProfile("answer", "conn_1", "http://localhost:1/", "m", Optional.empty(),
+                Optional.empty(), Optional.empty(), null, Optional.empty());
+
+        assertThrows(LlmUnavailableException.class,
+                () -> provider().complete(nowhere, "s", List.of(new Message("user", "hi"))));
+    }
+
+    @Test
     void aRateLimitedCallPropagatesTheLimiterExceptionUnwrapped() {
         limiter.failWith = new RateLimitedException(RateLimitKey.connection("conn_1"),
                 Instant.now().plusSeconds(60));

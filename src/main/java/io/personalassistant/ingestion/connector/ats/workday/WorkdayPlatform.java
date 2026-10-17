@@ -149,6 +149,7 @@ public class WorkdayPlatform implements BoardPlatform {
         String id = firstNonBlank(detail.path("jobReqId").asText(null), path);
         String location = locationOf(detail);
         String applyUrl = detail.path("externalUrl").asText(null);
+        String uri = site.jobUrl(detail.path("jobReqId").asText(null)).orElse(applyUrl);
         String content = detail.path("jobDescription").asText("");
         String descriptionText = AtsNormalization.plainText(content);
         String startDate = detail.path("startDate").asText("");
@@ -157,7 +158,7 @@ public class WorkdayPlatform implements BoardPlatform {
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("title", title);
-        metadata.put("uri", applyUrl);
+        metadata.put("uri", uri);
         metadata.put("company", company);
         metadata.put("location", location);
         metadata.put("applyUrl", applyUrl);
@@ -181,10 +182,12 @@ public class WorkdayPlatform implements BoardPlatform {
                 EntityType.JOB_POSTING,
                 "text/html",
                 title,
-                applyUrl,
-                // Neither date moves on an edit, so the body is hashed.
+                uri,
+                // Neither date moves on an edit, so the body is hashed. The front end is in it so adding one
+                // relinks postings already stored.
                 AtsNormalization.withCompany(
-                        "wd:" + id + ";start:" + startDate + ";body:" + content.hashCode(),
+                        "wd:" + id + ";start:" + startDate + ";body:" + content.hashCode()
+                                + (site.frontEnd() == null ? "" : ";fe:" + site.frontEnd()),
                         company, site.tenant()),
                 AtsNormalization.instantOrNull(startDate + "T00:00:00Z"),
                 raw,

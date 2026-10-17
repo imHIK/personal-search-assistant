@@ -61,6 +61,15 @@ public class SlidingWindowRateLimiter extends AbstractRateLimiter {
         penalties.merge(key.value(), until, (a, b) -> a.isAfter(b) ? a : b);
     }
 
+    @Override
+    public void reset(RateLimitKey key) {
+        synchronized (lock) {
+            String prefix = key.value() + "#";
+            windows.keySet().removeIf(k -> k.startsWith(prefix));
+            penalties.remove(key.value());
+        }
+    }
+
     private Duration penaltyRemaining(RateLimitKey key, Instant now) {
         Instant until = penalties.get(key.value());
         if (until == null) {

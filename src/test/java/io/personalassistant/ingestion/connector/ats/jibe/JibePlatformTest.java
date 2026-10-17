@@ -57,7 +57,7 @@ class JibePlatformTest {
 
         Assertions.assertEquals("101", item.externalId());
         Assertions.assertEquals("Senior Software Engineer", item.title());
-        Assertions.assertEquals("https://careers.acme.com/jobs/101", item.uri());
+        Assertions.assertEquals("https://uscareers-acme.icims.com/jobs/101/job", item.uri());
         Assertions.assertEquals("https://uscareers-acme.icims.com/jobs/101/login", item.metadata().get("applyUrl"));
         Assertions.assertEquals("Bengaluru, Karnataka, India", item.metadata().get("location"));
         Assertions.assertEquals("jibe", item.metadata().get("platform"));
@@ -66,6 +66,13 @@ class JibePlatformTest {
         Assertions.assertEquals(Instant.parse("2026-09-29T20:15:00Z"), item.metadata().get("postedAt"));
         Assertions.assertTrue(item.text().contains("distributed systems"));
         Assertions.assertTrue(item.text().contains("Java."), "qualifications are part of the body");
+    }
+
+    @Test
+    void theCareersHostPageIsTheLinkWhenTheApplyUrlIsNotAnIcimsLogin() {
+        Assertions.assertTrue(JibePlatform.postingUrl("https://apply.acme.com/jobs/101").isEmpty());
+        Assertions.assertTrue(JibePlatform.postingUrl("https://x.icims.com/jobs/101/login?mode=apply").isEmpty());
+        Assertions.assertTrue(JibePlatform.postingUrl(null).isEmpty());
     }
 
     @Test

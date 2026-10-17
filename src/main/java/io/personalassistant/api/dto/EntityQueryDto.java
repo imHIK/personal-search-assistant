@@ -16,9 +16,11 @@ import java.util.Set;
 
 /**
  * @param filters keyed by path. A scalar is equality, an array is any-of, and an object holds operators:
- *                {@code eq ne in nin gte gt lte lt contains exists}. An ISO date or instant in a range is
- *                compared as a date
+ *                {@code eq ne in nin gte gt lte lt contains exists}, plus {@code orMissing: true} to let
+ *                every operator in that object also match an absent or null field. An ISO date or
+ *                instant in a range is compared as a date
  * @param sort {@code {"path": "createdAt", "descending": true}} when absent
+ * @param includeDeleted also return tombstones (retention or source removal), which keep their marks
  */
 public record EntityQueryDto(
         List<String> entityTypes,
@@ -27,11 +29,14 @@ public record EntityQueryDto(
         Map<String, JsonNode> filters,
         SortDto sort,
         Integer limit,
-        Integer offset) {
+        Integer offset,
+        Boolean includeDeleted) {
 
     public record SortDto(String path, Boolean descending) {}
 
     public static final int DEFAULT_LIMIT = 50;
+
+    private static final String OR_MISSING = "orMissing";
 
     /** @throws IllegalArgumentException on an unknown type, path, operator or value shape */
     public EntityFilter toFilter() {
@@ -49,7 +54,7 @@ public record EntityQueryDto(
                 ? null
                 : new EntityFilter.Sort(sort.path(), !Boolean.FALSE.equals(sort.descending()));
         return new EntityFilter(types, knowledgeIds == null ? null : Set.copyOf(knowledgeIds), q, conditions,
-                order);
+                order, Boolean.TRUE.equals(includeDeleted));
     }
 
     public int limitOrDefault() {
@@ -70,8 +75,16 @@ public record EntityQueryDto(
         if (!node.isObject()) {
             return List.of(new EntityFilter.Condition(path, EntityFilter.Op.EQ, scalar(node)));
         }
+        JsonNode orMissingNode = node.get(OR_MISSING);
+        if (orMissingNode != null && !orMissingNode.isBoolean()) {
+            throw new IllegalArgumentException(OR_MISSING + " takes true or false");
+        }
+        boolean orMissing = orMissingNode != null && orMissingNode.asBoolean();
         List<EntityFilter.Condition> out = new ArrayList<>();
         node.fields().forEachRemaining(entry -> {
+            if (entry.getKey().equals(OR_MISSING)) {
+                return;
+            }
             EntityFilter.Op op = op(entry.getKey());
             JsonNode value = entry.getValue();
             Object parsed = switch (op) {
@@ -80,7 +93,7 @@ public record EntityQueryDto(
                 case CONTAINS -> value.asText();
                 default -> scalar(value);
             };
-            out.add(new EntityFilter.Condition(path, op, parsed));
+            out.add(new EntityFilter.Condition(path, op, parsed, orMissing));
         });
         return out;
     }
@@ -90,7 +103,7 @@ public record EntityQueryDto(
             return EntityFilter.Op.valueOf(name.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Unknown filter operator \"" + name
-                    + "\"; use eq, ne, in, nin, gte, gt, lte, lt, contains or exists");
+                    + "\"; use eq, ne, in, nin, gte, gt, lte, lt, contains or exists (plus orMissing)");
         }
     }
 

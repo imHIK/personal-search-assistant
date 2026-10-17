@@ -82,6 +82,12 @@ export function JobFilters({
         label={labels.jobs.showHidden}
       />
 
+      <Toggle
+        checked={values.showDeleted === '1'}
+        onCheckedChange={(checked) => onChange('showDeleted', checked ? '1' : '')}
+        label={labels.jobs.showDeleted}
+      />
+
       <div className="space-y-1.5 border-t border-[var(--border)] pt-4">
         <p className="text-xs font-medium text-[var(--text-muted)]">{labels.jobs.mySkills}</p>
         <DebouncedInput
@@ -179,6 +185,11 @@ function FilterControl({
             options={options}
             selected={split(value)}
             onChange={(next) => onChange(spec.id, next.join(','))}
+            searchPlaceholder={
+              options.length >= jobDashboard.chipSearchFrom
+                ? (spec.placeholder ?? labels.jobs.searchOptions(spec.label))
+                : undefined
+            }
           />
         </Group>
       )
@@ -186,7 +197,7 @@ function FilterControl({
   }
 }
 
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
+export function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-[var(--text-muted)]">{label}</p>
@@ -196,7 +207,7 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /** `values` set: one chip standing for several stored spellings of the same thing. */
-interface ChipOption {
+export interface ChipOption {
   value: string
   label: string
   count?: number
@@ -219,24 +230,32 @@ function groupFacets(facets: FacetValue[], labelFor?: (value: string) => string)
   return [...groups.values()].sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
 }
 
-function Chips({
+/** `searchPlaceholder` adds a box that narrows the chips; selected chips stay visible regardless. */
+export function Chips({
   options,
   selected,
   onChange,
+  searchPlaceholder,
 }: {
   options: ChipOption[]
   selected: string[]
   onChange: (next: string[]) => void
+  searchPlaceholder?: string
 }) {
+  const [query, setQuery] = useState('')
   const valuesOf = (o: ChipOption) => o.values ?? [o.value]
+  const isSelected = (o: ChipOption) => valuesOf(o).some((v) => selected.includes(v))
+  const needle = searchPlaceholder ? query.trim().toLowerCase() : ''
+  const matches = (o: ChipOption) =>
+    !needle || [o.label, ...valuesOf(o)].some((text) => text.toLowerCase().includes(needle))
   // A selected value that fell out of the facet list must stay visible, or it could not be removed.
   const shown: ChipOption[] = [
     ...options,
     ...selected
       .filter((v) => !options.some((o) => valuesOf(o).includes(v)))
       .map((v) => ({ value: v, label: v })),
-  ]
-  return (
+  ].filter((o) => isSelected(o) || matches(o))
+  const chips = (
     <div className="flex max-h-48 flex-wrap gap-1 overflow-y-auto">
       {shown.map((option) => {
         const values = valuesOf(option)
@@ -267,6 +286,29 @@ function Chips({
           </button>
         )
       })}
+    </div>
+  )
+  if (!searchPlaceholder) return chips
+  return (
+    <div className="space-y-1.5">
+      <div className="relative w-full">
+        <Search
+          className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--text-subtle)]"
+          aria-hidden
+        />
+        <Input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setQuery('')
+          }}
+          placeholder={searchPlaceholder}
+          aria-label={searchPlaceholder}
+          className="h-8 w-full pl-8 text-[13px]"
+        />
+      </div>
+      {chips}
     </div>
   )
 }

@@ -7,8 +7,10 @@ import io.personalassistant.common.ratelimit.RateLimitedException;
 import io.personalassistant.domain.model.RawItem;
 import io.personalassistant.ingestion.connector.ats.AtsApiException;
 import io.personalassistant.ingestion.connector.ats.BoardFilter;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -74,16 +76,26 @@ class EightfoldPlatformTest {
         final List<Map<String, Object>> positions = new ArrayList<>();
         final List<String> queries = new ArrayList<>();
         final List<String> detailCalls = new ArrayList<>();
+        /** Terms the server matches against every position, as PCSX does "work from home". */
+        final List<String> matchesEverything = new ArrayList<>();
 
         FakePcsxApi withPosition(long id, String name, String... locations) {
+            return withDatedPosition(id, name, 1773964800L, 1788739200L, locations);
+        }
+
+        FakePcsxApi withDatedPosition(long id, String name, Long creationTs, Long postedTs, String... locations) {
             Map<String, Object> position = new LinkedHashMap<>();
             position.put("id", id);
             position.put("name", name);
             position.put("locations", List.of(locations));
             position.put("department", "Technology");
             position.put("workLocationOption", "onsite");
-            position.put("creationTs", 1773964800L);
-            position.put("postedTs", 1788739200L);
+            if (creationTs != null) {
+                position.put("creationTs", creationTs);
+            }
+            if (postedTs != null) {
+                position.put("postedTs", postedTs);
+            }
             position.put("positionUrl", "/careers/job/" + id);
             positions.add(position);
             return this;
@@ -103,8 +115,11 @@ class EightfoldPlatformTest {
         public JsonNode search(EightfoldSite site, String location, int start) {
             queries.add(location + "@" + start);
             List<Map<String, Object>> matching = positions.stream()
-                    .filter(p -> location.isEmpty() || ((List<?>) p.get("locations")).stream()
-                            .anyMatch(l -> l.toString().toLowerCase().contains(location)))
+                    .filter(p -> location.isEmpty() || matchesEverything.contains(location)
+                            || ((List<?>) p.get("locations")).stream()
+                                    .anyMatch(l -> l.toString().toLowerCase().contains(location)))
+                    .sorted(Comparator.comparingLong(
+                            (Map<String, Object> p) -> (Long) p.getOrDefault("postedTs", 0L)).reversed())
                     .toList();
             return MAPPER.valueToTree(Map.of("data", Map.of("count", matching.size(), "positions",
                     matching.subList(Math.min(start, matching.size()), Math.min(start + 10, matching.size())))));
@@ -145,8 +160,8 @@ class EightfoldPlatformTest {
 
         Assertions.assertSame(throttled, Assertions.assertThrows(RateLimitedException.class,
                 () -> new EightfoldPlatform(api).fetch("paypal.eightfold.ai/paypal.com", BoardFilter.NONE)));
-        Assertions.assertFalse(new EightfoldPlatform(api).hasBoard("paypal.eightfold.ai/paypal.com"),
-                "resolution still reads it as a miss");
+        Assertions.assertTrue(new EightfoldPlatform(api).hasBoard("paypal.eightfold.ai/paypal.com"),
+                "a throttled site exists: a miss would retire the company on the next edit");
     }
 
     @Test
@@ -226,5 +241,98 @@ class EightfoldPlatformTest {
         api.gated = true;
 
         Assertions.assertFalse(new EightfoldPlatform(api).hasBoard(SITE));
+    }
+
+    @Test
+    void aLocationTermMatchingTheWholeBoardIsNotWalked() {
+        FakePcsxApi api = new FakePcsxApi();
+        for (int i = 0; i < 25; i++) {
+            api.withPosition(i, "Java Developer", i < 3 ? "Pune, India" : "Austin, United States");
+        }
+        api.matchesEverything.add("work from home");
+
+        List<RawItem> items = new EightfoldPlatform(api).fetch("careers.qualcomm.com/qualcomm.com",
+                BoardFilter.ofLocations(List.of("pune", "work from home")));
+
+        Assertions.assertEquals(3, items.size());
+        Assertions.assertEquals(List.of("@0", "pune@0", "work from home@0"), api.queries,
+                "the non-narrowing term costs its first page only");
+    }
+
+    @Test
+    void whenNoTermNarrowsTheBoardIsWalkedOnceFromTheProbe() {
+        FakePcsxApi api = new FakePcsxApi();
+        for (int i = 0; i < 15; i++) {
+            api.withPosition(i, "Java Developer", "Remote");
+        }
+        api.matchesEverything.add("work from home");
+
+        new EightfoldPlatform(api).fetch("careers.qualcomm.com/qualcomm.com",
+                BoardFilter.ofLocations(List.of("work from home")));
+
+        Assertions.assertEquals(List.of("@0", "work from home@0", "@10"), api.queries);
+    }
+
+    @Test
+    void aMaxAgeStopsTheWalkAtTheFirstPagePostedWhollyBeforeIt() {
+        long now = Instant.now().getEpochSecond();
+        long fresh = now - Duration.ofDays(2).toSeconds();
+        long stale = now - Duration.ofDays(60).toSeconds();
+        FakePcsxApi api = new FakePcsxApi();
+        for (int i = 0; i < 12; i++) {
+            api.withDatedPosition(i, "Java Developer", fresh, fresh, "Pune, India");
+        }
+        for (int i = 12; i < 45; i++) {
+            api.withDatedPosition(i, "Java Developer", stale, stale, "Pune, India");
+        }
+        api.withDatedPosition(99, "Java Developer", stale, stale, "Austin, United States");
+        BoardFilter maxAge = new BoardFilter(List.of("pune"), List.of(), List.of(), Duration.ofDays(20), false);
+
+        List<RawItem> items = new EightfoldPlatform(api).fetch("careers.qualcomm.com/qualcomm.com", maxAge);
+
+        Assertions.assertEquals(12, items.size());
+        Assertions.assertEquals(12, api.detailCalls.size(), "a stale position costs no detail call");
+        Assertions.assertEquals(List.of("@0", "pune@0", "pune@10", "pune@20"), api.queries,
+                "the page at 10 mixes fresh and stale so the walk goes on; the one at 20 is all stale and ends it");
+    }
+
+    @Test
+    void aRepostedPositionKeepsTheWalkGoingButIsFilteredOnItsCreationDate() {
+        long now = Instant.now().getEpochSecond();
+        long fresh = now - Duration.ofDays(2).toSeconds();
+        long stale = now - Duration.ofDays(60).toSeconds();
+        FakePcsxApi api = new FakePcsxApi();
+        for (int i = 0; i < 10; i++) {
+            api.withDatedPosition(i, "Java Developer", stale, fresh, "Pune, India");
+        }
+        api.withDatedPosition(10, "Java Developer", null, null, "Pune, India");
+        api.withDatedPosition(99, "Java Developer", stale, stale, "Austin, United States");
+        BoardFilter maxAge = new BoardFilter(List.of("pune"), List.of(), List.of(), Duration.ofDays(20), false);
+
+        List<RawItem> items = new EightfoldPlatform(api).fetch("careers.qualcomm.com/qualcomm.com", maxAge);
+
+        Assertions.assertEquals(List.of("10"), items.stream().map(RawItem::externalId).toList(),
+                "undated survives; reposted but created long ago does not");
+        Assertions.assertTrue(api.queries.contains("pune@10"));
+    }
+
+    @Test
+    void withoutAMaxAgeTheWalkReachesTheCount() {
+        long stale = Instant.now().getEpochSecond() - Duration.ofDays(400).toSeconds();
+        FakePcsxApi api = new FakePcsxApi();
+        for (int i = 0; i < 25; i++) {
+            api.withDatedPosition(i, "Java Developer", stale, stale, "Pune, India");
+        }
+
+        Assertions.assertEquals(25, new EightfoldPlatform(api)
+                .fetch("careers.qualcomm.com/qualcomm.com", BoardFilter.NONE).size());
+    }
+
+    @Test
+    void anUnparseableHandleIsNoBoardWithoutARequest() {
+        FakePcsxApi api = new FakePcsxApi().withPosition(1, "Analyst", "Pune");
+
+        Assertions.assertFalse(new EightfoldPlatform(api).hasBoard("netflix"));
+        Assertions.assertTrue(api.queries.isEmpty());
     }
 }

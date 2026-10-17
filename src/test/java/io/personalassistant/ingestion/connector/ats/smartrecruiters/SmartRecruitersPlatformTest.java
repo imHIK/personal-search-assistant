@@ -73,6 +73,9 @@ class SmartRecruitersPlatformTest {
         RawItem item = fetch(board(), List.of("india")).get(0);
 
         Assertions.assertEquals("Senior Backend Engineer", item.title());
+        Assertions.assertEquals("https://jobs.smartrecruiters.com/Acme/1", item.uri());
+        Assertions.assertEquals("https://jobs.smartrecruiters.com/Acme/1?oga=true",
+                item.metadata().get("applyUrl"));
         Assertions.assertEquals("Bengaluru, KA, India", item.metadata().get("location"));
         Assertions.assertEquals("Acme", item.metadata().get("company"));
         Assertions.assertEquals("smartrecruiters", item.metadata().get("platform"));

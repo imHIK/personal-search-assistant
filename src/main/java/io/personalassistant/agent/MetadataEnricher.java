@@ -11,6 +11,7 @@ public interface MetadataEnricher {
      *
      * @throws io.personalassistant.common.ratelimit.RateLimitedException when the LLM's window is full and
      *                                                                    waiting would exceed the cap
+     * @throws io.personalassistant.agent.llm.LlmUnavailableException when the vendor answered 5xx or not at all
      * @throws IllegalStateException when the reply is unusable or a required field has no usable value
      */
     Map<String, Object> enrich(Task task, String title, String text);

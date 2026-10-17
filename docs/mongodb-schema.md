@@ -6,7 +6,7 @@ rebuilt at any time by replaying Mongo. Database: `personal_assistant`.
 Design goals: easy incremental sync, full reprocessing from source of truth, and clean
 support for many heterogeneous sources without schema churn.
 
-Eight collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**, **`tasks`**.
+Eleven collections: **`knowledge`**, **`entities`**, **`cursors`**, **`connections`**, **`discovery`**, **`digests`**, **`digestRuns`**, **`tasks`**, **`channels`**, **`deliveries`**, **`watched_companies`**.
 Chunks are deliberately *not* a Mongo collection — see below. All indexes are created at startup by
 `MongoIndexInitializer` (`@Observes StartupEvent`); there is **no migration framework**, so a new
 query pattern means adding its index there.
@@ -210,13 +210,13 @@ sub-stream. The id is *derived* from that triple, so discovery and re-arm are id
 Indexes: `{ knowledgeId: 1 }`, `{ status: 1 }`, `{ knowledgeId: 1, direction: 1, status: 1 }`,
 `{ retry.nextAttemptAt: 1 }`.
 
-> **Rate-limit holds.** `retry.nextAttemptAt` is set only alongside `status: "RATE_LIMITED"`: it is
-> when the limiter says the source's quota reopens, and the claim filter skips the cursor until then.
-> Nothing writes the status back — the instant simply stops excluding the row, so the timestamp is
-> the single source of truth. Note the deliberate difference from `entities`, where a null
-> `retry.nextAttemptAt` means "no backoff, claim it": on a `RATE_LIMITED` cursor a null matches
-> nothing, so every reset (`release`, `retryFailedByKnowledge`, `revive`, `resetToStart`) clears the
-> whole `retry` block rather than leaving a stale instant behind.
+> **Holds.** `retry.nextAttemptAt` is set on two statuses. On `RATE_LIMITED` it is when the limiter says
+> the source's quota reopens; on `AVAILABLE` it is the failure backoff (`app.ingestion.backoff-seconds`,
+> doubling). The claim filter skips the cursor until then. Nothing writes the status back — the instant
+> simply stops excluding the row, so the timestamp is the single source of truth. A null reads
+> differently per status: on `AVAILABLE` it means "no backoff, claim it" (as on `entities`), on
+> `RATE_LIMITED` it matches nothing. So every reset (`release`, `retryFailedByKnowledge`, `revive`,
+> `resetToStart`) clears the whole `retry` block rather than leaving a stale instant behind.
 
 > **`iterableName` is cosmetic and refreshed, not fenced.** It is snapshotted from
 > `SourceIterable.displayName()` when the cursor is created and re-written by the reconcile pass
@@ -393,6 +393,48 @@ User-written LLM tasks — an instruction a digest runs over its results. Docume
 - `mode` decides which of two disjoint field sets is meaningful: `SIMPLE` uses `instruction` /
   `output` / `fields`, `RAW` uses `system` / `user`. The unused half is stored null rather than
   dropped, so switching modes in the console does not lose what was typed.
+
+---
+
+## Collection: `watched_companies`
+
+Companies whose job board no connector reaches, kept for checking by hand on the jobs dashboard's
+**Unsupported** tab (`/jobs/unsupported`). Nothing reads it but that tab; it is not a source and feeds
+no index.
+
+```json
+{
+  "_id": "wco_…",
+  "name": "Nutanix",
+  "nameKey": "nutanix",
+  "domain": "nutanix.com",
+  "careersUrl": "https://jobs.jobvite.com/nutanix/search?q=India",
+  "platform": "Jobvite",
+  "tier": "HIGH",
+  "reason": "No connector; the listing is one server-rendered HTML page",
+  "note": null,
+  "lookupHandle": null,
+  "lastCheckedAt": "2026-10-13T11:19:37Z",
+  "createdAt": "…",
+  "updatedAt": "…"
+}
+```
+
+- `nameKey` is the trimmed, space-collapsed, lower-cased name, under a **unique** index. That index
+  is what stops a duplicate, and it is also the listing's sort.
+- `lastCheckedAt` is written only by `POST /api/watched-companies/{id}/checked`, a field-level
+  `$set` on the server clock. An edit never touches it, and a check never moves `updatedAt`.
+- `tier` is `HIGH` / `MEDIUM` / `LOW` (SDE pay + how much the company is worth checking), `MEDIUM`
+  when a create leaves it out. It cannot be cleared; `null` appears only on a row stored before tiers
+  existed. The console derives "due" from it: by default High after 2 days unchecked, Medium 4,
+  Low 7 (per-browser, editable on the tab; a row with no tier uses Medium's).
+- `lookupHandle` is set only for a company on a supported board that the lookup cannot verify yet
+  (no public postings). The console runs `POST /api/connectors/job-boards/lookup` with it.
+- The starting rows come from `config/watched-companies.json`, but only through
+  `POST /api/watched-companies/import-bundled`. Nothing seeds at startup, so a deleted row stays
+  deleted until you import again. The import skips any name already present; the one thing it writes
+  to an existing row is its bundled `tier`, and only where `tier` is null (a filtered `$set`), so a
+  tier you chose is never overwritten.
 
 ---
 

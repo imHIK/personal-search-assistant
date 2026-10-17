@@ -1,7 +1,9 @@
 package io.personalassistant.api.dto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.personalassistant.domain.model.EntityFilter;
@@ -45,8 +47,26 @@ class EntityQueryDtoTest {
     }
 
     @Test
+    void orMissingAppliesToEveryOperatorInItsObject() throws Exception {
+        EntityFilter f = parse("""
+                {"filters": {"enriched.minYoe": {"gte": 2, "orMissing": true, "lte": 5}}}""");
+
+        assertEquals(List.of(
+                new EntityFilter.Condition("enriched.minYoe", EntityFilter.Op.GTE, 2L, true),
+                new EntityFilter.Condition("enriched.minYoe", EntityFilter.Op.LTE, 5L, true)), f.conditions());
+        assertThrows(IllegalArgumentException.class,
+                () -> parse("{\"filters\": {\"enriched.minYoe\": {\"gte\": 2, \"orMissing\": \"yes\"}}}"));
+    }
+
+    @Test
     void defaultsToNewestFirst() throws Exception {
         assertEquals(EntityFilter.Sort.NEWEST_FIRST, parse("{}").sort());
+    }
+
+    @Test
+    void tombstonesAreExcludedUnlessIncludeDeleted() throws Exception {
+        assertFalse(parse("{}").includeDeleted());
+        assertTrue(parse("{\"includeDeleted\": true}").includeDeleted());
     }
 
     @Test

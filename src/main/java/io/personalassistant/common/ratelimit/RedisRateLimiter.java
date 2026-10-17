@@ -2,6 +2,8 @@ package io.personalassistant.common.ratelimit;
 
 import io.personalassistant.common.ProviderImpl;
 import io.quarkus.redis.datasource.RedisDataSource;
+import io.quarkus.redis.datasource.keys.KeyCommands;
+import io.quarkus.redis.datasource.keys.KeyScanArgs;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
@@ -98,6 +100,30 @@ public class RedisRateLimiter extends AbstractRateLimiter {
     void storePenalty(RateLimitKey key, Instant until) {
         long ttlMillis = Duration.between(clock.instant(), until).toMillis();
         redis.execute("EVAL", PENALIZE, "1", penaltyKey(key), String.valueOf(ttlMillis), until.toString());
+    }
+
+    /** Scans rather than rebuilding names from the current rules: windows from since-edited rules go too. */
+    @Override
+    public void reset(RateLimitKey key) {
+        KeyCommands<String> keys = redis.key();
+        List<String> doomed = new ArrayList<>();
+        doomed.add(penaltyKey(key));
+        String pattern = WINDOW_PREFIX + globEscape(key.value()) + "#*";
+        for (String window : keys.scan(new KeyScanArgs().match(pattern)).toIterable()) {
+            doomed.add(window);
+        }
+        keys.del(doomed.toArray(String[]::new));
+    }
+
+    static String globEscape(String literal) {
+        StringBuilder out = new StringBuilder(literal.length());
+        for (char c : literal.toCharArray()) {
+            if (c == '*' || c == '?' || c == '[' || c == ']' || c == '\\') {
+                out.append('\\');
+            }
+            out.append(c);
+        }
+        return out.toString();
     }
 
     static String windowKey(RateLimitKey key, RateLimitRule rule) {

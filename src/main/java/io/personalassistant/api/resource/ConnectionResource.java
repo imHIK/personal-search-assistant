@@ -83,6 +83,17 @@ public class ConnectionResource {
         }
     }
 
+    /** Clears only the local counters; a provider that has not reset its own answers 429 and re-pauses. */
+    @POST
+    @Path("/{id}/rate-limit/reset")
+    public void resetRateLimit(@PathParam("id") String id) {
+        try {
+            connectionService.resetRateLimit(id);
+        } catch (NoSuchElementException e) {
+            throw ApiErrors.notFound(e.getMessage());
+        }
+    }
+
     @DELETE
     @Path("/{id}")
     public void delete(@PathParam("id") String id) {

@@ -124,6 +124,10 @@ public class MongoIndexInitializer {
                 .createIndex(Indexes.ascending("dedupeKey"), new IndexOptions().unique(true)
                         .partialFilterExpression(Filters.type("dedupeKey", BsonType.STRING)));
 
+        // Also the listing's sort.
+        db.getCollection(MongoWatchedCompanyRepository.COLLECTION)
+                .createIndex(Indexes.ascending("nameKey"), new IndexOptions().unique(true));
+
         db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)
                 .createIndex(Indexes.ascending("knowledgeId"));
         db.getCollection(MongoDiscoveryStatusRepository.COLLECTION)

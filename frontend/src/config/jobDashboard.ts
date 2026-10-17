@@ -1,4 +1,5 @@
 import type {
+  CompanyTier,
   EntityFilterValue,
   EntityQueryBody,
   EntityType,
@@ -16,7 +17,7 @@ import { seniorityOptions } from './searchFilters'
  * are the generic `/api/entities` ones.
  *
  * `multi` is any-of over `options`, or over the field's facet values when none are given; `range`
- * reads `<id>_min` / `<id>_max`; `sinceDays` and `tri` take one of `options`.
+ * reads `<id>_min` / `<id>_max` and keeps postings without the field; `sinceDays` and `tri` take one of `options`.
  */
 export type JobFilterKind = 'search' | 'multi' | 'contains' | 'toggle' | 'sinceDays' | 'range' | 'tri'
 
@@ -66,8 +67,22 @@ export const jobDashboard = {
     locations: { as: 'hidden' },
   } as Record<string, EnrichedDisplay>,
   tagLimit: 6,
+  /** A `multi` filter with at least this many chips gets a box that narrows them as you type. */
+  chipSearchFrom: 10,
   /** Browser-only conveniences; nothing here is shared or sent to the backend. */
-  storage: { lastVisit: 'jobs.lastVisit', since: 'jobs.since', mySkills: 'jobs.mySkills' },
+  storage: {
+    lastVisit: 'jobs.lastVisit',
+    since: 'jobs.since',
+    mySkills: 'jobs.mySkills',
+    /** Suffixed with the tier. */
+    dueDays: 'jobs.unsupported.dueDays:',
+    /** Suffixed with the tab's path. */
+    tabSearch: 'jobs.tabSearch:',
+  },
+  /** An unsupported company not checked for this many days is due; editable per browser. */
+  defaultDueDays: { HIGH: 2, MEDIUM: 4, LOW: 7 } as Record<CompanyTier, number>,
+  /** Preselected for a new company (the backend's default too), and the interval one with no tier uses. */
+  defaultTier: 'MEDIUM' as CompanyTier,
   /** One per posting, in `custom.status`; `tone` names a `--tone-*` CSS variable pair. */
   statuses: [
     { value: 'INTERESTED', label: 'Interested', tone: 'alert' },
@@ -82,6 +97,7 @@ export const jobDashboard = {
       label: 'Company',
       kind: 'multi',
       path: 'metadata.company',
+      placeholder: 'Search companies',
       labelFor: (value: string) => companyFor(value)?.label ?? value,
     },
     { id: 'location', label: 'Location', kind: 'contains', path: 'metadata.location', placeholder: 'e.g. Bengaluru' },
@@ -92,6 +108,24 @@ export const jobDashboard = {
     { id: 'seen', label: 'First seen within', kind: 'sinceDays', path: 'createdAt', options: sinceOptions },
     { id: 'platform', label: 'Platform', kind: 'multi', path: 'metadata.platform' },
   ] satisfies JobFilterSpec[] as JobFilterSpec[],
+  /** The first is the default. A posting with no `postedAt` sorts after every dated one when newest-first. */
+  sorts: [
+    { value: 'added', label: 'Added (newest)', path: 'createdAt', descending: true },
+    { value: 'added_asc', label: 'Added (oldest)', path: 'createdAt', descending: false },
+    { value: 'posted', label: 'Posted (newest)', path: 'metadata.postedAt', descending: true },
+    { value: 'posted_asc', label: 'Posted (oldest)', path: 'metadata.postedAt', descending: false },
+  ] satisfies JobSort[] as JobSort[],
+}
+
+export interface JobSort {
+  value: string
+  label: string
+  path: string
+  descending: boolean
+}
+
+export function sortFor(value: string | undefined): JobSort {
+  return jobDashboard.sorts.find((s) => s.value === value) ?? jobDashboard.sorts[0]
 }
 
 /** Knowledges the page lists postings from. */
@@ -158,7 +192,10 @@ function isNumber(value: string | undefined): value is string {
   return value !== undefined && value !== '' && !Number.isNaN(Number(value))
 }
 
-/** Builds the query from URL params. Hidden postings are left out unless `showHidden` is set. */
+/**
+ * Builds the query from URL params. Hidden postings are left out unless `showHidden` is set, deleted
+ * ones unless `showDeleted` is.
+ */
 export function buildJobQuery(
   specs: JobFilterSpec[],
   params: JobParams,
@@ -197,8 +234,9 @@ export function buildJobQuery(
       case 'range': {
         const min = params[`${spec.id}_min`]
         const max = params[`${spec.id}_max`]
-        if (isNumber(min)) add(spec.path, { gte: Number(min) })
-        if (isNumber(max)) add(spec.path, { lte: Number(max) })
+        // A posting the field is unknown for stays listed rather than being read as out of range.
+        if (isNumber(min)) add(spec.path, { gte: Number(min), orMissing: true })
+        if (isNumber(max)) add(spec.path, { lte: Number(max), orMissing: true })
         break
       }
     }
@@ -219,12 +257,15 @@ export function buildJobQuery(
   }
 
   const selectedSources = params.source ? params.source.split(',') : []
+  const sort = sortFor(params.sort)
   return {
     entityTypes: [jobDashboard.entityType],
     knowledgeIds: selectedSources.length > 0 ? selectedSources : knowledgeIds,
     q: params.q || null,
     filters,
+    sort: { path: sort.path, descending: sort.descending },
     limit: jobDashboard.pageSize,
     offset,
+    includeDeleted: params.showDeleted === '1',
   }
 }

@@ -19,7 +19,7 @@ public class EmbeddingProviderSelector {
     @ApplicationScoped
     public EmbeddingProvider active(@ProviderImpl Instance<EmbeddingProvider> implementations,
                                     @ConfigProperty(name = "app.embedding.provider",
-                                            defaultValue = "openai-embed") String selected) {
+                                            defaultValue = "onnx-bge") String selected) {
         List<String> available = new ArrayList<>();
         for (EmbeddingProvider provider : implementations) {
             available.add(provider.providerId());

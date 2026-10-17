@@ -18,9 +18,20 @@ function toneFor(name: string): (typeof MONOGRAM_TONES)[number] {
   return MONOGRAM_TONES[Math.abs(hash) % MONOGRAM_TONES.length]
 }
 
-/** The company's logo when its domain is known and the icon loads; a coloured monogram otherwise. */
-export function CompanyIcon({ name, className }: { name: string; className?: string }) {
-  const domain = companyFor(name)?.domain
+/**
+ * The company's logo when its domain is known and the icon loads; a coloured monogram otherwise.
+ * `domain` overrides the catalog lookup by name.
+ */
+export function CompanyIcon({
+  name,
+  domain: given,
+  className,
+}: {
+  name: string
+  domain?: string | null
+  className?: string
+}) {
+  const domain = given ?? companyFor(name)?.domain
   const [failed, setFailed] = useState(false)
   const box = cn(
     'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--border)]',

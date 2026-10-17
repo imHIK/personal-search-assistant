@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelStatus,
+  CompanyTier,
   ConnectionStatus,
   CursorDirection,
   CursorInfo,
@@ -8,6 +9,7 @@ import type {
   Delivery,
   DeliveryStatus,
   EntityItem,
+  EntityRecord,
   Knowledge,
 } from '@/api/types'
 import { relativeTime } from '@/lib/utils'
@@ -103,6 +105,12 @@ export function itemState(item: Pick<EntityItem, 'status' | 'needsReindex'>): It
 export function presentItem(item: Pick<EntityItem, 'status' | 'needsReindex'>): Presented {
   const state = itemState(item)
   return { ...itemStates[state], raw: item.status ?? undefined }
+}
+
+/** Null for a live record; only an `includeDeleted` query returns the others. */
+export function presentDeletedRecord(item: Pick<EntityRecord, 'status'>): Presented | null {
+  if (item.status !== 'DELETED') return null
+  return { label: 'Deleted', tone: 'neutral', hint: 'Removed by retention or at the source', raw: item.status }
 }
 
 const cursorStates: Record<CursorStatus, Presented> = {
@@ -222,6 +230,25 @@ const connectionStates: Record<ConnectionStatus, Presented> = {
 
 export function presentConnection(status: ConnectionStatus): Presented {
   return connectionStates[status] ? { ...connectionStates[status], raw: status } : neutral(status)
+}
+
+const companyTiers: Record<CompanyTier, Presented> = {
+  HIGH: { label: 'High', tone: 'ok' },
+  MEDIUM: { label: 'Medium', tone: 'busy' },
+  LOW: { label: 'Low', tone: 'neutral' },
+}
+
+/** Display order of the Unsupported tab's sections; anything else sorts after them as no tier. */
+export const companyTierOrder = Object.keys(companyTiers) as CompanyTier[]
+
+export function knownTier(tier: string | null | undefined): CompanyTier | null {
+  return tier && tier in companyTiers ? (tier as CompanyTier) : null
+}
+
+export function presentCompanyTier(tier: string | null | undefined): Presented {
+  const known = knownTier(tier)
+  if (known) return { ...companyTiers[known], raw: known }
+  return tier ? neutral(tier) : { label: 'No tier', tone: 'neutral' }
 }
 
 const entityTypeLabels: Record<string, string> = {

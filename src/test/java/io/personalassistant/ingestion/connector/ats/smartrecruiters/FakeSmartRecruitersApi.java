@@ -41,7 +41,8 @@ public class FakeSmartRecruitersApi implements SmartRecruitersApi {
         detail.put("id", id);
         detail.put("name", title);
         detail.put("location", location);
-        detail.put("applyUrl", "https://jobs.smartrecruiters.com/" + company + "/" + id);
+        detail.put("postingUrl", "https://jobs.smartrecruiters.com/" + company + "/" + id);
+        detail.put("applyUrl", "https://jobs.smartrecruiters.com/" + company + "/" + id + "?oga=true");
         detail.put("company", Map.of("name", company));
         detail.put("jobAd", Map.of("sections", Map.of("jobDescription", section)));
         details.put(company + "/" + id, detail);

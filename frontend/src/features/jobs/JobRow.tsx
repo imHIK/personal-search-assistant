@@ -1,16 +1,19 @@
-import { Check, ExternalLink, EyeOff, Eye, MapPin } from 'lucide-react'
+import { Check, Copy, ExternalLink, EyeOff, Eye, MapPin } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import type { Blob, EntityRecord } from '@/api/types'
 import { CompanyIcon } from '@/components/CompanyIcon'
 import { Technical, TechnicalPanel } from '@/components/TechnicalDetails'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { StateBadge } from '@/components/ui/StateBadge'
 import { companyFor } from '@/config/companies'
 import { connectorFor } from '@/config/connectors'
 import { jobDashboard, statusFor, type EnrichedDisplay, type JobFilterSpec } from '@/config/jobDashboard'
 import { labels } from '@/config/labels'
+import { presentDeletedRecord } from '@/config/presentation'
 import { resultFacts } from '@/lib/resultFacts'
-import { absoluteTime, cn, relativeTime } from '@/lib/utils'
+import { absoluteTime, cn, copyToClipboard, relativeTime } from '@/lib/utils'
 import { skillKey } from './jobPrefs'
 import { StatusMenu } from './StatusMenu'
 
@@ -45,13 +48,15 @@ export function JobRow({
   pending: boolean
   onMark: (values: Blob) => void
 }) {
-  const href = text(item.metadata.applyUrl) ?? item.uri ?? undefined
+  // Not applyUrl first: iCIMS (Jibe) hands out its login-gated apply form there, not the posting.
+  const href = item.uri ?? text(item.metadata.applyUrl) ?? undefined
   const rawCompany = text(item.metadata.company)
   const company = companyFor(rawCompany)?.label ?? rawCompany
   const location = text(item.metadata.location)
   const posted = resultFacts(postedField, item.metadata)[0]
   const status = statusFor(item.custom[STATUS])
   const hidden = item.custom[HIDDEN] === true
+  const deleted = presentDeletedRecord(item)
   const added = relativeTime(item.createdAt)
   const isNew = newSince !== null && Date.parse(item.createdAt) > newSince
   const { facts, tags, descriptions } = placeEnriched(item.enriched, enrichedSpecs)
@@ -100,6 +105,7 @@ export function JobRow({
                     {labels.jobs.isNew}
                   </span>
                 )}
+                {deleted && <StateBadge state={deleted} size="sm" />}
               </p>
             </div>
 
@@ -109,6 +115,21 @@ export function JobRow({
                 disabled={pending}
                 onChange={(next) => onMark({ [STATUS]: next, [STATUS_AT]: next ? new Date().toISOString() : null })}
               />
+              {href && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  title={labels.jobs.copyLink}
+                  aria-label={labels.jobs.copyLink}
+                  onClick={() =>
+                    void copyToClipboard(href).then((ok) =>
+                      ok ? toast.success(labels.common.copied) : toast.error(labels.jobs.copyFailed),
+                    )
+                  }
+                >
+                  <Copy />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="iconSm"

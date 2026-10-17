@@ -6,7 +6,13 @@ export const entitiesApi = {
     http<EntityList>('/api/entities/query', { method: 'POST', body }),
 
   /** Counted over the type and knowledges only, so picking a value never hides the others. */
-  facets: (params: { entityTypes: EntityType[]; knowledgeIds: string[]; fields: string[]; limit?: number }) =>
+  facets: (params: {
+    entityTypes: EntityType[]
+    knowledgeIds: string[]
+    fields: string[]
+    limit?: number
+    includeDeleted?: boolean
+  }) =>
     http<Record<string, FacetValue[]>>(
       '/api/entities/facets' +
         query({
@@ -14,6 +20,7 @@ export const entitiesApi = {
           knowledgeIds: params.knowledgeIds.join(','),
           fields: params.fields.join(','),
           limit: params.limit,
+          includeDeleted: params.includeDeleted || undefined,
         }),
     ),
 

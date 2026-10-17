@@ -215,6 +215,37 @@ class SlidingWindowRateLimiterTest {
     }
 
     @Test
+    void resetReopensEveryWindowAndLiftsThePause() {
+        RateLimit daily = limit(RateLimitMode.FAIL_FAST, new RateLimitRule(2, 86_400));
+        RateLimit hourly = limit(RateLimitMode.FAIL_FAST, new RateLimitRule(1, 3_600));
+        limiter.acquire(daily);
+        limiter.acquire(daily);
+        limiter.acquire(hourly);
+        limiter.penalize(KEY, T0.plusSeconds(600));
+
+        limiter.reset(KEY);
+
+        limiter.acquire(daily);
+        limiter.acquire(hourly);
+    }
+
+    @Test
+    void resetLeavesOtherKeysAlone() {
+        RateLimitRule rule = new RateLimitRule(1, 86_400);
+        RateLimit mine = new RateLimit(RateLimitKey.connection("a"), RateLimitPolicy.of(rule),
+                RateLimitMode.FAIL_FAST);
+        RateLimit similar = new RateLimit(RateLimitKey.connection("ab"), RateLimitPolicy.of(rule),
+                RateLimitMode.FAIL_FAST);
+        limiter.acquire(mine);
+        limiter.acquire(similar);
+
+        limiter.reset(RateLimitKey.connection("a"));
+
+        limiter.acquire(mine);
+        assertThrows(RateLimitedException.class, () -> limiter.acquire(similar));
+    }
+
+    @Test
     void aWindowThatIsAlreadyOpenCostsNoWait() {
         RateLimit limit = limit(RateLimitMode.WAIT, new RateLimitRule(5, 1));
 

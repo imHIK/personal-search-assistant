@@ -101,16 +101,6 @@ export const taskPlaceholders: {
 
 export const taskPlaceholderNames = taskPlaceholders.map((p) => p.name)
 
-const profileLabels: Record<string, string> = {
-  lite: 'Fast and cheap',
-  answer: 'Slower and more thorough',
-  default: 'Provider default',
-}
-
-export function llmProfileLabel(profile: string): string {
-  return profileLabels[profile] ?? profile
-}
-
 export const suggestedScoringFields = [
   { name: 'fit', type: 'NUMBER' as TaskFieldType, description: '0-10, where 10 means act on it today', optional: false },
   { name: 'reason', type: 'TEXT' as TaskFieldType, description: 'One sentence naming what decided the score', optional: false },
